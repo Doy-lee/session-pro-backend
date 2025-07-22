@@ -13,6 +13,7 @@ def do_test():
     rotating_key:       nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
     creation_unix_ts_s: int                     = base.round_unix_ts_to_next_day(int(time.time()))
 
+    print(f'Session Pro Test Suite\n{backend.db_header_string(db_setup)}')
     class Scenario:
         payment_token_hash:      bytes                        = b''
         subscription_duration_s: int                          = 0

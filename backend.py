@@ -54,21 +54,33 @@ class RevocationRow:
     expiry_unix_ts: int   = 0
 
 class RuntimeRow:
-    gen_index:      int   = 0
+    gen_index:      int                     = 0
+    gen_index_salt: bytes                   = b''
+    backend_key:    nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_KEY32)
 
 class UpdateAfterPaymentsModified:
     latest_expiry_unix_ts_s: int = 0
     gen_index:               int = 0
 
 class SetupDBResult:
-    success:             bool = False,
-    revocations:         int  = 0,
-    users:               int  = 0,
-    unredeemed_payments: int  = 0,
-    payments:            int  = 0,
-    db_size:             int  = 0,
-    gen_index:           int  = 0,
-    sql_conn:            sqlite3.Connection
+    success:             bool                      = False
+    revocations:         int                       = 0
+    users:               int                       = 0
+    unredeemed_payments: int                       = 0
+    payments:            int                       = 0
+    runtime:             RuntimeRow                = RuntimeRow()
+    db_path:             str                       = ''
+    db_size:             int                       = 0
+    sql_conn:            sqlite3.Connection | None = None
+
+def db_header_string(setup: SetupDBResult) -> str:
+    result: str = (
+        '  DB:                               {} ({})\n'.format(setup.db_path, base.format_bytes(setup.db_size)) +
+        '  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}\n'.format(setup.users, setup.revocations, setup.payments, setup.unredeemed_payments) +
+        '  Gen Index:                        {}\n'.format(setup.runtime.gen_index) +
+        '  Backend Key:                      {}'.format(bytes(setup.runtime.backend_key.verify_key).hex())
+    )
+    return result
 
 def make_add_payment_hash(master_pkey:        nacl.signing.VerifyKey,
                           rotating_key:       nacl.signing.VerifyKey,
@@ -117,7 +129,9 @@ def sql_table_revocations_fields(schema: bool) -> str:
 
 def sql_table_runtime_fields(schema: bool) -> str:
     result: str = (
-        "gen_index {}\n".format("INTEGER " if schema else "")
+        "gen_index {},\n".format("INTEGER NOT NULL" if schema else "") +
+        "gen_index_salt {},\n".format("BLOB NOT NULL " if schema else "") +
+        "backend_key {}\n".format("BLOB NOT NULL " if schema else "")
     )
     return result
 
@@ -178,14 +192,23 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     result: RuntimeRow = RuntimeRow()
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _                = tx.cursor.execute('SELECT * FROM runtime')
-        row              = tx.cursor.fetchone()
-        result.gen_index = row[0]
+        _                     = tx.cursor.execute('SELECT * FROM runtime')
+        row                   = tx.cursor.fetchone()
+        result.gen_index      = row[0]
+        result.gen_index_salt = row[1]
+
+        backend_key: bytes    = row[2]
+        assert len(backend_key) == 32
+        result.backend_key    = nacl.signing.SigningKey(backend_key)
     return result;
 
 def setup_db(db_path: str) -> SetupDBResult:
     result: SetupDBResult = SetupDBResult()
-    result.sql_conn       = sqlite3.connect(db_path)
+    try:
+        result.sql_conn = sqlite3.connect(db_path)
+    except Exception as e:
+        print(f'Failed to open/connect to DB at {db_path}: {e}')
+        return result
 
     sql_stmt: str = f'''
         CREATE TABLE IF NOT EXISTS unredeemed_payments (
@@ -207,15 +230,18 @@ def setup_db(db_path: str) -> SetupDBResult:
         CREATE TABLE IF NOT EXISTS runtime (
             {sql_table_runtime_fields(schema=True)}
         );
-
-        INSERT INTO runtime (gen_index)
-        SELECT 0
-        WHERE NOT EXISTS (SELECT 1 FROM runtime);
     '''
 
     with base.SQLTransaction(result.sql_conn) as tx:
         assert tx.cursor is not None
-        _                          = tx.cursor.executescript(sql_stmt)
+        _ = tx.cursor.executescript(sql_stmt)
+
+        _ = tx.cursor.execute('''
+            INSERT INTO runtime
+            SELECT 0, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM runtime)
+        ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
+              bytes(nacl.signing.SigningKey.generate())))
 
         _                          = tx.cursor.execute('SELECT COUNT(*) FROM unredeemed_payments')
         result.unredeemed_payments = tx.cursor.fetchone()[0];
@@ -228,12 +254,16 @@ def setup_db(db_path: str) -> SetupDBResult:
 
         _                          = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
         result.revocations         = tx.cursor.fetchone()[0];
+        result.success             = True
 
-        _                          = tx.cursor.execute('SELECT gen_index FROM runtime')
-        result.gen_index           = tx.cursor.fetchone()[0];
-
+    result.runtime = get_runtime(result.sql_conn)
+    result.db_path = db_path
     if os.path.exists(db_path):
         result.db_size = os.stat(db_path).st_size
+
+    if not result.success:
+        result.sql_conn.close()
+
     return result
 
 def verify_payment_token_hash(hash: bytes):
