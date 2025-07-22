@@ -7,7 +7,7 @@ import enum
 import base
 
 BACKEND_SALT: bytes = os.urandom(hashlib.blake2b.SALT_SIZE)
-ZERO_KEY32:   bytes = bytes(32)
+ZERO_BYTES32: bytes = bytes(32)
 
 class SubscriptionDuration(enum.Enum):
     Days30  = 0
@@ -18,7 +18,7 @@ class ProSubscriptionProof:
     success:          bool                   = False
     version:          int                    = 0
     gen_index_hash:   bytes                  = b''
-    rotating_pkey:    nacl.signing.VerifyKey = nacl.signing.VerifyKey(ZERO_KEY32)
+    rotating_pkey:    nacl.signing.VerifyKey = nacl.signing.VerifyKey(ZERO_BYTES32)
     expiry_unix_ts_s: int                    = 0
     sig:              bytes                  = b''
 
@@ -33,30 +33,30 @@ class ProSubscriptionProof:
         return result
 
 class UnredeemedPaymentRow:
-    payment_token_hash:      bytes = ZERO_KEY32
+    payment_token_hash:      bytes = ZERO_BYTES32
     subscription_duration_s: int   = 0
 
 class PaymentRow:
     id:                      int        = 0
-    master_pkey:             bytes      = ZERO_KEY32
+    master_pkey:             bytes      = ZERO_BYTES32
     subscription_duration_s: int        = 0
     creation_unix_ts_s:      int        = 0
     activation_unix_ts_s:    int | None = None
-    payment_token_hash:      bytes      = ZERO_KEY32
+    payment_token_hash:      bytes      = ZERO_BYTES32
 
 class UserRow:
-    master_pkey:    bytes = ZERO_KEY32
-    gen_index:      int   = 0
-    expiry_unix_ts: int   = 0
+    master_pkey:      bytes = ZERO_BYTES32
+    gen_index:        int   = 0
+    expiry_unix_ts_s: int   = 0
 
 class RevocationRow:
-    gen_index:      int   = 0
-    expiry_unix_ts: int   = 0
+    gen_index:        int   = 0
+    expiry_unix_ts_s: int   = 0
 
 class RuntimeRow:
     gen_index:      int                     = 0
     gen_index_salt: bytes                   = b''
-    backend_key:    nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_KEY32)
+    backend_key:    nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
 
 class UpdateAfterPaymentsModified:
     latest_expiry_unix_ts_s: int = 0
@@ -83,11 +83,11 @@ def db_header_string(setup: SetupDBResult) -> str:
     return result
 
 def make_add_payment_hash(master_pkey:        nacl.signing.VerifyKey,
-                          rotating_key:       nacl.signing.VerifyKey,
+                          rotating_pkey:      nacl.signing.VerifyKey,
                           payment_token_hash: bytes) -> bytes:
     hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
     hasher.update(bytes(master_pkey))
-    hasher.update(bytes(rotating_key))
+    hasher.update(bytes(rotating_pkey))
     hasher.update(payment_token_hash)
     result: bytes = hasher.digest()
     assert len(result) == 32
@@ -172,8 +172,19 @@ def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
             item: UserRow       = UserRow()
             item.master_pkey    = row[0]
             item.gen_index      = row[1]
-            item.expiry_unix_ts = row[2]
+            item.expiry_unix_ts_s = row[2]
             result.append(item)
+    return result;
+
+def get_user(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> UserRow:
+    result: UserRow = UserRow()
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _                     = tx.cursor.execute('SELECT * FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
+        row                   = tx.cursor.fetchone()
+        result.master_pkey    = row[0]
+        result.gen_index      = row[1]
+        result.expiry_unix_ts_s = row[2]
     return result;
 
 def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
@@ -184,7 +195,7 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
         for row in tx.cursor.fetchall():
             item: RevocationRow = RevocationRow()
             item.gen_index      = row[0]
-            item.expiry_unix_ts = row[1]
+            item.expiry_unix_ts_s = row[1]
             result.append(item)
     return result;
 
@@ -372,6 +383,24 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
 
     return result
 
+def build_proof(gen_index:        int,
+                rotating_pkey:    nacl.signing.VerifyKey,
+                expiry_unix_ts_s: int,
+                signing_key:      nacl.signing.SigningKey) -> ProSubscriptionProof:
+    result: ProSubscriptionProof = ProSubscriptionProof()
+    result.success               = True
+    result.gen_index_hash        = hashlib.blake2b(bytes(gen_index), digest_size=32, salt=BACKEND_SALT).digest()
+    result.rotating_pkey         = rotating_pkey
+    result.expiry_unix_ts_s      = expiry_unix_ts_s
+
+    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
+    hasher.update(bytes(result.version))
+    hasher.update(result.gen_index_hash)
+    hasher.update(bytes(result.rotating_pkey))
+    hasher.update(bytes(result.expiry_unix_ts_s))
+    result.sig = signing_key.sign(hasher.digest())
+    return result
+
 def add_payment(sql_conn:              sqlite3.Connection,
                 signing_key:           nacl.signing.SigningKey,
                 creation_unix_ts_s:    int,
@@ -386,15 +415,19 @@ def add_payment(sql_conn:              sqlite3.Connection,
     verify_payment_token_hash(payment_token_hash)
     assert creation_unix_ts_s % base.SECONDS_IN_DAY == 0, "The passed in creation (and or activation) timestamp must lie on a day boundary: {}".format(creation_unix_ts_s)
 
+    hash_to_sign: bytes = make_add_payment_hash(master_pkey=master_pkey,
+                                                rotating_pkey=rotating_pkey,
+                                                payment_token_hash=payment_token_hash)
+
     # Verify the keys
     try:
-        _ = master_pkey.verify(master_sig)
+        _ = master_pkey.verify(smessage=hash_to_sign, signature=master_sig)
     except Exception as e:
-        print(f'Failed to veriy signature from master key {bytes(master_pkey).hex()}: {e}');
+        print(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
         return result
 
     try:
-        _ = rotating_pkey.verify(rotating_sig)
+        _ = rotating_pkey.verify(smessage=hash_to_sign, signature=rotating_sig)
     except Exception as e:
         print(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
         return result
@@ -427,18 +460,10 @@ def add_payment(sql_conn:              sqlite3.Connection,
             update: UpdateAfterPaymentsModified = update_db_after_payments_changed(tx=tx,
                                                                                    master_pkey=master_pkey,
                                                                                    activation_unix_ts_s=creation_unix_ts_s)
-
-            result.success          = True
-            result.gen_index_hash   = hashlib.blake2b(bytes(update.gen_index), digest_size=32, salt=BACKEND_SALT).digest()
-            result.rotating_pkey    = rotating_pkey
-            result.expiry_unix_ts_s = update.latest_expiry_unix_ts_s
-
-            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
-            hasher.update(bytes(result.version))
-            hasher.update(result.gen_index_hash)
-            hasher.update(bytes(result.rotating_pkey))
-            hasher.update(bytes(result.expiry_unix_ts_s))
-            result.sig = signing_key.sign(hasher.digest())
+            result = build_proof(gen_index=update.gen_index,
+                                 rotating_pkey=rotating_pkey,
+                                 expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
+                                 signing_key=signing_key)
 
     return result
 
@@ -457,3 +482,42 @@ def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, acti
             _ = update_db_after_payments_changed(tx=tx,
                                                  master_pkey = nacl.signing.VerifyKey(master_pkey_bytes),
                                                  activation_unix_ts_s=activation_unix_ts_s)
+
+def get_pro_subscription_proof(sql_conn:      sqlite3.Connection,
+                               signing_key:   nacl.signing.SigningKey,
+                               master_pkey:   nacl.signing.VerifyKey,
+                               rotating_pkey: nacl.signing.VerifyKey,
+                               nonce:         int,
+                               master_sig:    bytes,
+                               rotating_sig:  bytes):
+
+    # Generate the hash to verify
+    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
+    hasher.update(bytes(master_pkey))
+    hasher.update(bytes(rotating_pkey))
+    hasher.update(bytes(nonce))
+    hash_to_sign: bytes = hasher.digest()
+
+    # Verify the keys
+    try:
+        _ = master_pkey.verify(smessage=hash_to_sign, signature=master_sig)
+    except Exception as e:
+        print(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
+        return
+
+    try:
+        _ = rotating_pkey.verify(smessage=hash_to_sign, signature=rotating_sig)
+    except Exception as e:
+        print(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
+        return
+
+    # Generate proof
+    user:   UserRow              = get_user(sql_conn, master_pkey)
+    result: ProSubscriptionProof = ProSubscriptionProof()
+    if user.master_pkey == master_pkey:
+        result = build_proof(gen_index=user.gen_index,
+                             rotating_pkey=rotating_pkey,
+                             expiry_unix_ts_s=user.expiry_unix_ts_s,
+                             signing_key=signing_key);
+
+    return result

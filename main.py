@@ -31,4 +31,3 @@ if __name__ == '__main__':
     if args.print_tables:
         base.print_db_to_stdout(db_setup.sql_conn)
         os._exit(1)
-

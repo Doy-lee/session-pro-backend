@@ -40,7 +40,7 @@ def do_test():
 
         # Register the payment
         add_payment_hash: bytes = backend.make_add_payment_hash(master_pkey=master_key.verify_key,
-                                                                rotating_key=rotating_key.verify_key,
+                                                                rotating_pkey=rotating_key.verify_key,
                                                                 payment_token_hash=it.payment_token_hash)
 
         it.proof = backend.add_payment(sql_conn           = db_setup.sql_conn,
@@ -49,8 +49,8 @@ def do_test():
                                        master_pkey        = master_key.verify_key,
                                        rotating_pkey      = rotating_key.verify_key,
                                        payment_token_hash = it.payment_token_hash,
-                                       master_sig         = master_key.sign(add_payment_hash),
-                                       rotating_sig       = rotating_key.sign(add_payment_hash))
+                                       master_sig         = master_key.sign(add_payment_hash).signature,
+                                       rotating_sig       = rotating_key.sign(add_payment_hash).signature)
         print("Generated proof: {}".format(json.dumps(it.proof.to_dict(), indent=2)))
         assert it.proof.success
 
@@ -65,7 +65,7 @@ def do_test():
     assert len(user_list)                          == 1
     assert user_list[0].master_pkey                == bytes(master_key.verify_key), "lhs={}, rhs={}".format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                  == runtime.gen_index - 1
-    assert user_list[0].expiry_unix_ts             == creation_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
+    assert user_list[0].expiry_unix_ts_s             == creation_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
 
     payment_list: list[backend.PaymentRow]          = backend.get_payments_list(db_setup.sql_conn)
     assert len(payment_list)                       == 2
@@ -84,7 +84,7 @@ def do_test():
     revocation_list: list[backend.RevocationRow]    = backend.get_revocations_list(db_setup.sql_conn)
     assert len(revocation_list)                    == 1
     assert revocation_list[0].gen_index            == 0
-    assert revocation_list[0].expiry_unix_ts       == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
+    assert revocation_list[0].expiry_unix_ts_s       == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
 
     base.print_db_to_stdout(db_setup.sql_conn)
 
