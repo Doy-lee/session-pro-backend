@@ -63,28 +63,28 @@ class UpdateAfterPaymentsModified:
     gen_index:               int = 0
 
 class SetupDBResult:
-    success:             bool                      = False
-    revocations:         int                       = 0
-    users:               int                       = 0
-    unredeemed_payments: int                       = 0
-    payments:            int                       = 0
-    runtime:             RuntimeRow                = RuntimeRow()
-    db_path:             str                       = ''
-    db_size:             int                       = 0
-    sql_conn:            sqlite3.Connection | None = None
+    path:     str                       = ''
+    success:  bool                      = False
+    runtime:  RuntimeRow                = RuntimeRow()
+    sql_conn: sqlite3.Connection | None = None
 
-def db_header_string(setup: SetupDBResult) -> str:
-    result: str = (
-        '  DB:                               {} ({})\n'.format(setup.db_path, base.format_bytes(setup.db_size)) +
-        '  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}\n'.format(setup.users, setup.revocations, setup.payments, setup.unredeemed_payments) +
-        '  Gen Index:                        {}\n'.format(setup.runtime.gen_index) +
-        '  Backend Key:                      {}'.format(bytes(setup.runtime.backend_key.verify_key).hex())
-    )
-    return result
+class OpenDBAtPath:
+    sql_conn: sqlite3.Connection
+    runtime:  RuntimeRow
+    def __init__(self, db_path: str, db_path_is_uri: bool = False):
+        self.sql_conn = sqlite3.connect(db_path, uri=db_path_is_uri)
+        self.runtime  = get_runtime(self.sql_conn)
 
-def make_add_payment_hash(master_pkey:        nacl.signing.VerifyKey,
-                          rotating_pkey:      nacl.signing.VerifyKey,
-                          payment_token_hash: bytes) -> bytes:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.sql_conn.close()
+        return False
+
+def make_payment_hash(master_pkey:        nacl.signing.VerifyKey,
+                      rotating_pkey:      nacl.signing.VerifyKey,
+                      payment_token_hash: bytes) -> bytes:
     hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
@@ -92,7 +92,6 @@ def make_add_payment_hash(master_pkey:        nacl.signing.VerifyKey,
     result: bytes = hasher.digest()
     assert len(result) == 32
     return result
-
 
 def sql_table_unredeemed_payments_fields(schema: bool) -> str:
     result: str = (
@@ -180,10 +179,10 @@ def get_user(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) 
     result: UserRow = UserRow()
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _                     = tx.cursor.execute('SELECT * FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
-        row                   = tx.cursor.fetchone()
-        result.master_pkey    = row[0]
-        result.gen_index      = row[1]
+        _                       = tx.cursor.execute('SELECT * FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
+        row                     = tx.cursor.fetchone()
+        result.master_pkey      = row[0]
+        result.gen_index        = row[1]
         result.expiry_unix_ts_s = row[2]
     return result;
 
@@ -213,76 +212,105 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
         result.backend_key    = nacl.signing.SigningKey(backend_key)
     return result;
 
-def setup_db(db_path: str) -> SetupDBResult:
+def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSink) -> str:
+    unredeemed_payments = 0
+    payments            = 0
+    users               = 0
+    revocations         = 0
+    db_size             = 0
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        try:
+            _                   = tx.cursor.execute('SELECT COUNT(*) FROM unredeemed_payments')
+            unredeemed_payments = tx.cursor.fetchone()[0];
+
+            _                   = tx.cursor.execute('SELECT COUNT(*) FROM payments')
+            payments            = tx.cursor.fetchone()[0];
+
+            _                   = tx.cursor.execute('SELECT COUNT(*) FROM users')
+            users               = tx.cursor.fetchone()[0];
+
+            _                   = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
+            revocations         = tx.cursor.fetchone()[0];
+        except Exception as e:
+            err.msg_list.append(f"Failed to retrieve DB metadata: {e}")
+
+    result = ''
+    if len(err.msg_list) == 0:
+        if os.path.exists(db_path):
+            db_size = os.stat(db_path).st_size
+        runtime: RuntimeRow = get_runtime(sql_conn)
+        result = (
+            '  DB:                               {} ({})\n'.format(db_path, base.format_bytes(db_size)) +
+            '  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}\n'.format(users, revocations, payments, unredeemed_payments) +
+            '  Gen Index:                        {}\n'.format(runtime.gen_index) +
+            '  Backend Key:                      {}'.format(bytes(runtime.backend_key.verify_key).hex())
+        )
+
+    return result
+
+def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
     result: SetupDBResult = SetupDBResult()
+    result.path           = path
     try:
-        result.sql_conn = sqlite3.connect(db_path)
+        result.sql_conn = sqlite3.connect(path, uri=uri)
     except Exception as e:
-        print(f'Failed to open/connect to DB at {db_path}: {e}')
+        err.msg_list.append(f'Failed to open/connect to DB at {path}: {e}')
         return result
 
-    sql_stmt: str = f'''
-        CREATE TABLE IF NOT EXISTS unredeemed_payments (
-            {sql_table_unredeemed_payments_fields(schema=True)}
-        );
-
-        CREATE TABLE IF NOT EXISTS payments (
-            {sql_table_payments_fields(schema=True)}
-        );
-
-        CREATE TABLE IF NOT EXISTS users (
-            {sql_table_users_fields(schema=True)}
-        );
-
-        CREATE TABLE IF NOT EXISTS revocations (
-            {sql_table_revocations_fields(schema=True)}
-        );
-
-        CREATE TABLE IF NOT EXISTS runtime (
-            {sql_table_runtime_fields(schema=True)}
-        );
-    '''
-
     with base.SQLTransaction(result.sql_conn) as tx:
+        sql_stmt: str = f'''
+            CREATE TABLE IF NOT EXISTS unredeemed_payments (
+                {sql_table_unredeemed_payments_fields(schema=True)}
+            );
+
+            CREATE TABLE IF NOT EXISTS payments (
+                {sql_table_payments_fields(schema=True)}
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                {sql_table_users_fields(schema=True)}
+            );
+
+            CREATE TABLE IF NOT EXISTS revocations (
+                {sql_table_revocations_fields(schema=True)}
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime (
+                {sql_table_runtime_fields(schema=True)}
+            );
+        '''
+
         assert tx.cursor is not None
-        _ = tx.cursor.executescript(sql_stmt)
 
-        _ = tx.cursor.execute('''
-            INSERT INTO runtime
-            SELECT 0, ?, ?
-            WHERE NOT EXISTS (SELECT 1 FROM runtime)
-        ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
-              bytes(nacl.signing.SigningKey.generate())))
+        try:
+            _ = tx.cursor.executescript(sql_stmt)
+            _ = tx.cursor.execute('''
+                INSERT INTO runtime
+                SELECT 0, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM runtime)
+            ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
+                  bytes(nacl.signing.SigningKey.generate())))
+            result.success = True
+        except Exception as e:
+            err.msg_list.append(f"Failed to bootstrap DB tables: {e}")
 
-        _                          = tx.cursor.execute('SELECT COUNT(*) FROM unredeemed_payments')
-        result.unredeemed_payments = tx.cursor.fetchone()[0];
-
-        _                          = tx.cursor.execute('SELECT COUNT(*) FROM payments')
-        result.payments            = tx.cursor.fetchone()[0];
-
-        _                          = tx.cursor.execute('SELECT COUNT(*) FROM users')
-        result.users               = tx.cursor.fetchone()[0];
-
-        _                          = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
-        result.revocations         = tx.cursor.fetchone()[0];
-        result.success             = True
-
-    result.runtime = get_runtime(result.sql_conn)
-    result.db_path = db_path
-    if os.path.exists(db_path):
-        result.db_size = os.stat(db_path).st_size
-
-    if not result.success:
+    if result.success:
+        result.runtime = get_runtime(result.sql_conn)
+    else:
         result.sql_conn.close()
 
     return result
 
-def verify_payment_token_hash(hash: bytes):
+def verify_payment_token_hash(hash: bytes, err: base.ErrorSink):
     if len(hash) != 32:
-        raise ValueError(f'Payment token hash must be 32 bytes, received {len(hash)}')
+        err.msg_list.append(f'Payment token hash must be 32 bytes, received {len(hash)}')
 
-def add_unredeemed_payment(sql_conn: sqlite3.Connection, payment_token_hash: bytes, subscription_duration_s: int):
-    verify_payment_token_hash(payment_token_hash)
+def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
+                           payment_token_hash:      bytes,
+                           subscription_duration_s: int,
+                           err:                     base.ErrorSink):
+    verify_payment_token_hash(payment_token_hash, err)
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _ = tx.cursor.execute('''
@@ -383,6 +411,18 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
 
     return result
 
+def make_pro_subscription_proof_hash(version:          int,
+                                     gen_index_hash:   bytes,
+                                     rotating_pkey:    nacl.signing.VerifyKey,
+                                     expiry_unix_ts_s: int) -> bytes:
+    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
+    hasher.update(bytes(version))
+    hasher.update(gen_index_hash)
+    hasher.update(bytes(rotating_pkey))
+    hasher.update(bytes(expiry_unix_ts_s))
+    result: bytes = hasher.digest()
+    return result
+
 def build_proof(gen_index:        int,
                 rotating_pkey:    nacl.signing.VerifyKey,
                 expiry_unix_ts_s: int,
@@ -398,38 +438,39 @@ def build_proof(gen_index:        int,
     hasher.update(result.gen_index_hash)
     hasher.update(bytes(result.rotating_pkey))
     hasher.update(bytes(result.expiry_unix_ts_s))
-    result.sig = signing_key.sign(hasher.digest())
+    result.sig = signing_key.sign(hasher.digest()).signature
     return result
 
-def add_payment(sql_conn:              sqlite3.Connection,
-                signing_key:           nacl.signing.SigningKey,
-                creation_unix_ts_s:    int,
-                master_pkey:           nacl.signing.VerifyKey,
-                rotating_pkey:         nacl.signing.VerifyKey,
-                payment_token_hash:    bytes,
-                master_sig:            bytes,
-                rotating_sig:          bytes) -> ProSubscriptionProof:
+def add_payment(sql_conn:           sqlite3.Connection,
+                signing_key:        nacl.signing.SigningKey,
+                creation_unix_ts_s: int,
+                master_pkey:        nacl.signing.VerifyKey,
+                rotating_pkey:      nacl.signing.VerifyKey,
+                payment_token_hash: bytes,
+                master_sig:         bytes,
+                rotating_sig:       bytes,
+                err:                base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # Verify token and the time
-    verify_payment_token_hash(payment_token_hash)
+    verify_payment_token_hash(payment_token_hash, err)
     assert creation_unix_ts_s % base.SECONDS_IN_DAY == 0, "The passed in creation (and or activation) timestamp must lie on a day boundary: {}".format(creation_unix_ts_s)
 
-    hash_to_sign: bytes = make_add_payment_hash(master_pkey=master_pkey,
-                                                rotating_pkey=rotating_pkey,
-                                                payment_token_hash=payment_token_hash)
+    hash_to_sign: bytes = make_payment_hash(master_pkey=master_pkey,
+                                            rotating_pkey=rotating_pkey,
+                                            payment_token_hash=payment_token_hash)
 
     # Verify the keys
     try:
         _ = master_pkey.verify(smessage=hash_to_sign, signature=master_sig)
     except Exception as e:
-        print(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
+        err.msg_list.append(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
         return result
 
     try:
         _ = rotating_pkey.verify(smessage=hash_to_sign, signature=rotating_sig)
     except Exception as e:
-        print(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
+        err.msg_list.append(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
         return result
 
     with base.SQLTransaction(sql_conn) as tx:
@@ -464,6 +505,8 @@ def add_payment(sql_conn:              sqlite3.Connection,
                                  rotating_pkey=rotating_pkey,
                                  expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
                                  signing_key=signing_key)
+        else:
+            err.msg_list.append(f"Server has not received the payment for this token ({payment_token_hash.hex()}) and cannot be used")
 
     return result
 
@@ -487,33 +530,33 @@ def get_pro_subscription_proof(sql_conn:      sqlite3.Connection,
                                signing_key:   nacl.signing.SigningKey,
                                master_pkey:   nacl.signing.VerifyKey,
                                rotating_pkey: nacl.signing.VerifyKey,
-                               nonce:         int,
+                               unix_ts_s:     int,
                                master_sig:    bytes,
-                               rotating_sig:  bytes):
-
+                               rotating_sig:  bytes,
+                               err:           base.ErrorSink) -> ProSubscriptionProof:
     # Generate the hash to verify
     hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32)
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
-    hasher.update(bytes(nonce))
+    hasher.update(bytes(unix_ts_s))
     hash_to_sign: bytes = hasher.digest()
 
     # Verify the keys
+    result: ProSubscriptionProof = ProSubscriptionProof()
     try:
         _ = master_pkey.verify(smessage=hash_to_sign, signature=master_sig)
     except Exception as e:
-        print(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
-        return
+        err.msg_list.append(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
+        return result
 
     try:
         _ = rotating_pkey.verify(smessage=hash_to_sign, signature=rotating_sig)
     except Exception as e:
-        print(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
-        return
+        err.msg_list.append(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
+        return result
 
     # Generate proof
     user:   UserRow              = get_user(sql_conn, master_pkey)
-    result: ProSubscriptionProof = ProSubscriptionProof()
     if user.master_pkey == master_pkey:
         result = build_proof(gen_index=user.gen_index,
                              rotating_pkey=rotating_pkey,

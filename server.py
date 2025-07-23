@@ -1,106 +1,146 @@
+'''
+This file is the HTTP layer which declares the functions that serve the routes
+for interacting with the Session Pro Backend. These routes are registered
+onto a Flask application and enable the endpoints for the server.
+
+The role of this layer is to intercept and sanitize the HTTP request, extracting
+the JSON into valid, strongly typed (to Python's best ability) that can be passed
+into the backend.
+
+The backend is responsible for further validation of the request such as
+signature verification and consistency against the state of the DB. If
+successful the result is returned back to this layer and piped back to the user
+in the HTTP response.
+'''
+
 import flask
 import typing
 import time
+import nacl.signing
 
-flask_app: flask.Flask = flask.Flask(__name__)
+import base
+import backend
 
-class ErrorSink:
-    msg_list: list[str] = []
-    def __init__(self):
-        self.msg_list.clear()
+class GetJSONFromFlaskRequest:
+    json:    dict[str, typing.Any] = {}
+    err_msg: str                   = ''
 
-def dict_require(d: dict[str, typing.Any], key: str, default_val: typing.Any, err_msg: str, err: ErrorSink) -> typing.Any:
-    if not key in d:
-        err.msg_list.append(f'{err_msg}: \'{key}\'')
-    return d.get(key, default_val)
+flask_blueprint           = flask.Blueprint('session-pro-backend', __name__)
+CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
+CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 
-def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
-    result: bytes = b''
-    if len(hex) != hex_len:
-        err.msg_list.append(f'{label} was not {hex_len} characters, was {len(hex)} characters')
-    else:
-        try:
-            result = bytes.fromhex(hex)
-        except Exception as e:
-            err.msg_list.append(f'{label} was not valid hex: {e}')
+def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
+    result        = flask.jsonify({ 'status': http_status, 'msg': msg})
+    result.status = http_status
     return result
 
-
-def html_error_response(http_status: int, msg: str | list[str]) -> flask.Response:
-    result = flask.jsonify({ 'status': http_status, 'msg': msg})
+def html_good_response(dict_result: typing.Any) -> flask.Response:
+    result = flask.jsonify({ 'status': 200, 'result': dict_result})
     return result
 
-@flask_app.route('/add_payment', methods=['POST'])
+def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskRequest:
+    # Get JSON from request
+    result: GetJSONFromFlaskRequest = GetJSONFromFlaskRequest()
+    if len(request.get_data()) == 0:
+        return result
+
+    try:
+        json: dict[str, typing.Any] | None = flask.request.get_json()
+        if json is None:
+            result.err_msg = "JSON failed to be parsed"
+        else:
+            result.json = json
+    except Exception as e:
+        result.err_msg = str(e)
+
+    return result
+
+def init(testing_mode: bool, db_path: str, db_path_is_uri: bool = False) -> flask.Flask:
+    result                                   = flask.Flask(__name__)
+    result.config['TESTING']                 = testing_mode
+    result.config[CONFIG_DB_PATH_KEY]        = db_path
+    result.config[CONFIG_DB_PATH_IS_URI_KEY] = db_path
+    result.register_blueprint(flask_blueprint)
+    return result
+
+@flask_blueprint.route('/add_payment', methods=['POST'])
 def add_payment():
-    if len(flask.request.get_data()) == 0:
-        return html_error_response(400, "No JSON was present in body")
-
-    # Get JSON from body
-    json: dict[str, typing.Any] | None = None
-    try:
-        json = flask.request.get_json()
-    except Exception as e:
-        return html_error_response(400, f"{e}")
-
-    if json is None:
-        return html_error_response(400, "JSON failed to be parsed")
+    # Get JSON from request
+    get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        return html_bad_response(400, get.err_msg)
 
     # Extract values from JSON
-    err:           ErrorSink = ErrorSink()
-    version:       int       = dict_require(d=json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:   str       = dict_require(d=json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey: str       = dict_require(d=json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
-    payment_token: str       = dict_require(d=json, key='payment_token', default_val='', err_msg="Missing payment token from body",       err=err)
-    master_sig:    str       = dict_require(d=json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:  str       = dict_require(d=json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
+    err                = base.ErrorSink()
+    version:       int = base.dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
+    master_pkey:   str = base.dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
+    rotating_pkey: str = base.dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
+    payment_token: str = base.dict_require(d=get.json, key='payment_token', default_val='', err_msg="Missing payment token from body",       err=err)
+    master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
+    rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
     if len(err.msg_list):
-        return html_error_response(400, err.msg_list)
+        return html_bad_response(400, err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-    master_pkey_bytes   = hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=64, err=err)
-    rotating_pkey_bytes = hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=64, err=err)
-    payment_token_bytes = hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=64, err=err)
-    master_sig_bytes    = hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
-    rotating_sig_bytes  = hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
+    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=64, err=err)
+    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=64, err=err)
+    payment_token_bytes = base.hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=64, err=err)
+    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
+    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
     if len(err.msg_list):
-        return html_error_response(400, err.msg_list)
+        return html_bad_response(400, err.msg_list)
 
-    return html_error_response(200, "good")
+    # Submit the payment to the DB
+    assert CONFIG_DB_PATH_KEY in flask.current_app.config
+    flask_app: flask.Flask                  = flask.current_app
+    proof:     backend.ProSubscriptionProof = backend.ProSubscriptionProof()
 
-@flask_app.route('/get_pro_subscription_proof', methods=['POST'])
+    db_path:        str  = flask_app.config[CONFIG_DB_PATH_KEY]
+    db_path_is_uri: bool = flask_app.config[CONFIG_DB_PATH_IS_URI_KEY]
+    with backend.OpenDBAtPath(db_path, db_path_is_uri) as db:
+        creation_unix_ts_s: int = base.round_unix_ts_to_next_day(int(time.time()))
+        proof                   = backend.add_payment(sql_conn           = db.sql_conn,
+                                                      signing_key        = db.runtime.backend_key,
+                                                      creation_unix_ts_s = creation_unix_ts_s,
+                                                      master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                      rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                      payment_token_hash = payment_token_bytes,
+                                                      master_sig         = master_sig_bytes,
+                                                      rotating_sig       = rotating_sig_bytes,
+                                                      err                = err)
+
+    if err.msg_list:
+        return html_bad_response(500, err.msg_list)
+
+    result = html_good_response(proof.to_dict())
+    return result
+
+@flask_blueprint.route('/get_pro_subscription_proof', methods=['POST'])
 def get_pro_subscription_proof():
-    if len(flask.request.get_data()) == 0:
-        return html_error_response(400, "No JSON was present in body")
-
-    # Get JSON from body
-    json: dict[str, typing.Any] | None = None
-    try:
-        json = flask.request.get_json()
-    except Exception as e:
-        return html_error_response(400, f"{e}")
-
-    if json is None:
-        return html_error_response(400, "JSON failed to be parsed")
+    # Get JSON from request
+    get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        return html_bad_response(400, get.err_msg)
 
     # Extract values from JSON
-    err:           ErrorSink = ErrorSink()
-    version:       int       = dict_require(d=json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:   str       = dict_require(d=json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey: str       = dict_require(d=json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
-    unix_ts_s:     int       = dict_require(d=json, key='unix_ts_s',     default_val=0,  err_msg="Missing unix timestamp from body",      err=err)
-    master_sig:    str       = dict_require(d=json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:  str       = dict_require(d=json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
+    err                = base.ErrorSink()
+    version:       int = base.dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
+    master_pkey:   str = base.dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
+    rotating_pkey: str = base.dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
+    unix_ts_s:     int = base.dict_require(d=get.json, key='unix_ts_s',     default_val=0,  err_msg="Missing unix timestamp from body",      err=err)
+    master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
+    rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
     if len(err.msg_list):
-        return html_error_response(400, err.msg_list)
+        return html_bad_response(400, err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
 
-    master_pkey_bytes   = hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=64, err=err)
-    rotating_pkey_bytes = hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=64, err=err)
+    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',   hex_len=64, err=err)
+    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key', hex_len=64, err=err)
 
     NONCE_THRESHOLD_S: int = 60 * 10; # 10 minutes
     now:               int = int(time.time())
@@ -112,9 +152,9 @@ def get_pro_subscription_proof():
     if unix_ts_s > max_unix_ts_s:
         err.msg_list.append(f'Nonce timestamp is too far in the future: {unix_ts_s} (max {max_unix_ts_s})')
 
-    master_sig_bytes    = hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
-    rotating_sig_bytes  = hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
+    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
+    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
     if len(err.msg_list):
-        return html_error_response(400, err.msg_list)
+        return html_bad_response(400, err.msg_list)
 
-    return html_error_response(200, "good")
+    return html_bad_response(200, "good")

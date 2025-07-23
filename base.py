@@ -1,7 +1,31 @@
+'''
+The base layer contains common utilities that is useful to other files in the
+project and should have no dependency on any project files, only, native Python
+packages. Typically useful to share functionality from the testing suite and the
+project but not limited to.
+'''
+
 import sqlite3
 import datetime
+import typing
 
 SECONDS_IN_DAY: int   = 60 * 60 * 24
+
+class ErrorSink:
+    '''
+    Helper class to pass to functions that want to return error messages without
+    unwinding the stack by using throwing exceptions.
+
+    The typical pattern in that this construct is used is calling a sequence of
+    functions that can error but have no dependency on each other. Errors are
+    accumulated into the sink and checked at the end where it reports
+    the error from the sink and returns a failure if there is one.
+
+    See the parsing code in server.py for an example of where this is useful.
+    '''
+    msg_list: list[str] = []
+    def __init__(self):
+        self.msg_list.clear()
 
 class SQLTransaction:
     conn:   sqlite3.Connection
@@ -22,6 +46,28 @@ class SQLTransaction:
 class TableStrings:
     name:     str = ''
     contents: list[list[str]] = []
+
+def dict_require(d: dict[str, typing.Any], key: str, default_val: typing.Any, err_msg: str, err: ErrorSink) -> typing.Any:
+    if not key in d:
+        err.msg_list.append(f'{err_msg}: \'{key}\'')
+
+    result: typing.Any = d[key]
+    if not isinstance(result, type(default_val)):
+        err.msg_list.append(f'{err_msg}: \'{key}\' is not a valid \'{type(default_val).__name__}\'')
+        return default_val
+
+    return result
+
+def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
+    result = b''
+    if len(hex) != hex_len:
+        err.msg_list.append(f'{label} was not {hex_len} characters, was {len(hex)} characters')
+    else:
+        try:
+            result = bytes.fromhex(hex)
+        except Exception as e:
+            err.msg_list.append(f'{label} was not valid hex: {e}')
+    return result
 
 def print_unicode_table(rows: list[list[str]]) -> None:
     # Calculate maximum width for each column
