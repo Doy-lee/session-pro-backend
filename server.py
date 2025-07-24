@@ -36,7 +36,7 @@ ROUTE_ADD_PAYMENT:                str = 'add_payment'
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Session Pro Backend client requests.
-flask_blueprint = flask.Blueprint('session-pro-backend', __name__)
+flask_blueprint = flask.Blueprint('session-pro-backend-blueprint', __name__)
 
 def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
     result        = flask.jsonify({ 'status': http_status, 'msg': msg})
