@@ -1,11 +1,11 @@
 '''
 This file is the HTTP layer which declares the functions that serve the routes
 for interacting with the Session Pro Backend. These routes are registered
-onto a Flask application and enable the endpoints for the server.
+onto a Flask application which enable the endpoints for the server.
 
 The role of this layer is to intercept and sanitize the HTTP request, extracting
-the JSON into valid, strongly typed (to Python's best ability) that can be passed
-into the backend.
+the JSON into valid, strongly typed (to Python's best ability) types that can be
+passed into the backend.
 
 The backend is responsible for further validation of the request such as
 signature verification and consistency against the state of the DB. If
@@ -25,9 +25,18 @@ class GetJSONFromFlaskRequest:
     json:    dict[str, typing.Any] = {}
     err_msg: str                   = ''
 
-flask_blueprint           = flask.Blueprint('session-pro-backend', __name__)
+# Keys stored in the flask app config dictionary that can be retrieved within
+# a request to get the path to the SQLite DB to load and use for that request.
 CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
 CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
+
+# Name of the endpoints exposed on the server
+ROUTE_GET_PRO_SUBSCRIPTION_PROOF: str = 'get_pro_subscription_proof'
+ROUTE_ADD_PAYMENT:                str = 'add_payment'
+
+# The object containing routes that you register onto a Flask app to turn it
+# into an app that accepts Session Pro Backend client requests.
+flask_blueprint = flask.Blueprint('session-pro-backend', __name__)
 
 def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
     result        = flask.jsonify({ 'status': http_status, 'msg': msg})
@@ -63,7 +72,7 @@ def init(testing_mode: bool, db_path: str, db_path_is_uri: bool = False) -> flas
     result.register_blueprint(flask_blueprint)
     return result
 
-@flask_blueprint.route('/add_payment', methods=['POST'])
+@flask_blueprint.route(f'/{ROUTE_ADD_PAYMENT}', methods=['POST'])
 def add_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -93,15 +102,10 @@ def add_payment():
         return html_bad_response(400, err.msg_list)
 
     # Submit the payment to the DB
-    assert CONFIG_DB_PATH_KEY in flask.current_app.config
-    flask_app: flask.Flask                  = flask.current_app
-    proof:     backend.ProSubscriptionProof = backend.ProSubscriptionProof()
-
-    db_path:        str  = flask_app.config[CONFIG_DB_PATH_KEY]
-    db_path_is_uri: bool = flask_app.config[CONFIG_DB_PATH_IS_URI_KEY]
-    with backend.OpenDBAtPath(db_path, db_path_is_uri) as db:
+    with open_db_from_flask_request_context(flask.current_app) as db:
         creation_unix_ts_s: int = base.round_unix_ts_to_next_day(int(time.time()))
         proof                   = backend.add_payment(sql_conn           = db.sql_conn,
+                                                      version            = version,
                                                       signing_key        = db.runtime.backend_key,
                                                       creation_unix_ts_s = creation_unix_ts_s,
                                                       master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
@@ -111,14 +115,20 @@ def add_payment():
                                                       rotating_sig       = rotating_sig_bytes,
                                                       err                = err)
 
-    if err.msg_list:
-        return html_bad_response(500, err.msg_list)
-
-    result = html_good_response(proof.to_dict())
+    result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
     return result
 
-@flask_blueprint.route('/get_pro_subscription_proof', methods=['POST'])
-def get_pro_subscription_proof():
+def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDBAtPath:
+    assert CONFIG_DB_PATH_KEY        in flask.current_app.config
+    assert CONFIG_DB_PATH_IS_URI_KEY in flask.current_app.config
+    flask_app:      flask.Flask = flask.current_app
+    db_path:        str         = flask_app.config[CONFIG_DB_PATH_KEY]
+    db_path_is_uri: bool        = flask_app.config[CONFIG_DB_PATH_IS_URI_KEY]
+    result                      = backend.OpenDBAtPath(db_path, db_path_is_uri)
+    return result
+
+@flask_blueprint.route(f'/{ROUTE_GET_PRO_SUBSCRIPTION_PROOF}', methods=['POST'])
+def get_pro_subscription_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -138,23 +148,24 @@ def get_pro_subscription_proof():
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',   hex_len=64, err=err)
     rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key', hex_len=64, err=err)
-
-    NONCE_THRESHOLD_S: int = 60 * 10; # 10 minutes
-    now:               int = int(time.time())
-    max_unix_ts_s:     int = now + NONCE_THRESHOLD_S
-    min_unix_ts_s:     int = now - NONCE_THRESHOLD_S
-
-    if unix_ts_s < min_unix_ts_s:
-        err.msg_list.append(f'Nonce timestamp is too far in the past: {unix_ts_s} (min {min_unix_ts_s})')
-    if unix_ts_s > max_unix_ts_s:
-        err.msg_list.append(f'Nonce timestamp is too far in the future: {unix_ts_s} (max {max_unix_ts_s})')
-
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
     if len(err.msg_list):
         return html_bad_response(400, err.msg_list)
 
-    return html_bad_response(200, "good")
+    # Request proof from the backend
+    with open_db_from_flask_request_context(flask.current_app) as db:
+        proof = backend.get_pro_subscription_proof(sql_conn      = db.sql_conn,
+                                                   version       = version,
+                                                   signing_key   = db.runtime.backend_key,
+                                                   master_pkey   = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                   rotating_pkey = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                   unix_ts_s     = unix_ts_s,
+                                                   master_sig    = master_sig_bytes,
+                                                   rotating_sig  = rotating_sig_bytes,
+                                                   err           = err)
+
+    result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
+    return result
