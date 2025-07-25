@@ -11,6 +11,13 @@ BACKEND_SALT: bytes = os.urandom(hashlib.blake2b.SALT_SIZE)
 ZERO_BYTES32        = bytes(32)
 BLAKE2B_DIGEST_SIZE = 32
 
+class ExpireResult:
+    already_done_by_someone_else: bool = False
+    success:                      bool = False
+    payments:                     int  = 0
+    revocations:                  int  = 0
+    users:                        int  = 0
+
 class SubscriptionDuration(enum.Enum):
     Days30  = 0
     Days90  = 1
@@ -94,47 +101,6 @@ def make_payment_hash(version:            int,
     hasher.update(bytes(rotating_pkey))
     hasher.update(payment_token_hash)
     result: bytes = hasher.digest()
-    return result
-
-def sql_table_unredeemed_payments_fields(schema: bool) -> str:
-    result: str = (
-        "payment_token_hash      {},\n".format("BLOB PRIMARY KEY" if schema else "") +
-        "subscription_duration_s {}\n".format("INTEGER NOT NULL"  if schema else "")
-    )
-    return result
-
-def sql_table_payments_fields(schema: bool) -> str:
-    result: str = (
-        "id                      {},\n".format("INTEGER PRIMARY KEY" if schema else "") +
-        "master_pkey             {},\n".format("BLOB    NOT NULL"    if schema else "") +
-        "subscription_duration_s {},\n".format("INTEGER NOT NULL"    if schema else "") +
-        "creation_unix_ts_s      {},\n".format("INTEGER NOT NULL"    if schema else "") +
-        "activation_unix_ts_s    {},\n".format("INTEGER"             if schema else "") +
-        "payment_token_hash      {}".format(  "BLOB    NOT NULL"    if schema else "")
-    )
-    return result
-
-def sql_table_users_fields(schema: bool) -> str:
-    result: str = (
-        "master_pkey      {},\n".format("BLOB PRIMARY KEY" if schema else "") +
-        "gen_index        {},\n".format("INTEGER NOT NULL" if schema else "") +
-        "expiry_unix_ts_s {}\n".format("INTEGER NOT NULL"  if schema else "")
-    )
-    return result
-
-def sql_table_revocations_fields(schema: bool) -> str:
-    result: str = (
-        "gen_index        {},\n".format("INTEGER PRIMARY KEY" if schema else "") +
-        "expiry_unix_ts_s {}\n".format("INTEGER NOT NULL"     if schema else "")
-    )
-    return result
-
-def sql_table_runtime_fields(schema: bool) -> str:
-    result: str = (
-        "gen_index {},\n".format("INTEGER NOT NULL" if schema else "") +
-        "gen_index_salt {},\n".format("BLOB NOT NULL " if schema else "") +
-        "backend_key {}\n".format("BLOB NOT NULL " if schema else "")
-    )
     return result
 
 def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[UnredeemedPaymentRow]:
@@ -264,23 +230,71 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
     with base.SQLTransaction(result.sql_conn) as tx:
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS unredeemed_payments (
-                {sql_table_unredeemed_payments_fields(schema=True)}
+                payment_token_hash      BLOB PRIMARY KEY,
+                subscription_duration_s INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS payments (
-                {sql_table_payments_fields(schema=True)}
+                id                      INTEGER PRIMARY KEY,
+                master_pkey             BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
+                subscription_duration_s INTEGER NOT NULL,
+                creation_unix_ts_s      INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
+
+                -- Timestamp of when a payment is activated. The payment is consumed when the
+                -- subscription duration has elapsed relative to this time whereby the next payment
+                -- is activated. There is only one activated record per master key at a time.
+                --
+                -- Activating payments one at a time allows correct calculation of the total
+                -- duration a user is entitled to Pro features. For example if a payment is refunded
+                -- that may abruptly end a user's entitlement mid-way through their subscription.
+                -- By activating the next record from the current timestamp and summing the
+                -- remaining subscription durations forward, this correctly accounts for that user's
+                -- remaining entitlement by knowing the starting timestamp to sum the subscription
+                -- durations to.
+                activation_unix_ts_s    INTEGER,
+                payment_token_hash      BLOB    NOT NULL     -- BLAKE2B hash of the token provided by the payment provider
             );
 
             CREATE TABLE IF NOT EXISTS users (
-                {sql_table_users_fields(schema=True)}
+                master_pkey      BLOB PRIMARY KEY,
+
+                -- Current generation index allocated for the user. A new index is allocated
+                -- everytime a payment is added/removed for the associated master key which will
+                -- change the duration of entitlement for the user. This means that the generation
+                -- index which is globally unique, snapshots the duration entitlement of a user at a
+                -- particular time.
+                --
+                -- Pro subscription proofs are signed with this generation index. This means that we
+                -- can revoke all prior proofs generated for this user and consequently their
+                -- entitlement to Session Pro features by publishing a revoked proof with the index
+                -- that was allocated to the user.
+                --
+                -- For example if the user refunded their subscription and there are proofs still
+                -- circulating the network with some time remaining on the subscription then clients
+                -- can know to ignore proofs for this user.
+                --
+                -- Another example for revocations is if the user stacks subscriptions to increase
+                -- the duration of their entitlement. We can revoke the old proofs identified by the
+                -- previous index associated with the user, allocate a new index and sign a new
+                -- proof with said index.
+                --
+                -- This will force clients to drop the old proof and adopt the new proof which now
+                -- correctly indicates the updated and correct duration that the user is entitled to
+                -- Session Pro features.
+                gen_index        INTEGER NOT NULL,
+                expiry_unix_ts_s INTEGER NOT NULL            -- Timestamp at which the sum of all current subscriptions for the user expires
             );
 
             CREATE TABLE IF NOT EXISTS revocations (
-                {sql_table_revocations_fields(schema=True)}
+                gen_index        INTEGER PRIMARY KEY,
+                expiry_unix_ts_s INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS runtime (
-                {sql_table_runtime_fields(schema=True)}
+                gen_index             INTEGER NOT NULL, -- Next generation index to allocate to an updated user
+                gen_index_salt        BLOB NOT NULL,    -- BLAKE2B salt for hashing the gen_index in proofs
+                backend_key           BLOB NOT NULL,    -- Ed25519 skey for signing proofs
+                last_expire_unix_ts_s INTEGER NOT NULL  -- Last time expire payments/revocs/users was called on the table
             );
         '''
 
@@ -290,7 +304,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
             _ = tx.cursor.executescript(sql_stmt)
             _ = tx.cursor.execute('''
                 INSERT INTO runtime
-                SELECT 0, ?, ?
+                SELECT 0, ?, ?, 0
                 WHERE NOT EXISTS (SELECT 1 FROM runtime)
             ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
                   bytes(nacl.signing.SigningKey.generate())))
@@ -326,7 +340,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
                                      activation_unix_ts_s: int) -> UpdateAfterPaymentsModified:
 
     result:            UpdateAfterPaymentsModified = UpdateAfterPaymentsModified()
-    master_pkey_bytes: bytes = bytes(master_pkey)
+    master_pkey_bytes: bytes                       = bytes(master_pkey)
     assert tx.cursor is not None
 
     # Check if the user has any activated subscriptions yet in the payments table
@@ -657,4 +671,51 @@ def get_pro_subscription_proof(sql_conn:      sqlite3.Connection,
     else:
         err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(user.master_pkey).hex()} {user.gen_index} {user.expiry_unix_ts_s}')
 
+    return result
+
+def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_s: int) -> ExpireResult:
+    result = ExpireResult()
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        # Retrieve the last expiry time that was executed
+        _ = tx.cursor.execute('''SELECT last_expire_unix_ts_s FROM runtime''')
+        last_expire_unix_ts_s:        int  = tx.cursor.fetchone()[0]
+        already_done_by_someone_else: bool = last_expire_unix_ts_s >= unix_ts_s
+        if not already_done_by_someone_else:
+            # Update the timestamp that we executed DB expiry
+            _ = tx.cursor.execute('''UPDATE runtime SET last_expire_unix_ts_s = ?''', (unix_ts_s,))
+
+            # Delete expired payments
+            _ = tx.cursor.execute('''
+                DELETE FROM payments
+                WHERE activation_unix_ts_s IS NOT NULL AND ? >= (activation_unix_ts_s + subscription_duration_s)
+                RETURNING master_pkey
+            ''', (unix_ts_s,))
+            result.payments = tx.cursor.rowcount
+
+            # For each master public key that had a payment deleted, activate
+            # their next record if they have one to activate
+            for row in tx.cursor.fetchall():
+                master_pkey_bytes: bytes = row[0]
+                master_pkey              = nacl.signing.VerifyKey(master_pkey_bytes)
+                _ = backend.update_db_after_payments_changed(tx=tx,
+                                                             master_pkey=master_pkey,
+                                                             activation_unix_ts_s=unix_ts_s)
+
+            # Delete expired revocations
+            _ = tx.cursor.execute('''
+                DELETE FROM revocations
+                WHERE ? >= expiry_unix_ts_s;
+            ''', (unix_ts_s,))
+            result.revocations = tx.cursor.rowcount
+
+            # Delete expired users
+            _ = tx.cursor.execute('''
+                DELETE FROM users
+                WHERE ? >= expiry_unix_ts_s;
+            ''', (unix_ts_s,))
+            result.users = tx.cursor.rowcount
+
+        result.already_done_by_someone_else = already_done_by_someone_else
+        result.success                      = True
     return result
