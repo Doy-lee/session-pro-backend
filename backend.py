@@ -7,7 +7,6 @@ import time
 
 import base
 
-BACKEND_SALT: bytes = os.urandom(hashlib.blake2b.SALT_SIZE)
 ZERO_BYTES32        = bytes(32)
 BLAKE2B_DIGEST_SIZE = 32
 
@@ -68,8 +67,9 @@ class RuntimeRow:
     backend_key:    nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
 
 class UpdateAfterPaymentsModified:
-    latest_expiry_unix_ts_s: int = 0
-    gen_index:               int = 0
+    latest_expiry_unix_ts_s: int   = 0
+    gen_index:               int   = 0
+    gen_index_salt:          bytes = b''
 
 class SetupDBResult:
     path:     str                       = ''
@@ -410,9 +410,11 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
     _ = tx.cursor.execute('''
         UPDATE    runtime
         SET       gen_index = gen_index + 1
-        RETURNING gen_index - 1
+        RETURNING gen_index - 1, gen_index_salt
     ''')
-    result.gen_index = tx.cursor.fetchone()[0]
+    runtime_row           = tx.cursor.fetchone()
+    result.gen_index      = runtime_row[0]
+    result.gen_index_salt = runtime_row[1]
 
     # Update the user metadata, grab the next generation index, increment it and then
     # assign/update the user table
@@ -455,11 +457,13 @@ def make_get_pro_subscription_proof_hash(version:       int,
 def build_proof(gen_index:        int,
                 rotating_pkey:    nacl.signing.VerifyKey,
                 expiry_unix_ts_s: int,
-                signing_key:      nacl.signing.SigningKey) -> ProSubscriptionProof:
+                signing_key:      nacl.signing.SigningKey,
+                gen_index_salt:   bytes) -> ProSubscriptionProof:
+    assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
     result: ProSubscriptionProof = ProSubscriptionProof()
     result.version               = 0
     result.success               = True
-    result.gen_index_hash        = hashlib.blake2b(bytes(gen_index), digest_size=BLAKE2B_DIGEST_SIZE, salt=BACKEND_SALT).digest()
+    result.gen_index_hash        = hashlib.blake2b(bytes(gen_index), digest_size=BLAKE2B_DIGEST_SIZE, salt=gen_index_salt).digest()
     result.rotating_pkey         = rotating_pkey
     result.expiry_unix_ts_s      = expiry_unix_ts_s
 
@@ -592,7 +596,8 @@ def add_payment(sql_conn:           sqlite3.Connection,
             result = build_proof(gen_index=update.gen_index,
                                  rotating_pkey=rotating_pkey,
                                  expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
-                                 signing_key=signing_key)
+                                 signing_key=signing_key,
+                                 gen_index_salt=update.gen_index_salt)
         else:
             err.msg_list.append(f"Server has not received the payment for this token ({payment_token_hash.hex()}) and cannot be used")
 
@@ -614,15 +619,16 @@ def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, acti
                                                  master_pkey = nacl.signing.VerifyKey(master_pkey_bytes),
                                                  activation_unix_ts_s=activation_unix_ts_s)
 
-def get_pro_subscription_proof(sql_conn:      sqlite3.Connection,
-                               version:       int,
-                               signing_key:   nacl.signing.SigningKey,
-                               master_pkey:   nacl.signing.VerifyKey,
-                               rotating_pkey: nacl.signing.VerifyKey,
-                               unix_ts_s:     int,
-                               master_sig:    bytes,
-                               rotating_sig:  bytes,
-                               err:           base.ErrorSink) -> ProSubscriptionProof:
+def get_pro_subscription_proof(sql_conn:       sqlite3.Connection,
+                               version:        int,
+                               signing_key:    nacl.signing.SigningKey,
+                               gen_index_salt: bytes,
+                               master_pkey:    nacl.signing.VerifyKey,
+                               rotating_pkey:  nacl.signing.VerifyKey,
+                               unix_ts_s:      int,
+                               master_sig:     bytes,
+                               rotating_sig:   bytes,
+                               err:            base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # Verify some of the request parameters
@@ -666,7 +672,8 @@ def get_pro_subscription_proof(sql_conn:      sqlite3.Connection,
         result = build_proof(gen_index=user.gen_index,
                              rotating_pkey=rotating_pkey,
                              expiry_unix_ts_s=user.expiry_unix_ts_s,
-                             signing_key=signing_key);
+                             signing_key=signing_key,
+                             gen_index_salt=gen_index_salt);
         assert result.success
     else:
         err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(user.master_pkey).hex()} {user.gen_index} {user.expiry_unix_ts_s}')

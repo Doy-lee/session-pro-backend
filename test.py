@@ -8,6 +8,9 @@ The server tests spins up a local Flask instance as per
 (https://flask.palletsprojects.com/en/stable/testing/#sending-requests-with-the-test-client)
 and sends a request using the test client and we vet the request and response
 produced by hitting said endpoint.
+
+TODO:
+  - Test that modifying the salt breaks verification
 '''
 
 import flask

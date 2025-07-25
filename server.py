@@ -157,15 +157,16 @@ def get_pro_subscription_proof() -> flask.Response:
 
     # Request proof from the backend
     with open_db_from_flask_request_context(flask.current_app) as db:
-        proof = backend.get_pro_subscription_proof(sql_conn      = db.sql_conn,
-                                                   version       = version,
-                                                   signing_key   = db.runtime.backend_key,
-                                                   master_pkey   = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                   rotating_pkey = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                   unix_ts_s     = unix_ts_s,
-                                                   master_sig    = master_sig_bytes,
-                                                   rotating_sig  = rotating_sig_bytes,
-                                                   err           = err)
+        proof = backend.get_pro_subscription_proof(sql_conn       = db.sql_conn,
+                                                   version        = version,
+                                                   signing_key    = db.runtime.backend_key,
+                                                   gen_index_salt = db.runtime.gen_index_salt,
+                                                   master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                   rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                   unix_ts_s      = unix_ts_s,
+                                                   master_sig     = master_sig_bytes,
+                                                   rotating_sig   = rotating_sig_bytes,
+                                                   err            = err)
 
     result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
     return result
