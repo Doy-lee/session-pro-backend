@@ -1,6 +1,6 @@
 # Session Pro Backend
 
-A server powered by Python, Flask and uWSGI to manage the lifetime of a Session
+A server powered by Python3 and Flask to manage the lifetime of a Session
 Pro subscription for Session users such as:
 
 - Registering payments for Session Pro subscriptions
@@ -10,6 +10,21 @@ Pro subscription for Session users such as:
 - Authorising new cryptographic keys for a pre-existing subscription
 
 And so forth.
+
+# Layout
+
+- `base.py`: Basic primitives shared across all modules where necessary.
+
+- `backend.py`: DB layer that validates incoming requests and stores/retrieves
+information from the DB.
+
+- `main.py`: Entry point of application that setups the basic environment for the
+database and then hands over control flow to Flask to handle HTTP requests.
+
+- `server.py`: HTTP layer that parses client requests and forwards them to backend
+layer and replies a response, if any.
+
+- `test.py`: Holds the unit tests implemented via pytest.
 
 # Getting started
 
@@ -48,15 +63,15 @@ python -m pytest test.py
 # suitable.
 #
 # Note that the following runs it on a local UWSGI server. If you wish to run
-# this from behind a reverse proxy, you want to use (--http-socket) to defer the
-# routing of requests to something like nginx or Caddy see this link for more
-# details:
+# this from behind a reverse proxy, you want to use (--http-socket) instead of (--http)
+# to defer the routing of requests to something like Nginx or Caddy. See this
+# link for more details:
 #
 #   https://uwsgi-docs.readthedocs.io/en/latest/WSGIquickstart.html#putting-behind-a-full-webserver
 #   https://uwsgi-docs.readthedocs.io/en/latest/HTTP.html
 #
 # Or alternatively see how oxen-observer in our ecosystem is configured for
-# a reasonable real-world example:
+# another reasonable real-world example:
 #
 #   https://github.com/oxen-io/oxen-observer
 #
@@ -92,7 +107,8 @@ python -m pytest test.py
 #
 # Process name prefix (--procname-prefix) assigns a human readable name as the
 # process name in the kernel.
-SESH_PRO_BACKEND_DB_PATH=./data/pro.db uwsgi \
+SESH_PRO_BACKEND_DB_PATH=./data/pro.db \
+  uwsgi \
   --http 127.0.0.1:8000 \
   --master \
   --wsgi-file main.py \
