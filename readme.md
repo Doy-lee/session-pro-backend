@@ -24,7 +24,7 @@ SESH_PRO_BACKEND_DB_PATH=<path/to/db>.db (default: ./backend.db)
 
 # Pretty print the contents of the tables in the database to standard out and
 # exit
-SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: ./backend.db)
+SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)
 ```
 
 ## Build and run
@@ -43,7 +43,24 @@ SESH_PRO_BACKEND_DB_PATH=./data/pro.db python -m flask --app main run --debug --
 # Run the tests
 python -m pytest test.py
 
-# Run backend w/ UWSGI on port 8000 with 4 processes (i.e. 4 HTTP request
+# For running in production we use UWSGI which run multiple instances of the
+# Flask app with process lifecycle management, the following command is
+# suitable.
+#
+# Note that the following runs it on a local UWSGI server. If you wish to run
+# this from behind a reverse proxy, you want to use (--http-socket) to defer the
+# routing of requests to something like nginx or Caddy see this link for more
+# details:
+#
+#   https://uwsgi-docs.readthedocs.io/en/latest/WSGIquickstart.html#putting-behind-a-full-webserver
+#   https://uwsgi-docs.readthedocs.io/en/latest/HTTP.html
+#
+# Or alternatively see how oxen-observer in our ecosystem is configured for
+# a reasonable real-world example:
+#
+#   https://github.com/oxen-io/oxen-observer
+#
+# Run the backend w/ local UWSGI on port 8000 with 4 processes (i.e. 4 HTTP request
 # handlers) with the DB stored in the current working directory at ./data/pro.db
 #
 # Threads must be enabled (--enable-threads) on UWSGI. By default UWSGI does not
@@ -76,7 +93,7 @@ python -m pytest test.py
 # Process name prefix (--procname-prefix) assigns a human readable name as the
 # process name in the kernel.
 SESH_PRO_BACKEND_DB_PATH=./data/pro.db uwsgi \
-  --http-socket 127.0.0.1:8000 \
+  --http 127.0.0.1:8000 \
   --master \
   --wsgi-file main.py \
   --callable flask_app \
