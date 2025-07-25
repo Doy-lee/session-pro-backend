@@ -21,6 +21,7 @@ import threading
 import time
 import datetime
 import signal
+import types
 
 import base
 import backend
@@ -46,7 +47,7 @@ def format_seconds(duration_s: int):
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
 
-def signal_handler(sig, frame):
+def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
     global proof_expiry_thread_cv
     global proof_expiry_thread_mutex
@@ -57,7 +58,7 @@ def signal_handler(sig, frame):
         proof_expiry_thread_cv.notify_all()
 
     # Unregister handler and resume the default handler by re-raising it
-    signal.signal(sig, signal.SIG_DFL)
+    _ = signal.signal(sig, signal.SIG_DFL)
     signal.raise_signal(sig)
 
 def backend_proof_expiry_thread_entry_point(db_path: str):
@@ -131,9 +132,9 @@ def entry_point():
         base.print_db_to_stdout(db.sql_conn)
         os._exit(1)
 
-    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler) # Terminate
-    signal.signal(signal.SIGQUIT, signal_handler) # Quit
+    _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
+    _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit
 
     # Dispatch a long-running "thread" that wakes up every 00:00 UTC to expire
     # entries in the DB. This thread has program-lifetime and hence should exit

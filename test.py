@@ -123,7 +123,7 @@ def test_server_add_payment_flow():
     assert db.sql_conn
 
     # Setup local flask instance
-    flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=db.path)
+    flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=db.path, db_path_is_uri=True)
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Register an unredeemed payment (by writing the the token to the DB directly)

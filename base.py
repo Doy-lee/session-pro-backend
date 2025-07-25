@@ -5,6 +5,7 @@ packages. Typically useful to share functionality from the testing suite and the
 project but not limited to.
 '''
 
+import traceback
 import sqlite3
 import datetime
 import typing
@@ -37,7 +38,10 @@ class SQLTransaction:
         self.cursor = self.conn.execute('BEGIN TRANSACTION')
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self,
+                 exc_type: object | None,
+                 exc_value: object | None,
+                 traceback: traceback.TracebackException | None):
         if self.cursor:
             self.cursor.close()
         self.conn.commit() if exc_type is None else self.conn.rollback()

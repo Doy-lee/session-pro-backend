@@ -1,9 +1,11 @@
+import traceback
 import nacl.signing
 import sqlite3
 import hashlib
 import os
 import enum
 import time
+import typing
 
 import base
 
@@ -87,7 +89,10 @@ class OpenDBAtPath:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self,
+                 exc_type: object | None,
+                 exc_value: object | None,
+                 traceback: traceback.TracebackException | None):
         self.sql_conn.close()
         return False
 
@@ -108,7 +113,7 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[Unredeeme
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM unredeemed_payments')
-        for row in tx.cursor.fetchall():
+        for row in tx.cursor:
             item                         = UnredeemedPaymentRow()
             item.payment_token_hash      = row[0]
             item.subscription_duration_s = row[1]
@@ -120,7 +125,7 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _ = tx.cursor.execute('SELECT * FROM payments')
-        for row in tx.cursor.fetchall():
+        for row in tx.cursor:
             item                         = PaymentRow()
             item.id                      = row[0]
             item.master_pkey             = row[1]
@@ -136,7 +141,7 @@ def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _ = tx.cursor.execute('SELECT * FROM users')
-        for row in tx.cursor.fetchall():
+        for row in tx.cursor:
             item                  = UserRow()
             item.master_pkey      = row[0]
             item.gen_index        = row[1]
@@ -160,7 +165,7 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _ = tx.cursor.execute('SELECT * FROM revocations')
-        for row in tx.cursor.fetchall():
+        for row in tx.cursor:
             item                  = RevocationRow()
             item.gen_index        = row[0]
             item.expiry_unix_ts_s = row[1]
@@ -172,7 +177,7 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _                     = tx.cursor.execute('SELECT * FROM runtime')
-        row                   = tx.cursor.fetchone()
+        row: sqlite3.Row      = tx.cursor.fetchone()
         result.gen_index      = row[0]
         result.gen_index_salt = row[1]
 
@@ -702,7 +707,7 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
 
             # For each master public key that had a payment deleted, activate
             # their next record if they have one to activate
-            for row in tx.cursor.fetchall():
+            for row in tx.cursor:
                 master_pkey_bytes: bytes = row[0]
                 master_pkey              = nacl.signing.VerifyKey(master_pkey_bytes)
                 _ = backend.update_db_after_payments_changed(tx=tx,

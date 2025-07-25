@@ -64,7 +64,7 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
 
     return result
 
-def init(testing_mode: bool, db_path: str, db_path_is_uri: bool = False) -> flask.Flask:
+def init(testing_mode: bool, db_path: str, db_path_is_uri: bool) -> flask.Flask:
     result                                   = flask.Flask(__name__)
     result.config['TESTING']                 = testing_mode
     result.config[CONFIG_DB_PATH_KEY]        = db_path
@@ -121,10 +121,9 @@ def add_payment():
 def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDBAtPath:
     assert CONFIG_DB_PATH_KEY        in flask.current_app.config
     assert CONFIG_DB_PATH_IS_URI_KEY in flask.current_app.config
-    flask_app:      flask.Flask = flask.current_app
-    db_path:        str         = flask_app.config[CONFIG_DB_PATH_KEY]
-    db_path_is_uri: bool        = flask_app.config[CONFIG_DB_PATH_IS_URI_KEY]
-    result                      = backend.OpenDBAtPath(db_path, db_path_is_uri)
+    db_path        = typing.cast(str, flask_app.config[CONFIG_DB_PATH_KEY])
+    db_path_is_uri = typing.cast(bool, flask_app.config[CONFIG_DB_PATH_IS_URI_KEY])
+    result         = backend.OpenDBAtPath(db_path, db_path_is_uri)
     return result
 
 @flask_blueprint.route(f'/{ROUTE_GET_PRO_SUBSCRIPTION_PROOF}', methods=['POST'])
