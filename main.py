@@ -76,7 +76,6 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             assert sleep_time_s <= base.SECONDS_IN_DAY
             print(f'Sleeping for {format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
             with proof_expiry_thread_mutex:
-                print('Thread going to sleep after taking lock')
                 _ = proof_expiry_thread_cv.wait(timeout=sleep_time_s)
             sleep_time_s = next_day_unix_ts_s - int(time.time())
 
@@ -99,8 +98,6 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
                                                                                                                      expire_result.users))
             else:
                 print('Dailing pruning for {} failed due to an unknown DB error'.format(yesterday_str))
-
-    print('thread shutting down')
 
 def entry_point():
     # Get arguments from environment
