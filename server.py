@@ -68,7 +68,7 @@ def init(testing_mode: bool, db_path: str, db_path_is_uri: bool = False) -> flas
     result                                   = flask.Flask(__name__)
     result.config['TESTING']                 = testing_mode
     result.config[CONFIG_DB_PATH_KEY]        = db_path
-    result.config[CONFIG_DB_PATH_IS_URI_KEY] = db_path
+    result.config[CONFIG_DB_PATH_IS_URI_KEY] = db_path_is_uri
     result.register_blueprint(flask_blueprint)
     return result
 
