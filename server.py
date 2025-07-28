@@ -43,7 +43,7 @@ def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
     result.status = http_status
     return result
 
-def html_good_response(dict_result: typing.Any) -> flask.Response:
+def html_good_response(dict_result: dict[str, str | int]) -> flask.Response:
     result = flask.jsonify({ 'status': 200, 'result': dict_result})
     return result
 
@@ -54,7 +54,7 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
         return result
 
     try:
-        json: dict[str, typing.Any] | None = flask.request.get_json()
+        json = typing.cast(dict[str, typing.Any] | None, flask.request.get_json())
         if json is None:
             result.err_msg = "JSON failed to be parsed"
         else:

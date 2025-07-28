@@ -6,6 +6,7 @@ import os
 import enum
 import time
 import typing
+import collections.abc
 
 import base
 
@@ -113,7 +114,9 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[Unredeeme
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM unredeemed_payments')
-        for row in tx.cursor:
+
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int]], tx.cursor)
+        for row in rows:
             item                         = UnredeemedPaymentRow()
             item.payment_token_hash      = row[0]
             item.subscription_duration_s = row[1]
@@ -124,8 +127,9 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _ = tx.cursor.execute('SELECT * FROM payments')
-        for row in tx.cursor:
+        _    = tx.cursor.execute('SELECT * FROM payments')
+        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, bytes]], tx.cursor)
+        for row in rows:
             item                         = PaymentRow()
             item.id                      = row[0]
             item.master_pkey             = row[1]
@@ -140,8 +144,9 @@ def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
     result: list[UserRow] = []
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _ = tx.cursor.execute('SELECT * FROM users')
-        for row in tx.cursor:
+        _    = tx.cursor.execute('SELECT * FROM users')
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int]], tx.cursor)
+        for row in rows:
             item                  = UserRow()
             item.master_pkey      = row[0]
             item.gen_index        = row[1]
@@ -154,7 +159,7 @@ def get_user(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) 
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _                       = tx.cursor.execute('SELECT * FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
-        row                     = tx.cursor.fetchone()
+        row                     = typing.cast(tuple[bytes, int, int], tx.cursor.fetchone())
         result.master_pkey      = row[0]
         result.gen_index        = row[1]
         result.expiry_unix_ts_s = row[2]
@@ -164,8 +169,9 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
     result: list[RevocationRow] = []
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _ = tx.cursor.execute('SELECT * FROM revocations')
-        for row in tx.cursor:
+        _    = tx.cursor.execute('SELECT * FROM revocations')
+        rows = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
+        for row in rows:
             item                  = RevocationRow()
             item.gen_index        = row[0]
             item.expiry_unix_ts_s = row[1]
@@ -177,10 +183,9 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _                     = tx.cursor.execute('SELECT * FROM runtime')
-        row: sqlite3.Row      = tx.cursor.fetchone()
+        row                   =typing.cast(tuple[int, bytes, bytes], tx.cursor.fetchone())
         result.gen_index      = row[0]
         result.gen_index_salt = row[1]
-
         backend_key: bytes    = row[2]
         assert len(backend_key) == BLAKE2B_DIGEST_SIZE
         result.backend_key    = nacl.signing.SigningKey(backend_key)
@@ -196,16 +201,16 @@ def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSi
         assert tx.cursor is not None
         try:
             _                   = tx.cursor.execute('SELECT COUNT(*) FROM unredeemed_payments')
-            unredeemed_payments = tx.cursor.fetchone()[0];
+            unredeemed_payments = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
             _                   = tx.cursor.execute('SELECT COUNT(*) FROM payments')
-            payments            = tx.cursor.fetchone()[0];
+            payments            = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
             _                   = tx.cursor.execute('SELECT COUNT(*) FROM users')
-            users               = tx.cursor.fetchone()[0];
+            users               = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
             _                   = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
-            revocations         = tx.cursor.fetchone()[0];
+            revocations         = typing.cast(tuple[int], tx.cursor.fetchone())[0];
         except Exception as e:
             err.msg_list.append(f"Failed to retrieve DB metadata: {e}")
 
@@ -357,7 +362,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
         LIMIT 1
     ''', (master_pkey_bytes,))
 
-    earliest_activation_unix_ts_s_record = tx.cursor.fetchone()
+    earliest_activation_unix_ts_s_record = typing.cast(tuple[int], tx.cursor.fetchone())
     earliest_activation_unix_ts_s: int   = 0
     if earliest_activation_unix_ts_s_record:
         # User already has exactly, 1 activated payment row, go and look it up
@@ -389,8 +394,8 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
         WHERE  master_pkey = ?
     ''', (master_pkey_bytes,))
 
-    sum_of_subscription_duration_s: int                          = tx.cursor.fetchone()[0]
-    result.latest_expiry_unix_ts_s: int                          = earliest_activation_unix_ts_s + sum_of_subscription_duration_s + base.SECONDS_IN_DAY
+    sum_of_subscription_duration_s: int = typing.cast(tuple[int], tx.cursor.fetchone())[0]
+    result.latest_expiry_unix_ts_s      = earliest_activation_unix_ts_s + sum_of_subscription_duration_s + base.SECONDS_IN_DAY
     assert result.latest_expiry_unix_ts_s % base.SECONDS_IN_DAY == 0, "Subscription duration must be on a day boundaring, 30 days, 365 days ...e.t.c"
 
     # Grab the previous user if it existed, if it did, then add a revocation
@@ -417,7 +422,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
         SET       gen_index = gen_index + 1
         RETURNING gen_index - 1, gen_index_salt
     ''')
-    runtime_row           = tx.cursor.fetchone()
+    runtime_row           = typing.cast(tuple[int, bytes], tx.cursor.fetchone())
     result.gen_index      = runtime_row[0]
     result.gen_index_salt = runtime_row[1]
 
@@ -580,7 +585,7 @@ def add_payment(sql_conn:           sqlite3.Connection,
             RETURNING   subscription_duration_s
         ''', (payment_token_hash,))
 
-        delete_operation_row = tx.cursor.fetchone()
+        delete_operation_row = typing.cast(tuple[int] | None, tx.cursor.fetchone())
         if delete_operation_row:
             assert tx.cursor.rowcount <= 1
             master_pkey_bytes:       bytes = bytes(master_pkey)
@@ -691,7 +696,7 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         assert tx.cursor is not None
         # Retrieve the last expiry time that was executed
         _ = tx.cursor.execute('''SELECT last_expire_unix_ts_s FROM runtime''')
-        last_expire_unix_ts_s:        int  = tx.cursor.fetchone()[0]
+        last_expire_unix_ts_s:        int  = typing.cast(tuple[int], tx.cursor.fetchone())[0]
         already_done_by_someone_else: bool = last_expire_unix_ts_s >= unix_ts_s
         if not already_done_by_someone_else:
             # Update the timestamp that we executed DB expiry
@@ -707,12 +712,13 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
 
             # For each master public key that had a payment deleted, activate
             # their next record if they have one to activate
-            for row in tx.cursor:
+            rows = typing.cast(collections.abc.Iterator[tuple[bytes]], tx.cursor)
+            for row in rows:
                 master_pkey_bytes: bytes = row[0]
                 master_pkey              = nacl.signing.VerifyKey(master_pkey_bytes)
-                _ = backend.update_db_after_payments_changed(tx=tx,
-                                                             master_pkey=master_pkey,
-                                                             activation_unix_ts_s=unix_ts_s)
+                _                        = update_db_after_payments_changed(tx=tx,
+                                                                            master_pkey=master_pkey,
+                                                                            activation_unix_ts_s=unix_ts_s)
 
             # Delete expired revocations
             _ = tx.cursor.execute('''

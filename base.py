@@ -51,15 +51,22 @@ class TableStrings:
     name:     str = ''
     contents: list[list[str]] = []
 
-def dict_require(d: dict[str, typing.Any], key: str, default_val: typing.Any, err_msg: str, err: ErrorSink) -> typing.Any:
+
+# NOTE: Restricted type-set, JSON obviously supports much more than this, but
+# our use-case only needs a small subset of it as of current so KISS.
+JSONValue = typing.TypeVar('JSONValue', int, str)
+
+def dict_require(d: dict[str, JSONValue], key: str, default_val: JSONValue, err_msg: str, err: ErrorSink) -> JSONValue:
     if not key in d:
         err.msg_list.append(f'{err_msg}: \'{key}\'')
 
-    result: typing.Any = d[key]
-    if not isinstance(result, type(default_val)):
+    # NOTE: Keep isinstance check for untrusted JSON input, as d[key] could be any
+    # type (untrusted input potentially)
+    if not isinstance(d[key], type(default_val)): # pyright: ignore[reportUnnecessaryIsInstance]
         err.msg_list.append(f'{err_msg}: \'{key}\' is not a valid \'{type(default_val).__name__}\'')
         return default_val
 
+    result: JSONValue = d[key]
     return result
 
 def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
@@ -122,7 +129,7 @@ def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
     with SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _           = tx.cursor.execute('SELECT name FROM sqlite_master WHERE type="table";')
-        tables      = tx.cursor.fetchall()
+        tables      = typing.cast(list[tuple[str]], tx.cursor.fetchall())
         table_names = [table[0] for table in tables]
         for table_name in table_names:
             _                       = tx.cursor.execute(f'SELECT * FROM {table_name}')
