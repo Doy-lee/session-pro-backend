@@ -16,6 +16,7 @@ TODO:
 import flask
 import json
 import nacl.signing
+import nacl.bindings
 import os
 import time
 import werkzeug
@@ -46,8 +47,8 @@ def test_backend_same_user_stacks_subscription():
             self.subscription_duration_s = subscription_duration_s
 
     scenarios: list[Scenario] = [
-        Scenario(payment_token_hash=os.urandom(32), subscription_duration_s=30 * base.SECONDS_IN_DAY),
-        Scenario(payment_token_hash=os.urandom(32), subscription_duration_s=365 * base.SECONDS_IN_DAY)
+        Scenario(payment_token_hash=os.urandom(backend.BLAKE2B_DIGEST_SIZE), subscription_duration_s=30 * base.SECONDS_IN_DAY),
+        Scenario(payment_token_hash=os.urandom(backend.BLAKE2B_DIGEST_SIZE), subscription_duration_s=365 * base.SECONDS_IN_DAY)
     ]
 
     for it in scenarios:
@@ -58,9 +59,9 @@ def test_backend_same_user_stacks_subscription():
                                        err=err)
 
         unredeemed_payment_list: list[backend.UnredeemedPaymentRow] = backend.get_unredeemed_payments_list(db.sql_conn)
-        assert len(unredeemed_payment_list)                == 1
-        unredeemed_payment_list[0].payment_token_hash      == it.payment_token_hash
-        unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
+        assert len(unredeemed_payment_list)                       == 1
+        assert unredeemed_payment_list[0].payment_token_hash      == it.payment_token_hash
+        assert unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
 
         # Register the payment
         version: int = 0
@@ -130,7 +131,7 @@ def test_server_add_payment_flow():
     # Register an unredeemed payment (by writing the the token to the DB directly)
     master_key             = nacl.signing.SigningKey.generate()
     rotating_key           = nacl.signing.SigningKey.generate()
-    payment_token_hash     = os.urandom(32)
+    payment_token_hash     = os.urandom(backend.BLAKE2B_DIGEST_SIZE)
     backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                    payment_token_hash=payment_token_hash,
                                    subscription_duration_s=30 * base.SECONDS_IN_DAY,
@@ -175,9 +176,9 @@ def test_server_add_payment_flow():
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
-        result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex, label='Rotating public key',   hex_len=64,  err=err))
-        result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,           label='Signature',             hex_len=128, err=err)
-        result_gen_index_hash: bytes =                        base.hex_to_bytes(hex=result_gen_index_hash_hex,label='Generation index hash', hex_len=64,  err=err)
+        result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+        result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+        result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2, err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Check the rotating key returned matches what we asked the server to sign
@@ -231,9 +232,9 @@ def test_server_add_payment_flow():
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
-        result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex, label='Rotating public key',   hex_len=64,  err=err))
-        result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,           label='Signature',             hex_len=128, err=err)
-        result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex,label='Generation index hash', hex_len=64,  err=err)
+        result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+        result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+        result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Check the rotating key returned matches what we asked the server to sign
@@ -289,9 +290,9 @@ def test_server_add_payment_flow():
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
-        result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex, label='Rotating public key',   hex_len=64,  err=err))
-        result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,           label='Signature',             hex_len=128, err=err)
-        result_gen_index_hash: bytes =                        base.hex_to_bytes(hex=result_gen_index_hash_hex,label='Generation index hash', hex_len=64,  err=err)
+        result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+        result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+        result_gen_index_hash: bytes =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Check the rotating key returned matches what we asked the server to sign

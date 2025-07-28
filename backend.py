@@ -157,11 +157,24 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
+def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
+    personalization = b'SeshProBackend'
+    final_salt      = salt  if salt else b''
+    result          = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE, person=personalization, salt=final_salt)
+    return result
+
+def make_gen_index_hash(gen_index: int, gen_index_salt: bytes) -> bytes:
+    assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
+    hasher = make_blake2b_hasher(salt=gen_index_salt)
+    hasher.update(bytes(gen_index))
+    result = hasher.digest()
+    return result
+
 def make_payment_hash(version:            int,
                       master_pkey:        nacl.signing.VerifyKey,
                       rotating_pkey:      nacl.signing.VerifyKey,
                       payment_token_hash: bytes) -> bytes:
-    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE)
+    hasher: hashlib.blake2b = make_blake2b_hasher()
     hasher.update(bytes(version))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
@@ -265,7 +278,7 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
         result.gen_index         = row[0]
         result.gen_index_salt    = row[1]
         backend_key: bytes       = row[2]
-        assert len(backend_key) == BLAKE2B_DIGEST_SIZE
+        assert len(backend_key) == len(ZERO_BYTES32)
         result.backend_key       = nacl.signing.SigningKey(backend_key)
         result.revocation_ticket = row[3]
     return result;
@@ -521,7 +534,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
     runtime_row           = typing.cast(tuple[int, bytes], tx.cursor.fetchone())
     result.gen_index      = runtime_row[0]
     result.gen_index_salt = runtime_row[1]
-    result.gen_index_hash = hashlib.blake2b(bytes(result.gen_index), digest_size=BLAKE2B_DIGEST_SIZE, salt=result.gen_index_salt).digest()
+    result.gen_index_hash = make_gen_index_hash(result.gen_index, result.gen_index_salt)
 
     # Update the user metadata, grab the next generation index, increment it and then
     # assign/update the user table
@@ -543,7 +556,8 @@ def make_pro_subscription_proof_hash(version:          int,
                                      gen_index_hash:   bytes,
                                      rotating_pkey:    nacl.signing.VerifyKey,
                                      expiry_unix_ts_s: int) -> bytes:
-    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE)
+    '''Make the hash to sign for an new/updated subscription'''
+    hasher: hashlib.blake2b = make_blake2b_hasher()
     hasher.update(bytes(version))
     hasher.update(gen_index_hash)
     hasher.update(bytes(rotating_pkey))
@@ -555,7 +569,10 @@ def make_get_pro_subscription_proof_hash(version:       int,
                                          master_pkey:   nacl.signing.VerifyKey,
                                          rotating_pkey: nacl.signing.VerifyKey,
                                          unix_ts_s:     int) -> bytes:
-    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE)
+    '''Make the hash to sign for a pre-existing subscription by authorising
+    a new rotating_pkey to be used for the Session Pro subscription associated
+    with master_pkey'''
+    hasher: hashlib.blake2b = make_blake2b_hasher()
     hasher.update(bytes(version))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))

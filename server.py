@@ -17,6 +17,7 @@ import flask
 import typing
 import time
 import nacl.signing
+import nacl.bindings
 import collections.abc
 
 import base
@@ -95,11 +96,12 @@ def add_payment():
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=64, err=err)
-    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=64, err=err)
-    payment_token_bytes = base.hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=64, err=err)
-    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
-    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
+        nacl.signing.SigningKey
+    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    payment_token_bytes = base.hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
+    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
         return html_bad_response(400, err.msg_list)
 
@@ -149,10 +151,10 @@ def get_pro_subscription_proof() -> flask.Response:
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',   hex_len=64, err=err)
-    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key', hex_len=64, err=err)
-    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=128, err=err)
-    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=128, err=err)
+    master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+    rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
         return html_bad_response(400, err.msg_list)
 
