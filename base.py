@@ -54,7 +54,7 @@ class TableStrings:
 
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
-JSONValue = typing.TypeVar('JSONValue', int, str)
+JSONValue = typing.TypeVar('JSONValue', int, str, list[dict[str, int | str]])
 
 def dict_require(d: dict[str, JSONValue], key: str, default_val: JSONValue, err_msg: str, err: ErrorSink) -> JSONValue:
     if not key in d:

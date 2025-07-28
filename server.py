@@ -17,6 +17,7 @@ import flask
 import typing
 import time
 import nacl.signing
+import collections.abc
 
 import base
 import backend
@@ -32,6 +33,7 @@ CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
 ROUTE_GET_PRO_SUBSCRIPTION_PROOF: str = 'get_pro_subscription_proof'
+ROUTE_GET_REVOCATIONS:            str = 'get_revocations'
 ROUTE_ADD_PAYMENT:                str = 'add_payment'
 
 # The object containing routes that you register onto a Flask app to turn it
@@ -43,7 +45,7 @@ def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
     result.status = http_status
     return result
 
-def html_good_response(dict_result: dict[str, str | int]) -> flask.Response:
+def html_good_response(dict_result: typing.Any) -> flask.Response:
     result = flask.jsonify({ 'status': 200, 'result': dict_result})
     return result
 
@@ -168,4 +170,44 @@ def get_pro_subscription_proof() -> flask.Response:
                                                    err            = err)
 
     result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
+    return result
+
+@flask_blueprint.route(f'/{ROUTE_GET_REVOCATIONS}', methods=['POST'])
+def get_revocations():
+    # Get JSON from request
+    get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        return html_bad_response(400, get.err_msg)
+
+    # Extract values from JSON
+    err          = base.ErrorSink()
+    version: int = base.dict_require(d=get.json, key='version', default_val=0, err_msg="Missing version from body",          err=err)
+    ticket:  int = base.dict_require(d=get.json, key='ticket',  default_val=0, err_msg="Missing revocation ticket from body", err=err)
+    if len(err.msg_list):
+        return html_bad_response(400, err.msg_list)
+
+    # Parse and validate values
+    if version != 0:
+        err.msg_list.append(f'Unrecognised version passed: {version}')
+    if len(err.msg_list):
+        return html_bad_response(400, err.msg_list)
+
+    revocation_list:   list[dict[str, str | int]] = []
+    revocation_ticket: int = 0
+    with open_db_from_flask_request_context(flask.current_app) as db:
+        revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
+        if ticket < revocation_ticket:
+            with base.SQLTransaction(db.sql_conn) as tx:
+                list_it: collections.abc.Iterator[tuple[bytes, int]] = backend.get_revocations_item_list_iterator(tx)
+                for row in list_it:
+                    revocation_list.append({
+                        'expiry_unix_ts_s': row[1],
+                        'gen_index_hash':   row[0].hex(),
+                    })
+
+    result = html_good_response({
+        'version': 0,
+        'ticket':  revocation_ticket,
+        'list':    revocation_list
+    })
     return result

@@ -78,10 +78,55 @@ class RevocationRow:
     gen_index_hash:   bytes = b''
     expiry_unix_ts_s: int   = 0
 
+class RevocationItem:
+    '''A revocation object that has only the fields necessary for clients to
+    block Session Pro subscription proofs.'''
+    gen_index_hash:   bytes = b''
+    expiry_unix_ts_s: int   = 0
+
 class RuntimeRow:
-    gen_index:      int                     = 0
-    gen_index_salt: bytes                   = b''
-    backend_key:    nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
+    '''The runtime table stores some metadata used for book-keeping and
+    operations of the DB tables
+
+    gen_index - Generation index, an index that is allocated to a user
+    everytime a payment is added or removed from that user. It's monotonically
+    increasing and shared across all users and their allocated index is what
+    gets signed when Session Pro subscription proofs are generated for
+    a particular user.
+
+    Multiple proofs can be generated for a given index until a new payment is
+    added or revoked for that user. A generation index can hence be revoked,
+    thereby revoking all the proofs attributable to the associated user that
+    were previously signed with the generation index to be revoked.
+
+    gen_index_salt - The generation index gets signed after it has been hashed
+    with this particular salt. This prevents leakage of metadata from the
+    generation index which starts from 0 and counts upwards. The raw generation
+    index leaks the timeframe relative to the lifetime of the protocol that
+    a Session Pro subscription was activated.
+
+    The salt gets bootstrapped on creation of the DB and is stored to persist
+    across sessions.
+
+    backend_key - Ed25519 key used to sign proofs.
+
+    The key gets bootstrapped on creation of the DB and is stored to persist
+    across sessions.
+
+    revocation_ticket - A monotonically increasing index that gets incremented
+    everytime the revocation table has a row added or deleted (i.e. a new ticket
+    is allocated when the table changes). This ticket's purpose is to be handed
+    out to clients when they request the revocation list. The client can then
+    use this ticket to short-circuit the retrieval of the revocation list by
+    comparing the current revocation list ticket with their cached ticket.
+
+    If the tickets are the same, clients can conclude that there are no
+    revocation entries to sync from the database.
+    '''
+    gen_index:         int                     = 0
+    gen_index_salt:    bytes                   = b''
+    backend_key:       nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
+    revocation_ticket: int                     = 0
 
 class UpdateAfterPaymentsModified:
     latest_expiry_unix_ts_s: int   = 0
@@ -196,17 +241,33 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
             result.append(item)
     return result;
 
+def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
+    result: int = 0
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _      = tx.cursor.execute('SELECT revocation_ticket FROM runtime')
+        result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
+    return result;
+
+
+def get_revocations_item_list_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[bytes, int]]:
+    assert tx.cursor is not None
+    _      = tx.cursor.execute('SELECT gen_index_hash, expiry_unix_ts_s FROM revocations')
+    result = typing.cast(collections.abc.Iterator[tuple[bytes, int]], tx.cursor)
+    return result;
+
 def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     result: RuntimeRow = RuntimeRow()
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _                     = tx.cursor.execute('SELECT * FROM runtime')
-        row                   =typing.cast(tuple[int, bytes, bytes], tx.cursor.fetchone())
-        result.gen_index      = row[0]
-        result.gen_index_salt = row[1]
-        backend_key: bytes    = row[2]
+        _                        = tx.cursor.execute('SELECT * FROM runtime')
+        row                      = typing.cast(tuple[int, bytes, bytes, int], tx.cursor.fetchone())
+        result.gen_index         = row[0]
+        result.gen_index_salt    = row[1]
+        backend_key: bytes       = row[2]
         assert len(backend_key) == BLAKE2B_DIGEST_SIZE
-        result.backend_key    = nacl.signing.SigningKey(backend_key)
+        result.backend_key       = nacl.signing.SigningKey(backend_key)
+        result.revocation_ticket = row[3]
     return result;
 
 def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSink) -> str:
@@ -324,8 +385,23 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
                 gen_index             INTEGER NOT NULL, -- Next generation index to allocate to an updated user
                 gen_index_salt        BLOB NOT NULL,    -- BLAKE2B salt for hashing the gen_index in proofs
                 backend_key           BLOB NOT NULL,    -- Ed25519 skey for signing proofs
-                last_expire_unix_ts_s INTEGER NOT NULL  -- Last time expire payments/revocs/users was called on the table
+                last_expire_unix_ts_s INTEGER NOT NULL, -- Last time expire payments/revocs/users was called on the table
+                revocation_ticket     INTEGER NOT NULL  -- Monotonic index incremented when a revocation is added or removed
             );
+
+            CREATE TRIGGER increment_revocation_ticket_after_insert
+            AFTER INSERT ON revocations
+            BEGIN
+                UPDATE runtime
+                SET    revocation_ticket = revocation_ticket + 1;
+            END;
+
+            CREATE TRIGGER increment_revocation_ticket_after_delete
+            AFTER DELETE ON revocations
+            BEGIN
+                UPDATE runtime
+                SET    revocation_ticket = revocation_ticket + 1;
+            END;
         '''
 
         assert tx.cursor is not None
@@ -334,7 +410,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
             _ = tx.cursor.executescript(sql_stmt)
             _ = tx.cursor.execute('''
                 INSERT INTO runtime
-                SELECT 0, ?, ?, 0
+                SELECT 0, ?, ?, 0, 0
                 WHERE NOT EXISTS (SELECT 1 FROM runtime)
             ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
                   bytes(nacl.signing.SigningKey.generate())))
@@ -760,3 +836,4 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
     return result
+
