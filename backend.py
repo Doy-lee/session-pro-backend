@@ -57,25 +57,11 @@ class PaymentRow:
 
 class UserRow:
     master_pkey:      bytes = ZERO_BYTES32
-
-    # We technically don't need to store this as we only really care about the
-    # hash. Allocating the next generation index comes from generation index in
-    # the runtime table, but, there doesn't seem to be any harm in keeping this
-    # around at the cost of a few extra bytes per user.
     gen_index:        int   = 0
-
-    # We store the hash as well because a blake2b hash is expensive and a user
-    # can authorise an unlimited number of rotating keys for a given hash, it
-    # doesn't cost much to precompute the hash and store it permanently to make
-    # generating proofs for the new rotating keys cheap.
-    gen_index_hash:   bytes = ZERO_BYTES32
     expiry_unix_ts_s: int   = 0
 
 class RevocationRow:
     gen_index:        int   = 0
-    # Similarly as above, save on some blake2b computation. We also keep the
-    # raw index for similar reasons.
-    gen_index_hash:   bytes = b''
     expiry_unix_ts_s: int   = 0
 
 class RevocationItem:
@@ -132,7 +118,6 @@ class UpdateAfterPaymentsModified:
     latest_expiry_unix_ts_s: int   = 0
     gen_index:               int   = 0
     gen_index_salt:          bytes = b''
-    gen_index_hash:          bytes = b''
 
 class SetupDBResult:
     path:     str                       = ''
@@ -166,7 +151,7 @@ def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
 def make_gen_index_hash(gen_index: int, gen_index_salt: bytes) -> bytes:
     assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
     hasher = make_blake2b_hasher(salt=gen_index_salt)
-    hasher.update(gen_index.to_bytes(length=8, 'little'))
+    hasher.update(gen_index.to_bytes(length=8, byteorder='little'))
     result = hasher.digest()
     return result
 
@@ -218,13 +203,12 @@ def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM users')
-        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, bytes, int]], tx.cursor)
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int]], tx.cursor)
         for row in rows:
             item                  = UserRow()
             item.master_pkey      = row[0]
             item.gen_index        = row[1]
-            item.gen_index_hash   = row[2]
-            item.expiry_unix_ts_s = row[3]
+            item.expiry_unix_ts_s = row[2]
             result.append(item)
     return result;
 
@@ -233,11 +217,10 @@ def get_user(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) 
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _                       = tx.cursor.execute('SELECT * FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
-        row                     = typing.cast(tuple[bytes, int, bytes, int], tx.cursor.fetchone())
+        row                     = typing.cast(tuple[bytes, int, int], tx.cursor.fetchone())
         result.master_pkey      = row[0]
         result.gen_index        = row[1]
-        result.gen_index_hash   = row[2]
-        result.expiry_unix_ts_s = row[3]
+        result.expiry_unix_ts_s = row[2]
     return result;
 
 def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
@@ -245,12 +228,11 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM revocations')
-        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int]], tx.cursor)
+        rows = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
         for row in rows:
             item                  = RevocationRow()
             item.gen_index        = row[0]
-            item.gen_index_hash   = row[1]
-            item.expiry_unix_ts_s = row[2]
+            item.expiry_unix_ts_s = row[1]
             result.append(item)
     return result;
 
@@ -263,10 +245,10 @@ def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
     return result;
 
 
-def get_revocations_item_list_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[bytes, int]]:
+def get_revocations_item_list_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
     assert tx.cursor is not None
-    _      = tx.cursor.execute('SELECT gen_index_hash, expiry_unix_ts_s FROM revocations')
-    result = typing.cast(collections.abc.Iterator[tuple[bytes, int]], tx.cursor)
+    _      = tx.cursor.execute('SELECT gen_index, expiry_unix_ts_s FROM revocations')
+    result = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
     return result;
 
 def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
@@ -384,13 +366,11 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
                 -- correctly indicates the updated and correct duration that the user is entitled to
                 -- Session Pro features.
                 gen_index        INTEGER NOT NULL,
-                gen_index_hash   BLOB    NOT NULL,
                 expiry_unix_ts_s INTEGER NOT NULL            -- Timestamp at which the sum of all current subscriptions for the user expires
             );
 
             CREATE TABLE IF NOT EXISTS revocations (
                 gen_index        INTEGER PRIMARY KEY,
-                gen_index_hash   BLOB NOT NULL,
                 expiry_unix_ts_s INTEGER NOT NULL
             );
 
@@ -516,12 +496,12 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
     # that their payment has been processed).
     _ = tx.cursor.execute('''
         WITH prev_user AS (
-            SELECT gen_index, gen_index_hash, expiry_unix_ts_s
+            SELECT gen_index, expiry_unix_ts_s
             FROM   users
             WHERE  master_pkey = ?
         )
-        INSERT INTO revocations (gen_index, gen_index_hash, expiry_unix_ts_s)
-        SELECT      gen_index, gen_index_hash, expiry_unix_ts_s
+        INSERT INTO revocations (gen_index, expiry_unix_ts_s)
+        SELECT      gen_index, expiry_unix_ts_s
         FROM        prev_user
     ''', (master_pkey_bytes,))
 
@@ -534,20 +514,17 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
     runtime_row           = typing.cast(tuple[int, bytes], tx.cursor.fetchone())
     result.gen_index      = runtime_row[0]
     result.gen_index_salt = runtime_row[1]
-    result.gen_index_hash = make_gen_index_hash(result.gen_index, result.gen_index_salt)
 
     # Update the user metadata, grab the next generation index, increment it and then
     # assign/update the user table
     _ = tx.cursor.execute('''
-        INSERT INTO users (master_pkey, gen_index, gen_index_hash, expiry_unix_ts_s)
-        VALUES            (?, ?, ?, ?)
+        INSERT INTO users (master_pkey, gen_index, expiry_unix_ts_s)
+        VALUES            (?, ?, ?)
         ON CONFLICT (master_pkey) DO UPDATE SET
             gen_index        = excluded.gen_index,
-            gen_index_hash   = excluded.gen_index_hash,
             expiry_unix_ts_s = excluded.expiry_unix_ts_s
     ''', (master_pkey_bytes,
           result.gen_index,
-          result.gen_index_hash,
           result.latest_expiry_unix_ts_s))
 
     return result
@@ -580,7 +557,7 @@ def make_get_pro_subscription_proof_hash(version:       int,
     result: bytes = hasher.digest()
     return result
 
-def build_proof(gen_index_hash:   bytes,
+def build_proof(gen_index:        int,
                 rotating_pkey:    nacl.signing.VerifyKey,
                 expiry_unix_ts_s: int,
                 signing_key:      nacl.signing.SigningKey,
@@ -589,7 +566,7 @@ def build_proof(gen_index_hash:   bytes,
     result: ProSubscriptionProof = ProSubscriptionProof()
     result.version               = 0
     result.success               = True
-    result.gen_index_hash        = gen_index_hash
+    result.gen_index_hash        = make_gen_index_hash(gen_index=gen_index, gen_index_salt=gen_index_salt)
     result.rotating_pkey         = rotating_pkey
     result.expiry_unix_ts_s      = expiry_unix_ts_s
 
@@ -719,7 +696,7 @@ def add_payment(sql_conn:           sqlite3.Connection,
             update: UpdateAfterPaymentsModified = update_db_after_payments_changed(tx=tx,
                                                                                    master_pkey=master_pkey,
                                                                                    activation_unix_ts_s=creation_unix_ts_s)
-            result = build_proof(gen_index_hash=update.gen_index_hash,
+            result = build_proof(gen_index=update.gen_index,
                                  rotating_pkey=rotating_pkey,
                                  expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
                                  signing_key=signing_key,
@@ -740,7 +717,7 @@ def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, acti
 
         if tx.cursor.rowcount > 0:
             assert tx.cursor.rowcount == 1
-            master_pkey_bytes: bytes = typing.cast(tuple[bytes], tx.cursor.fetchone())[0]
+            master_pkey_bytes: bytes = tx.cursor.fetchone()[0]
             _ = update_db_after_payments_changed(tx=tx,
                                                  master_pkey = nacl.signing.VerifyKey(master_pkey_bytes),
                                                  activation_unix_ts_s=activation_unix_ts_s)
@@ -795,7 +772,7 @@ def get_pro_subscription_proof(sql_conn:       sqlite3.Connection,
     # All verified, now generate proof
     user: UserRow = get_user(sql_conn, master_pkey)
     if user.master_pkey == bytes(master_pkey):
-        result = build_proof(gen_index_hash=user.gen_index_hash,
+        result = build_proof(gen_index=user.gen_index,
                              rotating_pkey=rotating_pkey,
                              expiry_unix_ts_s=user.expiry_unix_ts_s,
                              signing_key=signing_key,

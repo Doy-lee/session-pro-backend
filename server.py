@@ -19,6 +19,7 @@ import time
 import nacl.signing
 import nacl.bindings
 import collections.abc
+import hashlib
 
 import base
 import backend
@@ -200,11 +201,16 @@ def get_revocations():
         revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
         if ticket < revocation_ticket:
             with base.SQLTransaction(db.sql_conn) as tx:
-                list_it: collections.abc.Iterator[tuple[bytes, int]] = backend.get_revocations_item_list_iterator(tx)
+                list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_revocations_item_list_iterator(tx)
                 for row in list_it:
+                    gen_index:        int = row[0]
+                    expiry_unix_ts_s: int = row[1]
+                    gen_index_hash: bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=db.runtime.gen_index_salt)
+                    assert gen_index < db.runtime.gen_index
+                    assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
                     revocation_list.append({
-                        'expiry_unix_ts_s': row[1],
-                        'gen_index_hash':   row[0].hex(),
+                        'expiry_unix_ts_s': expiry_unix_ts_s,
+                        'gen_index_hash':   gen_index_hash.hex(),
                     })
 
     result = html_good_response({
