@@ -147,6 +147,7 @@ def test_server_add_payment_flow():
                                                                 rotating_pkey=rotating_key.verify_key,
                                                                 payment_token_hash=payment_token_hash)
 
+
         response: werkzeug.test.TestResponse = flask_client.post(f'/{server.ROUTE_ADD_PAYMENT}', json={
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),

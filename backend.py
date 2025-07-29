@@ -166,7 +166,7 @@ def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
 def make_gen_index_hash(gen_index: int, gen_index_salt: bytes) -> bytes:
     assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
     hasher = make_blake2b_hasher(salt=gen_index_salt)
-    hasher.update(bytes(gen_index))
+    hasher.update(gen_index.to_bytes(length=8, 'little'))
     result = hasher.digest()
     return result
 
@@ -175,7 +175,7 @@ def make_payment_hash(version:            int,
                       rotating_pkey:      nacl.signing.VerifyKey,
                       payment_token_hash: bytes) -> bytes:
     hasher: hashlib.blake2b = make_blake2b_hasher()
-    hasher.update(bytes(version))
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
     hasher.update(payment_token_hash)
@@ -402,14 +402,14 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
                 revocation_ticket     INTEGER NOT NULL  -- Monotonic index incremented when a revocation is added or removed
             );
 
-            CREATE TRIGGER increment_revocation_ticket_after_insert
+            CREATE TRIGGER IF NOT EXISTS increment_revocation_ticket_after_insert
             AFTER INSERT ON revocations
             BEGIN
                 UPDATE runtime
                 SET    revocation_ticket = revocation_ticket + 1;
             END;
 
-            CREATE TRIGGER increment_revocation_ticket_after_delete
+            CREATE TRIGGER IF NOT EXISTS increment_revocation_ticket_after_delete
             AFTER DELETE ON revocations
             BEGIN
                 UPDATE runtime
@@ -558,10 +558,10 @@ def make_pro_subscription_proof_hash(version:          int,
                                      expiry_unix_ts_s: int) -> bytes:
     '''Make the hash to sign for an new/updated subscription'''
     hasher: hashlib.blake2b = make_blake2b_hasher()
-    hasher.update(bytes(version))
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(gen_index_hash)
     hasher.update(bytes(rotating_pkey))
-    hasher.update(bytes(expiry_unix_ts_s))
+    hasher.update(expiry_unix_ts_s.to_bytes(length=8, byteorder='little'))
     result: bytes = hasher.digest()
     return result
 
@@ -573,10 +573,10 @@ def make_get_pro_subscription_proof_hash(version:       int,
     a new rotating_pkey to be used for the Session Pro subscription associated
     with master_pkey'''
     hasher: hashlib.blake2b = make_blake2b_hasher()
-    hasher.update(bytes(version))
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
-    hasher.update(bytes(unix_ts_s))
+    hasher.update(unix_ts_s.to_bytes(length=8, byteorder='little'))
     result: bytes = hasher.digest()
     return result
 

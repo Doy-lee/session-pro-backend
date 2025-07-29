@@ -181,4 +181,3 @@ proof_expiry_thread_cv    = threading.Condition(proof_expiry_thread_mutex)
 flask_app: flask.Flask    = flask.Flask(__name__)
 
 entry_point()
-
