@@ -45,7 +45,16 @@ SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)
 ## Build and run
 
 ```bash
-# Install dependencies
+# Get libsession C++ libraries by setting up the repository with the
+# instructions at deb.oxen.io (or install from source
+# at https://github.com/session-foundation/libsession-util)
+sudo apt install libsession-util-dev
+
+# Install the Python bindings to utilise libsession
+git clone https://github.com/oxen-io/libsession-python
+cd libsession-python && python -m pip install .
+
+# Install Python dependencies for the Session Pro Backend
 python -m pip install -r requirements.txt
 
 # Run backend w/ a local Flask server in debug mode
@@ -63,9 +72,9 @@ python -m pytest test.py
 # suitable.
 #
 # Note that the following runs it on a local UWSGI server. If you wish to run
-# this from behind a reverse proxy, you want to use (--http-socket) instead of (--http)
-# to defer the routing of requests to something like Nginx or Caddy. See this
-# link for more details:
+# this from behind a reverse proxy, you want to use (--http-socket) instead of
+# (--http) to defer the routing of requests to something like Nginx or Caddy.
+# See this link for more details:
 #
 #   https://uwsgi-docs.readthedocs.io/en/latest/WSGIquickstart.html#putting-behind-a-full-webserver
 #   https://uwsgi-docs.readthedocs.io/en/latest/HTTP.html
