@@ -22,6 +22,7 @@ import time
 import werkzeug
 import typing
 
+import onion_req
 import backend
 import base
 import server
@@ -125,7 +126,10 @@ def test_server_add_payment_flow():
     assert db.sql_conn
 
     # Setup local flask instance
-    flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=db.path, db_path_is_uri=True)
+    flask_app:    flask.Flask     = server.init(testing_mode=True,
+                                                db_path=db.path,
+                                                db_path_is_uri=True,
+                                                server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
@@ -140,6 +144,10 @@ def test_server_add_payment_flow():
 
     first_gen_index_hash:   bytes = b''
     first_expiry_unix_ts_s: int = 0
+    if 1:
+        response: werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, json={})
+
+
     if 1: # Simulate client request to register a payment
         version: int = 0
         payment_hash_to_sign: bytes = backend.make_payment_hash(version=version,
@@ -148,7 +156,7 @@ def test_server_add_payment_flow():
                                                                 payment_token_hash=payment_token_hash)
 
 
-        response: werkzeug.test.TestResponse = flask_client.post(f'/{server.ROUTE_ADD_PAYMENT}', json={
+        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_ADD_PAYMENT, json={
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(rotating_key.verify_key).hex(),
@@ -204,7 +212,7 @@ def test_server_add_payment_flow():
                                                                            rotating_pkey=new_rotating_key.verify_key,
                                                                            unix_ts_s=unix_ts_s)
 
-        response: werkzeug.test.TestResponse = flask_client.post(f'/{server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF}', json={
+        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF, json={
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
@@ -262,7 +270,7 @@ def test_server_add_payment_flow():
                                                                   rotating_pkey=rotating_key.verify_key,
                                                                   payment_token_hash=new_payment_token_hash)
 
-        response = flask_client.post(f'/{server.ROUTE_ADD_PAYMENT}', json={
+        response = flask_client.post(server.ROUTE_ADD_PAYMENT, json={
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(rotating_key.verify_key).hex(),
@@ -308,7 +316,7 @@ def test_server_add_payment_flow():
 
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
-        response: werkzeug.test.TestResponse = flask_client.post(f'/{server.ROUTE_GET_REVOCATIONS}', json={
+        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_REVOCATIONS, json={
             'version': 0,
             'ticket':  0,
         })
@@ -346,7 +354,7 @@ def test_server_add_payment_flow():
     # Try grabbing the revocation again with the current ticket (we should get
     # an empty list because we passed in the most up to date ticket)
     if 1:
-        response: werkzeug.test.TestResponse = flask_client.post(f'/{server.ROUTE_GET_REVOCATIONS}', json={
+        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_REVOCATIONS, json={
             'version': 0,
             'ticket':  curr_revocation_ticket,
         })

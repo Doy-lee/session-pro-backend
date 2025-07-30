@@ -18,11 +18,13 @@ import typing
 import time
 import nacl.signing
 import nacl.bindings
+import nacl.public
 import collections.abc
 import hashlib
 
 import base
 import backend
+import onion_req
 
 class GetJSONFromFlaskRequest:
     json:    dict[str, typing.Any] = {}
@@ -30,13 +32,13 @@ class GetJSONFromFlaskRequest:
 
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
-CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
-CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
+CONFIG_DB_PATH_KEY               = 'session_pro_backend_db_path'
+CONFIG_DB_PATH_IS_URI_KEY        = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
-ROUTE_GET_PRO_SUBSCRIPTION_PROOF: str = 'get_pro_subscription_proof'
-ROUTE_GET_REVOCATIONS:            str = 'get_revocations'
-ROUTE_ADD_PAYMENT:                str = 'add_payment'
+ROUTE_GET_PRO_SUBSCRIPTION_PROOF = '/get_pro_subscription_proof'
+ROUTE_GET_REVOCATIONS            = '/get_revocations'
+ROUTE_ADD_PAYMENT                = '/add_payment'
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Session Pro Backend client requests.
@@ -68,15 +70,17 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
 
     return result
 
-def init(testing_mode: bool, db_path: str, db_path_is_uri: bool) -> flask.Flask:
-    result                                   = flask.Flask(__name__)
-    result.config['TESTING']                 = testing_mode
-    result.config[CONFIG_DB_PATH_KEY]        = db_path
-    result.config[CONFIG_DB_PATH_IS_URI_KEY] = db_path_is_uri
+def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
+    result                                                      = flask.Flask(__name__)
+    result.config['TESTING']                                    = testing_mode
+    result.config[CONFIG_DB_PATH_KEY]                           = db_path
+    result.config[CONFIG_DB_PATH_IS_URI_KEY]                    = db_path_is_uri
+    result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
+    result.register_blueprint(onion_req.flask_blueprint_v4)
     return result
 
-@flask_blueprint.route(f'/{ROUTE_ADD_PAYMENT}', methods=['POST'])
+@flask_blueprint.route(ROUTE_ADD_PAYMENT, methods=['POST'])
 def add_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -131,7 +135,7 @@ def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDB
     result         = backend.OpenDBAtPath(db_path, db_path_is_uri)
     return result
 
-@flask_blueprint.route(f'/{ROUTE_GET_PRO_SUBSCRIPTION_PROOF}', methods=['POST'])
+@flask_blueprint.route(ROUTE_GET_PRO_SUBSCRIPTION_PROOF, methods=['POST'])
 def get_pro_subscription_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -175,7 +179,7 @@ def get_pro_subscription_proof() -> flask.Response:
     result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
     return result
 
-@flask_blueprint.route(f'/{ROUTE_GET_REVOCATIONS}', methods=['POST'])
+@flask_blueprint.route(ROUTE_GET_REVOCATIONS, methods=['POST'])
 def get_revocations():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)

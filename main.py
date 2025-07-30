@@ -25,6 +25,7 @@ import types
 
 import base
 import backend
+import server
 
 def os_get_boolean_env(var_name: str, default: bool = False):
     value = os.getenv(var_name, str(int(default)))  # Default to 0 or 1
@@ -100,7 +101,7 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             else:
                 print('Dailing pruning for {} failed due to an unknown DB error'.format(yesterday_str))
 
-def entry_point():
+def entry_point() -> flask.Flask:
     # Get arguments from environment
     db_path:      str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',               './backend.db')
     print_tables: bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES', False)
@@ -174,10 +175,14 @@ def entry_point():
     # here. Each request we receive will open their own connection the DB.
     db.sql_conn.close()
 
+    result: flask.Flask = server.init(testing_mode=False,
+                                      db_path=db.path,
+                                      db_path_is_uri=False,
+                                      server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+    return result
+
 # Flask entry point
 stop_proof_expiry_thread  = False
 proof_expiry_thread_mutex = threading.Lock()
 proof_expiry_thread_cv    = threading.Condition(proof_expiry_thread_mutex)
-flask_app: flask.Flask    = flask.Flask(__name__)
-
-entry_point()
+flask_app: flask.Flask    = entry_point()
