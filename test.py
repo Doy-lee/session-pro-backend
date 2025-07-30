@@ -17,10 +17,10 @@ import flask
 import json
 import nacl.signing
 import nacl.bindings
+import nacl.public
 import os
 import time
 import werkzeug
-import typing
 
 from vendor import onion_req
 import backend
@@ -117,7 +117,6 @@ def test_backend_same_user_stacks_subscription():
 
     base.print_db_to_stdout(db.sql_conn)
 
-
 def test_server_add_payment_flow():
     # Setup DB
     err                       = base.ErrorSink()
@@ -132,6 +131,12 @@ def test_server_add_payment_flow():
                                                 server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
     flask_client: werkzeug.Client = flask_app.test_client()
 
+    # Setup keys for onion requests
+    server_x25519_skey = db.runtime.backend_key.to_curve25519_private_key()
+    our_x25519_skey    = nacl.public.PrivateKey.generate()
+    shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey,
+                                                   server_x25519_pkey=server_x25519_skey.public_key)
+
     # Register an unredeemed payment (by writing the the token to the DB directly)
     master_key             = nacl.signing.SigningKey.generate()
     rotating_key           = nacl.signing.SigningKey.generate()
@@ -144,30 +149,32 @@ def test_server_add_payment_flow():
 
     first_gen_index_hash:   bytes = b''
     first_expiry_unix_ts_s: int = 0
-    if 1:
-        response: werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, json={})
-
-
     if 1: # Simulate client request to register a payment
         version: int = 0
         payment_hash_to_sign: bytes = backend.make_payment_hash(version=version,
                                                                 master_pkey=master_key.verify_key,
                                                                 rotating_pkey=rotating_key.verify_key,
                                                                 payment_token_hash=payment_token_hash)
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                               shared_key=shared_key,
+                                               endpoint=server.ROUTE_ADD_PAYMENT,
+                                               request_body={
+                                                   'version':       version,
+                                                   'master_pkey':   bytes(master_key.verify_key).hex(),
+                                                   'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+                                                   'payment_token': payment_token_hash.hex(),
+                                                   'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                                   'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                               })
 
-
-        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_ADD_PAYMENT, json={
-            'version':       version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-            'payment_token': payment_token_hash.hex(),
-            'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-        })
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
 
         # Parse the JSON from the response
-        response_json = response.get_json()
-        assert isinstance(response_json, dict)
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
         assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -212,18 +219,26 @@ def test_server_add_payment_flow():
                                                                            rotating_pkey=new_rotating_key.verify_key,
                                                                            unix_ts_s=unix_ts_s)
 
-        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF, json={
-            'version':       version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
-            'unix_ts_s':     unix_ts_s,
-            'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
-        })
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF,
+                                                  request_body={
+                                                      'version':       version,
+                                                      'master_pkey':   bytes(master_key.verify_key).hex(),
+                                                      'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
+                                                      'unix_ts_s':     unix_ts_s,
+                                                      'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
+                                                      'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
+                                                  })
 
-        # Parse the JSON from the newly authorised key response
-        response_json = response.get_json()
-        assert isinstance(response_json, dict)
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON from the response
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
         assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -265,23 +280,31 @@ def test_server_add_payment_flow():
                                        subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                        err=err)
 
-        payment_hash_to_sign:   bytes = backend.make_payment_hash(version=version,
-                                                                  master_pkey=master_key.verify_key,
-                                                                  rotating_pkey=rotating_key.verify_key,
-                                                                  payment_token_hash=new_payment_token_hash)
+        payment_hash_to_sign: bytes = backend.make_payment_hash(version=version,
+                                                                master_pkey=master_key.verify_key,
+                                                                rotating_pkey=rotating_key.verify_key,
+                                                                payment_token_hash=new_payment_token_hash)
 
-        response = flask_client.post(server.ROUTE_ADD_PAYMENT, json={
-            'version':       version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-            'payment_token': new_payment_token_hash.hex(),
-            'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-        })
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_ADD_PAYMENT,
+                                                  request_body={
+                                                      'version':       version,
+                                                      'master_pkey':   bytes(master_key.verify_key).hex(),
+                                                      'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+                                                      'payment_token': new_payment_token_hash.hex(),
+                                                      'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                                      'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                                  })
+
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
 
         # Parse the JSON from the response
-        response_json = response.get_json()
-        assert isinstance(response_json, dict)
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
         assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -316,14 +339,19 @@ def test_server_add_payment_flow():
 
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
-        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_REVOCATIONS, json={
-            'version': 0,
-            'ticket':  0,
-        })
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_GET_REVOCATIONS,
+                                                  request_body={'version': 0, 'ticket':  0})
 
-        # Parse the JSON from the newly authorised key response
-        response_json = typing.cast(dict[str, typing.Any] | None, response.get_json())
-        assert isinstance(response_json, dict)
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON from the response
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
         assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -354,14 +382,19 @@ def test_server_add_payment_flow():
     # Try grabbing the revocation again with the current ticket (we should get
     # an empty list because we passed in the most up to date ticket)
     if 1:
-        response: werkzeug.test.TestResponse = flask_client.post(server.ROUTE_GET_REVOCATIONS, json={
-            'version': 0,
-            'ticket':  curr_revocation_ticket,
-        })
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_GET_REVOCATIONS,
+                                                  request_body={'version': 0, 'ticket':  curr_revocation_ticket})
 
-        # Parse the JSON from the newly authorised key response
-        response_json = typing.cast(dict[str, typing.Any] | None, response.get_json())
-        assert isinstance(response_json, dict)
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON from the response
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
         assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -375,10 +408,15 @@ def test_server_add_payment_flow():
         result_list:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
         result_ticket:  int                        = base.dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_version == 0
-        assert result_ticket  == 1
+        assert result_version == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_ticket  == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # List should be empty because we passed in the newest revocation
         # ticket. There are no changes to the revocation list so the backend
         # will return an empty list
-        assert len(result_list) == 0
+        assert len(result_list) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+
+def test_onion_request_response_lifecycle():
+    # Also call into and test the vendored onion request (as we are currently
+    # maintaining a bleeding edge version of it).
+    onion_req.test_onion_request_response_lifecycle()

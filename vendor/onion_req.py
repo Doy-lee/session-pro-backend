@@ -38,17 +38,33 @@ Flask server with the extracted data, get the response and return it to the
 client.
 
 See the doc comments for the individual routes below for more details on the
-required composition of the onion request payload.
+required composition of the onion request payload. For details on the underlying
+request, see:
+
+    https://github.com/session-foundation/libsession-util/blob/551a48b258f53a36c4cd1ad036d65e3dcd575fbc/src/onionreq/parser.cpp
+
+Additionally in this file there are helper functions to construct a onion
+request and functions to decode an onion response. A rough self-contained
+example is available at `test_onion_request_response_lifecycle`
 '''
 
 import json
+import nacl.bindings
 import nacl.public
+import nacl.secret
+import hashlib
+import traceback
 
 from flask import request, abort, current_app, Blueprint
 from io import BytesIO
 from typing import Optional, Union, Any, Tuple
 
 from session_util.onionreq import OnionReqParser
+
+class Response:
+    success:  bool           = False
+    metadata: dict[str, Any] = {}
+    body:     bytes          = b''
 
 FLASK_CONFIG_ONION_REQ_X25519_SKEY = 'onion_req_x25519_skey'
 ROUTE_OXEN_V3_LSRPC                = '/oxen/v3/lsrpc'
@@ -59,6 +75,98 @@ HTTP_BAD_REQUEST                   = 400
 HTTP_OK                            = 200
 flask_blueprint_v3                 = Blueprint('onion-req-blueprint-v3', __name__)
 flask_blueprint_v4                 = Blueprint('onion-req-blueprint-v4', __name__)
+
+def make_shared_key(our_x25519_skey: nacl.public.PrivateKey,
+                    server_x25519_pkey: nacl.public.PublicKey) -> bytes:
+    # NOTE: Construct the shared key as follows:
+    #
+    #   > xchacha20-poly1305 encryption; for a message sent from client Alice to server Bob we use a
+    #   > shared key of a Blake2B 32-byte (i.e. crypto_aead_xchacha20poly1305_ietf_KEYBYTES) hash of
+    #   > H(aB || A || B), which Bob can compute when receiving as H(bA || A || B).  The returned value
+    #   > always has the crypto_aead_xchacha20poly1305_ietf_NPUBBYTES nonce prepended to the beginning.
+    #
+    #   > When Bob (the server) encrypts a method for Alice (the client), he uses shared key
+    #   > H(bA || A || B) (note that this is *different* that what would result if Bob was a client
+    #   > sending to Alice the client).
+    #
+    # References:
+    #   https://github.com/session-foundation/libsession-util/blob/551a48b258f53a36c4cd1ad036d65e3dcd575fbc/include/session/onionreq/hop_encryption.hpp
+    #   https://github.com/session-foundation/libsession-util/blob/551a48b258f53a36c4cd1ad036d65e3dcd575fbc/src/onionreq/hop_encryption.cpp#L58
+
+    # Construct aB
+    aB_key: bytes = nacl.bindings.crypto_scalarmult(bytes(our_x25519_skey), bytes(server_x25519_pkey))
+
+    # Construct H(ab || A || B)
+    hasher = hashlib.blake2b(digest_size=nacl.bindings.crypto_aead_chacha20poly1305_ietf_KEYBYTES)
+    hasher.update(aB_key)
+    hasher.update(bytes(our_x25519_skey.public_key))
+    hasher.update(bytes(server_x25519_pkey))
+
+    # Construct shared key
+    result = hasher.digest()
+    return result
+
+def make_request_v4(our_x25519_pkey: nacl.public.PublicKey,
+                    shared_key: bytes,
+                    endpoint: str,
+                    request_body: dict[str, Any]) -> bytes:
+
+    assert len(shared_key) == nacl.bindings.crypto_aead_chacha20poly1305_ietf_KEYBYTES
+    aead = nacl.secret.Aead(key=shared_key)
+
+    # Construct the payloads to bencode that will be encrypted
+    request_metadata = {
+        'method': 'POST',
+        'endpoint': endpoint,
+        'headers': {
+            'Content-Type': 'application/json'
+        }
+    }
+    request_metadata_json_str = json.dumps(request_metadata, separators=(',', ':'))
+    request_body_json_str     = json.dumps(request_body, separators=(',', ':'))
+
+    # Construct the bencoded payload
+    request_payload: bytes    = 'l{}:{}{}:{}e'.format(len(request_metadata_json_str),
+                                                      request_metadata_json_str,
+                                                      len(request_body_json_str),
+                                                      request_body_json_str).encode('utf-8')
+
+    # Construct encrypted payload
+    encrypted_request_payload: bytes  = aead.encrypt(request_payload)
+
+    onion_request_metadata = {
+        'ephemeral_key': bytes(our_x25519_pkey).hex(),
+        'enc_type': 'xchacha20-poly1305'
+    }
+
+    # Build the final payload to send off to the onion request endpoint
+    #   <4 byte LE encrypted payload length><encrypted payload><onion request metadata>
+    result: bytes = len(encrypted_request_payload).to_bytes(length=4, byteorder='little') + \
+                        encrypted_request_payload + \
+                        json.dumps(onion_request_metadata).encode('utf-8')
+    return result
+
+def make_response_v4(shared_key: bytes, encrypted_response: bytes) -> Response:
+    result = Response()
+
+    # Decrypt
+    aead      = nacl.secret.Aead(key=shared_key)
+    decrypted = aead.decrypt(encrypted_response)
+    if not decrypted.startswith(b'l') or not decrypted.endswith(b'e'):
+        return result
+
+    # Decode
+    trimmed_decrypted = memoryview(decrypted)[1:-1]
+    metadata, body    = bencode_consume_string(trimmed_decrypted)
+
+    # Finish
+    result.success    = True
+    result.metadata   = json.loads(metadata.tobytes())
+    body_bytes: bytes = body.tobytes()
+    if len(body_bytes) > 0:
+        body_decoded, _ = bencode_consume_string(memoryview(body_bytes))
+        result.body     = body_decoded.tobytes()
+    return result
 
 def encode_base64(data: bytes):
     return base64.b64encode(data).decode()
@@ -145,7 +253,18 @@ def make_subrequest(
         "PATH_INFO": path,
         "QUERY_STRING": query_string,
         "CONTENT_TYPE": content_type,
-        "CONTENT_LENGTH": content_length,
+        # NOTE: Werkzeug as of v2.3.5 expects a string for content length otherwise
+        # flask.request.get_data() will throw an exception due to trying to call string methods in
+        # an attempt to parse the integer.
+        #
+        #   > When parsing numbers in HTTP request headers such as ``Content-Length``, only ASCII
+        #   > digits are accepted rather than any format that Python's ``int`` and ``float`` accept.
+        #
+        # References:
+        #   https://github.com/pallets/werkzeug/issues/2716
+        #   https://github.com/pallets/werkzeug/pull/2723
+        #
+        "CONTENT_LENGTH": str(content_length),
         **http_headers,
         'wsgi.input': body_input,
         'flask._preserve_context': False,
@@ -226,13 +345,13 @@ def handle_v4_onionreq_plaintext(body):
         belems = memoryview(body)[1:-1]
 
         # Metadata json; this element is always required:
-        meta, belems = utils.bencode_consume_string(belems)
+        meta, belems = bencode_consume_string(belems)
 
         meta = json.loads(meta.tobytes())
 
         # Then we can have a second optional string containing the body:
         if len(belems) > 1:
-            subreq_body, belems = utils.bencode_consume_string(belems)
+            subreq_body, belems = bencode_consume_string(belems)
             if len(belems):
                 raise RuntimeError("Invalid v4 onion request: found more than 2 parts")
         else:
@@ -378,7 +497,7 @@ def handle_v4_onion_request():
     would be encoded as the two-string bencoded list:
 
         l72:{"method":"POST","endpoint":"/some/thing","headers":{"Some-Header":"a"}}14:post body heree
-            ^^^^^^^^72-byte request info json^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^body^^^^^
+            ^^^^^^^^72-byte request info json^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^14-byte body^^
 
     The return value of the request is always a 2-part bencoded list where the first part contains
     response metadata and the second contains the response body.  The response metadata is a json
@@ -436,3 +555,38 @@ def handle_v4_onion_request():
     # payload as-is back to the client which bounces its way through the SN path back to the client.
     response = handle_v4_onionreq_plaintext(parser.payload)
     return parser.encrypt_reply(response)
+
+def test_onion_request_response_lifecycle():
+    import flask
+    import nacl.public
+    import werkzeug
+
+    # Build the shared key to encrypt for with our secret keys and the server's public key.
+    server_x25519_skey = nacl.public.PrivateKey.generate()
+    our_x25519_skey    = nacl.public.PrivateKey.generate()
+    shared_key: bytes  = make_shared_key(our_x25519_skey=our_x25519_skey, server_x25519_pkey=server_x25519_skey.public_key)
+
+    # Encrypt request for 'shared_key'
+    onion_request: bytes = make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                           shared_key=shared_key,
+                                           endpoint='/foo/post/endpoint',
+                                           request_body={'bar':  5})
+
+    # Setup a Flask server
+    flask_app:    flask.Flask     = flask.Flask(__name__)
+    flask_client: werkzeug.Client = flask_app.test_client()
+    flask_app.register_blueprint(flask_blueprint_v4)                          # Add the v4 endpoints
+    flask_app.config[FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey # Set the x25519 key
+
+    # Register the endpoint
+    @flask_app.post("/foo/post/endpoint")
+    def foo_endpoint():
+        return "Hello, World!"
+
+    # Submit a v4 request, decrypt response and parse the returned body
+    response:       werkzeug.test.TestResponse = flask_client.post(ROUTE_OXEN_V4_LSRPC, data=onion_request)
+    onion_response: Response                   = make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+
+    # Parse the response
+    assert onion_response.success
+    assert onion_response.body == b'Hello, World!'

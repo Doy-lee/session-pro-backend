@@ -21,6 +21,7 @@ import nacl.bindings
 import nacl.public
 import collections.abc
 import hashlib
+import json
 
 import base
 import backend
@@ -56,15 +57,12 @@ def html_good_response(dict_result: typing.Any) -> flask.Response:
 def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskRequest:
     # Get JSON from request
     result: GetJSONFromFlaskRequest = GetJSONFromFlaskRequest()
-    if len(request.get_data()) == 0:
-        return result
-
     try:
-        json = typing.cast(dict[str, typing.Any] | None, flask.request.get_json())
-        if json is None:
+        json_dict = typing.cast(dict[str, typing.Any] | None, json.loads(request.data))
+        if json_dict is None:
             result.err_msg = "JSON failed to be parsed"
         else:
-            result.json = json
+            result.json = json_dict
     except Exception as e:
         result.err_msg = str(e)
 
@@ -217,9 +215,5 @@ def get_revocations():
                         'gen_index_hash':   gen_index_hash.hex(),
                     })
 
-    result = html_good_response({
-        'version': 0,
-        'ticket':  revocation_ticket,
-        'list':    revocation_list
-    })
+    result = html_good_response({'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
     return result

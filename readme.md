@@ -13,6 +13,8 @@ And so forth.
 
 # Layout
 
+- `vendor/`: 3rd party dependencies
+
 - `base.py`: Basic primitives shared across all modules where necessary.
 
 - `backend.py`: DB layer that validates incoming requests and stores/retrieves
