@@ -1,11 +1,173 @@
-from flask import request, abort
-import json
+'''A shim that can be plugged into a Flask server enabling onion requests
+routes. An onion request is a request that is encrypted for the server's X25519
+public key that is then unwrapped and forwarded to the desired endpoint defined
+in the encrypted payload.
 
-from .web import app
-from . import crypto, http, utils
-from .subrequest import make_subrequest
+A flask application can integrate onion requests in 2 steps. First enable the
+routes by registering the blueprint to your application, then, create
+a long-term X25519 key for the server and then make it available to a Flask
+request by storing it in the Flask configuration dictionary so that the server
+can decrypt incoming client requests that are encrypted.
+
+1. Enable the desired routes on your Flask application. We currently have v3 and
+v4 routes (v3 is provided for legacy reasons, use v4 if you're starting a new
+application)
+
+    import onion_req
+    flask_app = flask.Flask(__name__)
+    flask_app.register_blueprint(onion_req.flask_blueprint_v3)
+    flask_app.register_blueprint(onion_req.flask_blueprint_v4)
+
+2. Set the long-term X25519 key on the Flask dictionary
+
+    import nacl.public
+    x25519_skey                                                    = nacl.public.PrivateKey.generate()
+    flask_app.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = x25519_skey
+
+The integration application will now respond to onion requests on the following
+v3 and v4 routes respectively:
+
+    /loki/v3/lsrpc
+    /oxen/v3/lsrpc
+    /oxen/v4/lsrpc
+
+Upon sending a request, the encrypted request is decrypted by the X25519 secret
+key, the payload is parsed and the desired endpoint and endpoint arguments are
+extracted. The onion request layer will then internally route the request to the
+Flask server with the extracted data, get the response and return it to the
+client.
+
+See the doc comments for the individual routes below for more details on the
+required composition of the onion request payload.
+'''
+
+import json
+import nacl.public
+
+from flask import request, abort, current_app, Blueprint
+from io import BytesIO
+from typing import Optional, Union, Any, Tuple
 
 from session_util.onionreq import OnionReqParser
+
+FLASK_CONFIG_ONION_REQ_X25519_SKEY = 'onion_req_x25519_skey'
+ROUTE_OXEN_V3_LSRPC                = '/oxen/v3/lsrpc'
+ROUTE_LOKI_V3_LSRPC                = '/loki/v3/lsrpc'
+ROUTE_OXEN_V4_LSRPC                = '/oxen/v4/lsrpc'
+HTTP_BODY_METHODS                  = ('POST', 'PUT')
+HTTP_BAD_REQUEST                   = 400
+HTTP_OK                            = 200
+flask_blueprint_v3                 = Blueprint('onion-req-blueprint-v3', __name__)
+flask_blueprint_v4                 = Blueprint('onion-req-blueprint-v4', __name__)
+
+def encode_base64(data: bytes):
+    return base64.b64encode(data).decode()
+
+def bencode_consume_string(body: memoryview) -> Tuple[memoryview, memoryview]:
+    """
+    Parses a bencoded byte string from the beginning of `body`.  Returns a pair of memoryviews on
+    success: the first is the string byte data; the second is the remaining data (i.e. after the
+    consumed string).
+    Raises ValueError on parse failure.
+    """
+    pos = 0
+    while pos < len(body) and 0x30 <= body[pos] <= 0x39:  # 1+ digits
+        pos += 1
+    if pos == 0 or pos >= len(body) or body[pos] != 0x3A:  # 0x3a == ':'
+        raise ValueError("Invalid string bencoding: did not find `N:` length prefix")
+
+    strlen = int(body[0:pos])  # parse the digits as a base-10 integer
+    pos += 1  # skip the colon
+    if pos + strlen > len(body):
+        raise ValueError("Invalid string bencoding: length exceeds buffer")
+    return body[pos : pos + strlen], body[pos + strlen :]
+
+def make_subrequest(
+    method: str,
+    path: str,
+    *,
+    headers={},
+    content_type: Optional[str] = None,
+    body: Optional[Union[bytes, memoryview]] = None,
+    json: Optional[Union[dict, list]] = None,
+):
+    """
+    Makes a subrequest from the given parameters, returns the response object and a dict of
+    lower-case response headers keys to header values.
+
+    Parameters:
+    method - the HTTP method, e.g. GET or POST
+    path - the request path (optionally including a query string)
+    headers - dict of HTTP headers for the request
+    content_type - the content-type of the request (for POST/PUT methods)
+    body - the bytes content of the body of a POST/PUT method.  If specified then content_type will
+    default to 'application/octet-stream'.
+    json - a json value to dump as the body of the request.  If specified then content_type will
+    default to 'applicaton/json'.
+    """
+
+    http_headers: dict[str, Any] = {'HTTP_{}'.format(h.upper().replace('-', '_')): v for h, v in headers.items()}
+
+    if content_type is None:
+        if 'HTTP_CONTENT_TYPE' in http_headers:
+            content_type = http_headers['HTTP_CONTENT_TYPE']
+        elif body is not None:
+            content_type = 'application/octet-stream'
+        elif json is not None:
+            content_type = 'application/json'
+        else:
+            content_type = ''
+
+    for x in ('HTTP_CONTENT_TYPE', 'HTTP_CONTENT_LENGTH'):
+        if x in http_headers:
+            del http_headers[x]
+
+    if body is None:
+        if json is not None:
+            from json import dumps
+
+            body = dumps(json, separators=(',', ':')).encode()
+        else:
+            body = b''
+
+    body_input = BytesIO(body)
+    content_length = len(body)
+
+    if '?' in path:
+        path, query_string = path.split('?', 1)
+    else:
+        query_string = ''
+
+    # Set up the wsgi environ variables for the subrequest (see PEP 0333)
+    subreq_env: dict[str, Any] = {
+        **request.environ,
+        "REQUEST_METHOD": method,
+        "PATH_INFO": path,
+        "QUERY_STRING": query_string,
+        "CONTENT_TYPE": content_type,
+        "CONTENT_LENGTH": content_length,
+        **http_headers,
+        'wsgi.input': body_input,
+        'flask._preserve_context': False,
+    }
+
+    try:
+        current_app.logger.debug(f"Initiating sub-request for {method} {path}")
+        with current_app.request_context(subreq_env):
+            response = current_app.full_dispatch_request()
+        if response.status_code != HTTP_OK:
+            current_app.logger.warning(
+                f"Sub-request for {method} {path} returned status {response.status_code}"
+            )
+        return response, {
+            k.lower(): v
+            for k, v in response.get_wsgi_headers(subreq_env)
+            if k.lower() != 'content-length'
+        }
+
+    except Exception:
+        current_app.logger.warning(f"Sub-request for {method} {path} failed: {traceback.format_exc()}")
+        raise
 
 def handle_v3_onionreq_plaintext(body):
     try:
@@ -16,7 +178,7 @@ def handle_v3_onionreq_plaintext(body):
         endpoint, method = req['endpoint'], req['method']
         subreq_headers = {k.lower(): v for k, v in req.get('headers', {}).items()}
 
-        if method in http.BODY_METHODS:
+        if method in HTTP_BODY_METHODS:
             subreq_body = req.get('body', '').encode()
         else:
             subreq_body = b''
@@ -43,17 +205,17 @@ def handle_v3_onionreq_plaintext(body):
             content_type='application/json',
         )
 
-        if response.status_code == http.OK:
+        if response.status_code == HTTP_OK:
             data = response.get_data()
-            app.logger.debug(
+            current_app.logger.debug(
                 f"Onion sub-request for {endpoint} returned success, {len(data)} bytes"
             )
             return data
         return json.dumps({'status_code': response.status_code}).encode()
 
     except Exception as e:
-        app.logger.warning("Invalid onion request: {}".format(e))
-        return json.dumps({'status_code': http.BAD_REQUEST}).encode()
+        current_app.logger.warning("Invalid onion request: {}".format(e))
+        return json.dumps({'status_code': HTTP_BAD_REQUEST}).encode()
 
 
 def handle_v4_onionreq_plaintext(body):
@@ -85,15 +247,15 @@ def handle_v4_onionreq_plaintext(body):
         )
 
         data = response.get_data()
-        app.logger.debug(
+        current_app.logger.debug(
             f"Onion sub-request for {endpoint} returned {response.status_code}, {len(data)} bytes"
         )
 
         meta = {'code': response.status_code, 'headers': headers}
 
     except Exception as e:
-        app.logger.warning("Invalid v4 onion request: {}".format(e))
-        meta = {'code': http.BAD_REQUEST, 'headers': {'content-type': 'text/plain; charset=utf-8'}}
+        current_app.logger.warning("Invalid v4 onion request: {}".format(e))
+        meta = {'code': HTTP_BAD_REQUEST, 'headers': {'content-type': 'text/plain; charset=utf-8'}}
         data = b'Invalid v4 onion request'
 
     meta = json.dumps(meta).encode()
@@ -103,18 +265,22 @@ def handle_v4_onionreq_plaintext(body):
 
 
 def decrypt_onionreq():
+    assert FLASK_CONFIG_ONION_REQ_X25519_SKEY in current_app.config
+    assert isinstance(current_app.config.get(FLASK_CONFIG_ONION_REQ_X25519_SKEY), nacl.public.PrivateKey)
+    x25519_skey = current_app.config[FLASK_CONFIG_ONION_REQ_X25519_SKEY]
+
     try:
         return OnionReqParser(
-            crypto.server_pubkey_bytes,
-            crypto._privkey_bytes,
-            request.data)
+            x25519_pubkey=bytes(x25519_skey.public_key),
+            x25519_privkey=bytes(x25519_skey),
+            request=request.data)
     except Exception as e:
-        app.logger.warning("Failed to decrypt onion request: {}".format(e))
-    abort(http.BAD_REQUEST)
+        current_app.logger.warning("Failed to decrypt onion request: {}".format(e))
+    abort(HTTP_BAD_REQUEST)
 
 
-@app.post("/oxen/v3/lsrpc")
-@app.post("/loki/v3/lsrpc")
+@flask_blueprint_v3.post(ROUTE_OXEN_V3_LSRPC)
+@flask_blueprint_v3.post(ROUTE_LOKI_V3_LSRPC)
 def handle_onion_request():
     """
     Parse an onion request, handle it as a subrequest, then throw away the subrequest headers,
@@ -153,10 +319,9 @@ def handle_onion_request():
     """
 
     parser = decrypt_onionreq()
-    return utils.encode_base64(parser.encrypt_reply(handle_v3_onionreq_plaintext(parser.payload)))
+    return encode_base64(parser.encrypt_reply(handle_v3_onionreq_plaintext(parser.payload)))
 
-
-@app.post("/oxen/v4/lsrpc")
+@flask_blueprint_v4.post(ROUTE_OXEN_V4_LSRPC)
 def handle_v4_onion_request():
     """
     Handles a decrypted v4 onion request; this injects a subrequest to process it then returns the
@@ -263,8 +428,8 @@ def handle_v4_onion_request():
     try:
         parser = decrypt_onionreq()
     except RuntimeError as e:
-        app.logger.warning("Failed to decrypt onion request: {}".format(e))
-        abort(http.BAD_REQUEST)
+        current_app.logger.warning("Failed to decrypt onion request: {}".format(e))
+        abort(HTTP_BAD_REQUEST)
 
     # On the way back out we re-encrypt via the junk parser (which uses the ephemeral key and
     # enc_type that were specified in the outer request).  We then return that encrypted binary

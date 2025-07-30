@@ -24,7 +24,7 @@ import hashlib
 
 import base
 import backend
-import onion_req
+from vendor import onion_req
 
 class GetJSONFromFlaskRequest:
     json:    dict[str, typing.Any] = {}

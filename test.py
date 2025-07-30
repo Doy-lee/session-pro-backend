@@ -22,7 +22,7 @@ import time
 import werkzeug
 import typing
 
-import onion_req
+from vendor import onion_req
 import backend
 import base
 import server
