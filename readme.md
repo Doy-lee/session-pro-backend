@@ -39,6 +39,13 @@ backend:
 # Set the location to store the database of the backend to
 SESH_PRO_BACKEND_DB_PATH=<path/to/db>.db (default: ./backend.db)
 
+# If you wish to use an in-memory database or shared in-memory database (i.e.
+# 'file::memory') this flag must be set. See:
+#
+#   https://www.sqlite.org/inmemorydb.html
+#
+SESH_PRO_BACKEND_DB_PATH_IS_URI=[0|1] (default: 0)
+
 # Pretty print the contents of the tables in the database to standard out and
 # exit
 SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)

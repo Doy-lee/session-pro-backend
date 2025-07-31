@@ -103,8 +103,9 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
 
 def entry_point() -> flask.Flask:
     # Get arguments from environment
-    db_path:      str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',               './backend.db')
-    print_tables: bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES', False)
+    db_path:        str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',                 './backend.db')
+    db_path_is_uri: bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI', False)
+    print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
 
     # Ensure the path is setup for writing the database
     try:
@@ -115,7 +116,7 @@ def entry_point() -> flask.Flask:
 
     # Open the DB (create tables if necessary)
     err = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(path=str(db_path), uri=False, err=err)
+    db: backend.SetupDBResult = backend.setup_db(path=str(db_path), uri=db_path_is_uri, err=err)
     if len(err.msg_list) > 0:
         print(f"{err.msg_list}")
         os._exit(1)
@@ -177,7 +178,7 @@ def entry_point() -> flask.Flask:
 
     result: flask.Flask = server.init(testing_mode=False,
                                       db_path=db.path,
-                                      db_path_is_uri=False,
+                                      db_path_is_uri=db_path_is_uri,
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
     return result
 
