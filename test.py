@@ -116,16 +116,24 @@ def test_backend_same_user_stacks_subscription():
     assert revocation_list[0].expiry_unix_ts_s     == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
 
     assert isinstance(payment_list[0].activation_unix_ts_s, int)
+
+    expire_unix_ts_s: int = base.round_unix_ts_to_next_day(payment_list[0].activation_unix_ts_s + payment_list[0].subscription_duration_s + 1)
     expire_result: backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
-                                                                                        unix_ts_s=base.round_unix_ts_to_next_day(payment_list[0].activation_unix_ts_s + payment_list[0].subscription_duration_s + 1))
+                                                                                        unix_ts_s=expire_unix_ts_s)
     assert expire_result.already_done_by_someone_else == False
     assert expire_result.success                      == True
     assert expire_result.payments                     == 1
     assert expire_result.revocations                  == 1
     assert expire_result.users                        == 0
 
-    archived_payment_list: list[backend.ArchivedPaymentRow]  = backend.get_archived_payments_list(db.sql_conn)
+    archived_payment_list: list[backend.HistoricalPaymentRow] = backend.get_historical_payments_list(db.sql_conn)
     assert len(archived_payment_list)                       == 1
+    assert archived_payment_list[0].master_pkey             == payment_list[0].master_pkey
+    assert archived_payment_list[0].subscription_duration_s == payment_list[0].subscription_duration_s
+    assert archived_payment_list[0].creation_unix_ts_s      == payment_list[0].creation_unix_ts_s
+    assert archived_payment_list[0].activation_unix_ts_s    == payment_list[0].activation_unix_ts_s
+    assert archived_payment_list[0].payment_token_hash      == payment_list[0].payment_token_hash
+    assert archived_payment_list[0].archived_unix_ts_s      == expire_unix_ts_s
 
     base.print_db_to_stdout(db.sql_conn)
 

@@ -47,7 +47,7 @@ class UnredeemedPaymentRow:
     payment_token_hash:      bytes = ZERO_BYTES32
     subscription_duration_s: int   = 0
 
-class ArchivedPaymentRow:
+class HistoricalPaymentRow:
     id:                      int        = 0
     master_pkey:             bytes      = ZERO_BYTES32
     subscription_duration_s: int        = 0
@@ -207,14 +207,14 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
             result.append(item)
     return result;
 
-def get_archived_payments_list(sql_conn: sqlite3.Connection) -> list[ArchivedPaymentRow]:
-    result: list[ArchivedPaymentRow] = []
+def get_historical_payments_list(sql_conn: sqlite3.Connection) -> list[HistoricalPaymentRow]:
+    result: list[HistoricalPaymentRow] = []
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _    = tx.cursor.execute('SELECT * FROM archived_payments')
+        _    = tx.cursor.execute('SELECT * FROM historical_payments')
         rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, bytes, int]], tx.cursor)
         for row in rows:
-            item                         = ArchivedPaymentRow()
+            item                         = HistoricalPaymentRow()
             item.id                      = row[0]
             item.master_pkey             = row[1]
             item.subscription_duration_s = row[2]
@@ -345,7 +345,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
                 subscription_duration_s INTEGER NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS archived_payments (
+            CREATE TABLE IF NOT EXISTS historical_payments (
                 id                              INTEGER PRIMARY KEY,
                 master_pkey                     BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
                 subscription_duration_s         INTEGER NOT NULL,
@@ -794,7 +794,7 @@ def delete_and_archive_payments_internal(tx: base.SQLTransaction, payment_token_
         activation_unix_ts_s:    int   = row[3]
         payment_token_hash:      bytes = row[4]
         _ = tx.cursor.execute(f'''
-            INSERT INTO archived_payments ({return_fields}, archived_unix_ts_s)
+            INSERT INTO historical_payments ({return_fields}, archived_unix_ts_s)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (master_pkey, subscription_duration_s, creation_unix_ts_s,
               activation_unix_ts_s, payment_token_hash, archive_unix_ts_s))
