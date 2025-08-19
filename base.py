@@ -184,3 +184,15 @@ def format_bytes(size: int):
             return f'{formatted_size:.2f} {prefix}'
     return '0.00 B'
 
+def format_seconds(duration_s: int):
+    hours   = duration_s // 3600
+    minutes = (duration_s % 3600) // 60
+    seconds = duration_s % 60
+    result = ''
+    if hours > 0:
+        result += f"{hours}h"
+    if minutes > 0:
+        result += "{}{}m".format(" " if len(result) > 0 else "", minutes)
+    result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
+    return result
+

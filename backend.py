@@ -47,6 +47,15 @@ class UnredeemedPaymentRow:
     payment_token_hash:      bytes = ZERO_BYTES32
     subscription_duration_s: int   = 0
 
+class ArchivedPaymentRow:
+    id:                      int        = 0
+    master_pkey:             bytes      = ZERO_BYTES32
+    subscription_duration_s: int        = 0
+    creation_unix_ts_s:      int        = 0
+    activation_unix_ts_s:    int | None = None
+    payment_token_hash:      bytes      = ZERO_BYTES32
+    archived_unix_ts_s:      int        = 0
+
 class PaymentRow:
     id:                      int        = 0
     master_pkey:             bytes      = ZERO_BYTES32
@@ -198,6 +207,24 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
             result.append(item)
     return result;
 
+def get_archived_payments_list(sql_conn: sqlite3.Connection) -> list[ArchivedPaymentRow]:
+    result: list[ArchivedPaymentRow] = []
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _    = tx.cursor.execute('SELECT * FROM archived_payments')
+        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, bytes, int]], tx.cursor)
+        for row in rows:
+            item                         = ArchivedPaymentRow()
+            item.id                      = row[0]
+            item.master_pkey             = row[1]
+            item.subscription_duration_s = row[2]
+            item.creation_unix_ts_s      = row[3]
+            item.activation_unix_ts_s    = row[4]
+            item.payment_token_hash      = row[5]
+            item.archived_unix_ts_s      = row[6]
+            result.append(item)
+    return result;
+
 def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
     result: list[UserRow] = []
     with base.SQLTransaction(sql_conn) as tx:
@@ -316,6 +343,39 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
             CREATE TABLE IF NOT EXISTS unredeemed_payments (
                 payment_token_hash      BLOB PRIMARY KEY,
                 subscription_duration_s INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS archived_payments (
+                id                              INTEGER PRIMARY KEY,
+                master_pkey                     BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
+                subscription_duration_s         INTEGER NOT NULL,
+                creation_unix_ts_s              INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
+
+                -- Timestamp of when a payment is activated. The payment is consumed when the
+                -- subscription duration has elapsed relative to this time whereby the next payment
+                -- is activated. There is only one activated record per master key at a time.
+                --
+                -- Activating payments one at a time allows correct calculation of the total
+                -- duration a user is entitled to Pro features. For example if a payment is refunded
+                -- that may abruptly end a user's entitlement mid-way through their subscription.
+                -- By activating the next record from the current timestamp and summing the
+                -- remaining subscription durations forward, this correctly accounts for that user's
+                -- remaining entitlement by knowing the starting timestamp to sum the subscription
+                -- durations to.
+                activation_unix_ts_s            INTEGER,
+                payment_token_hash              BLOB    NOT NULL,  -- BLAKE2B hash of the token provided by the payment provider
+
+                -- The unix timestamp at which the subscription was archived at. Useful for
+                -- calculating the actual duration that a subscription was activated for. The
+                -- activation unix timestamp can be null if a payment was refunded before it was
+                -- activated. Similarly the elapsed duration between a non-null activation timestamp
+                -- and the archived timestamp can be less than the subscription duration if the
+                -- subscription was terminated (e.g.: refunded) before the subscription was
+                -- completed.
+                --
+                -- The duration between the activation and archived timestamp may exceed the
+                -- subscription duration if the expiring of payments is delayed for whatever reason.
+                archived_unix_ts_s              INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS payments (
@@ -485,7 +545,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
 
     sum_of_subscription_duration_s: int = typing.cast(tuple[int], tx.cursor.fetchone())[0]
     result.latest_expiry_unix_ts_s      = earliest_activation_unix_ts_s + sum_of_subscription_duration_s + base.SECONDS_IN_DAY
-    assert result.latest_expiry_unix_ts_s % base.SECONDS_IN_DAY == 0, "Subscription duration must be on a day boundaring, 30 days, 365 days ...e.t.c"
+    assert result.latest_expiry_unix_ts_s % base.SECONDS_IN_DAY == 0, f"Subscription duration must be on a day boundaring, 30 days, 365 days ...e.t.c, was {base.format_seconds(result.latest_expiry_unix_ts_s)}"
 
     # Grab the previous user if it existed, if it did, then add a revocation
     # entry thereby disabling all the previous proofs generated previously. This
@@ -706,20 +766,49 @@ def add_payment(sql_conn:           sqlite3.Connection,
 
     return result
 
-def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, activation_unix_ts_s: int):
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _ = tx.cursor.execute('''
+def delete_and_archive_payments_internal(tx: base.SQLTransaction, payment_token_hash_or_unix_ts: bytes | int, archive_unix_ts_s: int) -> list[nacl.signing.VerifyKey]:
+    result: list[nacl.signing.VerifyKey] = []
+    assert tx.cursor is not None
+    return_fields = 'master_pkey, subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash'
+    if isinstance(payment_token_hash_or_unix_ts, int):
+        unix_ts_s = payment_token_hash_or_unix_ts
+        _ = tx.cursor.execute(f'''
+            DELETE FROM payments
+            WHERE activation_unix_ts_s IS NOT NULL AND ? >= (activation_unix_ts_s + subscription_duration_s)
+            RETURNING {return_fields}
+        ''', (unix_ts_s,))
+    else:
+        assert isinstance(payment_token_hash_or_unix_ts, bytes)
+        payment_token_hash = payment_token_hash_or_unix_ts
+        _ = tx.cursor.execute(f'''
             DELETE FROM payments
             WHERE       payment_token_hash = ?
-            RETURNING   master_pkey
+            RETURNING {return_fields}
         ''', (payment_token_hash,))
 
-        if tx.cursor.rowcount > 0:
-            assert tx.cursor.rowcount == 1
-            master_pkey_bytes: bytes = tx.cursor.fetchone()[0]
+    rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int, int, bytes]], tx.cursor)
+    for row in rows:
+        master_pkey:             bytes = row[0]
+        subscription_duration_s: int   = row[1]
+        creation_unix_ts_s:      int   = row[2]
+        activation_unix_ts_s:    int   = row[3]
+        payment_token_hash:      bytes = row[4]
+        _ = tx.cursor.execute(f'''
+            INSERT INTO archived_payments ({return_fields}, archived_unix_ts_s)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (master_pkey, subscription_duration_s, creation_unix_ts_s,
+              activation_unix_ts_s, payment_token_hash, archive_unix_ts_s))
+        result.append(nacl.signing.VerifyKey(master_pkey))
+    return result
+
+def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, activation_unix_ts_s: int):
+    with base.SQLTransaction(sql_conn) as tx:
+        master_pkeys: list[nacl.signing.VerifyKey] = delete_and_archive_payments_internal(tx=tx,
+                                                                                          payment_token_hash_or_unix_ts=payment_token_hash,
+                                                                                          archive_unix_ts_s=activation_unix_ts_s)
+        for pkey in master_pkeys:
             _ = update_db_after_payments_changed(tx=tx,
-                                                 master_pkey = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                 master_pkey=pkey,
                                                  activation_unix_ts_s=activation_unix_ts_s)
 
 def get_pro_subscription_proof(sql_conn:       sqlite3.Connection,
@@ -796,22 +885,17 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
             _ = tx.cursor.execute('''UPDATE runtime SET last_expire_unix_ts_s = ?''', (unix_ts_s,))
 
             # Delete expired payments
-            _ = tx.cursor.execute('''
-                DELETE FROM payments
-                WHERE activation_unix_ts_s IS NOT NULL AND ? >= (activation_unix_ts_s + subscription_duration_s)
-                RETURNING master_pkey
-            ''', (unix_ts_s,))
-            result.payments = tx.cursor.rowcount
+            master_pkeys: list[nacl.signing.VerifyKey] = delete_and_archive_payments_internal(tx=tx,
+                                                                                              payment_token_hash_or_unix_ts=unix_ts_s,
+                                                                                              archive_unix_ts_s=unix_ts_s)
+            result.payments = len(master_pkeys)
 
-            # For each master public key that had a payment deleted, activate
-            # their next record if they have one to activate
-            rows = typing.cast(collections.abc.Iterator[tuple[bytes]], tx.cursor)
-            for row in rows:
-                master_pkey_bytes: bytes = row[0]
-                master_pkey              = nacl.signing.VerifyKey(master_pkey_bytes)
-                _                        = update_db_after_payments_changed(tx=tx,
-                                                                            master_pkey=master_pkey,
-                                                                            activation_unix_ts_s=unix_ts_s)
+            # For each master public key that had a payment deleted, activate their next record if
+            # they have one to activate
+            for pkey in master_pkeys:
+                _ = update_db_after_payments_changed(tx=tx,
+                                                     master_pkey=pkey,
+                                                     activation_unix_ts_s=unix_ts_s)
 
             # Delete expired revocations
             _ = tx.cursor.execute('''

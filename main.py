@@ -36,18 +36,6 @@ def os_get_boolean_env(var_name: str, default: bool = False):
     else:
         raise ValueError(f"Invalid value for environment variable '{var_name}': {value}. Allowed values are 0 or 1.")
 
-def format_seconds(duration_s: int):
-    hours   = duration_s // 3600
-    minutes = (duration_s % 3600) // 60
-    seconds = duration_s % 60
-    result = ''
-    if hours > 0:
-        result += f"{hours}h"
-    if minutes > 0:
-        result += "{}{}m".format(" " if len(result) > 0 else "", minutes)
-    result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
-    return result
-
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
     global proof_expiry_thread_cv
@@ -76,7 +64,7 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
         # Sleep on CV until sleep time has elapsed, or, we get woken up by SIG handler.
         while sleep_time_s > 0 and not stop_proof_expiry_thread:
             assert sleep_time_s <= base.SECONDS_IN_DAY
-            print(f'Sleeping for {format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
+            print(f'Sleeping for {base.format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
             with proof_expiry_thread_mutex:
                 _ = proof_expiry_thread_cv.wait(timeout=sleep_time_s)
             sleep_time_s = next_day_unix_ts_s - int(time.time())
