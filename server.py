@@ -13,6 +13,7 @@ successful the result is returned back to this layer and piped back to the user
 in the HTTP response.
 '''
 
+import math
 import flask
 import typing
 import time
@@ -40,6 +41,11 @@ CONFIG_DB_PATH_IS_URI_KEY        = 'session_pro_backend_db_path_is_uri'
 ROUTE_GET_PRO_SUBSCRIPTION_PROOF = '/get_pro_subscription_proof'
 ROUTE_GET_REVOCATIONS            = '/get_revocations'
 ROUTE_ADD_PAYMENT                = '/add_payment'
+ROUTE_GET_PAYMENTS               = '/get_payments'
+
+# How many seconds can the timestamp in the get all payments route can drift
+# from the current server's timestamp before it's flat out rejected
+GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S = 5
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Session Pro Backend client requests.
@@ -66,6 +72,15 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
     except Exception as e:
         result.err_msg = str(e)
 
+    return result
+
+def make_get_all_payments_hash(version: int, master_pkey: nacl.signing.VerifyKey, timestamp: int, page: int) -> bytes:
+    hasher: hashlib.blake2b = backend.make_blake2b_hasher()
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
+    hasher.update(bytes(master_pkey))
+    hasher.update(timestamp.to_bytes(length=8, byteorder='little'))
+    hasher.update(page.to_bytes(length=4, byteorder='little'))
+    result: bytes = hasher.digest()
     return result
 
 def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
@@ -216,4 +231,75 @@ def get_revocations():
                     })
 
     result = html_good_response({'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
+    return result
+
+@flask_blueprint.route(ROUTE_GET_PAYMENTS, methods=['POST'])
+def get_payments():
+    # Get JSON from request
+    get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        return html_bad_response(400, get.err_msg)
+
+    # Extract values from JSON
+    err              = base.ErrorSink()
+    version:     int = base.dict_require(d=get.json, key='version',     default_val=0,  err_msg="Missing version from body",           err=err)
+    master_pkey: str = base.dict_require(d=get.json, key='master_pkey', default_val='', err_msg="Missing master public key from body", err=err)
+    master_sig:  str = base.dict_require(d=get.json, key='master_sig',  default_val='', err_msg="Missing master signature from body",  err=err)
+    timestamp:   int = base.dict_require(d=get.json, key='timestamp',   default_val=0,  err_msg="Missing timestamp from body",         err=err)
+    page:        int = base.dict_require(d=get.json, key='page',        default_val=0,  err_msg="Missing page from body",              err=err)
+    if len(err.msg_list):
+        return html_bad_response(400, err.msg_list)
+
+    # Parse and validate values
+    if version != 0:
+        err.msg_list.append(f'Unrecognised version passed: {version}')
+    master_pkey_bytes = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    master_sig_bytes  = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+
+    # Validate timestamp
+    # TODO: We _could_ track the last GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S seconds worth of
+    # requests to completely reject replay attacks if we cared enough but onion requests probably
+    # suffice to mask the ability to replay a query.
+    timestamp_delta: float = time.time() - float(timestamp)
+    if abs(timestamp_delta) >= GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S:
+        err.msg_list.append(f'Timestamp is too old to permit retrieval of payments, delta was {timestamp_delta}s')
+
+    if len(err.msg_list):
+        return html_bad_response(400, err.msg_list)
+
+    # Validate the signature
+    master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
+    hash_to_verify: bytes = make_get_all_payments_hash(version=version, master_pkey=master_pkey_nacl, timestamp=timestamp, page=page)
+    try:
+        _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
+    except Exception as e:
+        err.msg_list.append('Signature failed to be verified')
+        return html_bad_response(400, err.msg_list)
+
+    total_payments: int                        = 0
+    total_pages:    int                        = 0
+    item_list:      list[dict[str, str | int]] = []
+    with open_db_from_flask_request_context(flask.current_app) as db:
+        total_payments = backend.get_all_payments_for_master_pkey_count(db.sql_conn, master_pkey=master_pkey_nacl)
+        total_pages    = math.ceil(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
+        offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
+        with base.SQLTransaction(db.sql_conn) as tx:
+            list_it: collections.abc.Iterator[tuple[int, int, int, bytes, int]] = \
+                    backend.get_all_payments_for_master_pkey_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
+            for row in list_it:
+                subscription_duration_s: int   = row[0]
+                creation_unix_ts_s:      int   = row[1]
+                activation_unix_ts_s:    int   = row[2]
+                payment_token_hash:      bytes = row[3]
+                archive_unix_ts_s:       int   = row[4]
+
+                item_list.append({
+                    'subscription_duration_s': subscription_duration_s,
+                    'creation_unix_ts_s':      creation_unix_ts_s,
+                    'activation_unix_ts_s':    activation_unix_ts_s,
+                    'payment_token_hash':      payment_token_hash.hex(),
+                    'archive_unix_ts_s':       archive_unix_ts_s,
+                })
+
+    result = html_good_response({'version': 0, 'pages': total_pages, 'payments': total_payments, 'list': item_list})
     return result

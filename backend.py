@@ -10,8 +10,9 @@ import collections.abc
 
 import base
 
-ZERO_BYTES32        = bytes(32)
-BLAKE2B_DIGEST_SIZE = 32
+ZERO_BYTES32                 = bytes(32)
+BLAKE2B_DIGEST_SIZE          = 32
+ALL_PAYMENTS_PAGINATION_SIZE = 1000
 
 class ExpireResult:
     already_done_by_someone_else: bool = False
@@ -271,6 +272,37 @@ def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
         result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
     return result;
 
+
+def get_all_payments_for_master_pkey_count(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> int:
+    result: int = 0
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _ = tx.cursor.execute('''
+            SELECT COUNT(*) FROM (
+                SELECT id FROM payments WHERE master_pkey = ?
+                UNION ALL
+                SELECT id FROM historical_payments WHERE master_pkey = ?
+            )
+        ''', (bytes(master_pkey), bytes(master_pkey)))
+        result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
+    return result;
+
+def get_all_payments_for_master_pkey_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, bytes, int]]:
+    assert tx.cursor is not None
+    _ = tx.cursor.execute(f'''
+        SELECT subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash, 0 as archived_unix_ts_s
+          FROM payments
+          WHERE master_pkey = ?
+          UNION ALL
+
+        SELECT subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash, archived_unix_ts_s
+          FROM historical_payments
+          WHERE master_pkey = ?
+          ORDER BY creation_unix_ts_s DESC
+          LIMIT {ALL_PAYMENTS_PAGINATION_SIZE} OFFSET ?
+    ''', (bytes(master_pkey), bytes(master_pkey), offset))
+    result = typing.cast(collections.abc.Iterator[tuple[int, int, int, bytes, int]], tx.cursor)
+    return result;
 
 def get_revocations_item_list_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
     assert tx.cursor is not None
