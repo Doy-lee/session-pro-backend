@@ -290,12 +290,12 @@ def get_all_payments_for_master_pkey_count(sql_conn: sqlite3.Connection, master_
 def get_all_payments_for_master_pkey_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, bytes, int]]:
     assert tx.cursor is not None
     _ = tx.cursor.execute(f'''
-        SELECT subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash, 0 as archived_unix_ts_s
+        SELECT subscription_duration_s, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, 0 as archived_unix_ts_s
           FROM payments
           WHERE master_pkey = ?
           UNION ALL
 
-        SELECT subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash, archived_unix_ts_s
+        SELECT subscription_duration_s, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, archived_unix_ts_s
           FROM historical_payments
           WHERE master_pkey = ?
           ORDER BY creation_unix_ts_s DESC

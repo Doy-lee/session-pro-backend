@@ -73,8 +73,8 @@ python -m flask --app main run --debug
 # working directory at ./data/pro.db
 SESH_PRO_BACKEND_DB_PATH=./data/pro.db python -m flask --app main run --debug --port 8888
 
-# Run the tests
-python -m pytest test.py
+# Run the tests (with printing test names and test output to stdout enabled)
+python -m pytest test.py --verbose --capture=no
 
 # For running in production we use UWSGI which run multiple instances of the
 # Flask app with process lifecycle management, the following command is

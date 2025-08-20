@@ -135,8 +135,6 @@ def test_backend_same_user_stacks_subscription():
     assert archived_payment_list[0].payment_token_hash      == payment_list[0].payment_token_hash
     assert archived_payment_list[0].archived_unix_ts_s      == expire_unix_ts_s
 
-    base.print_db_to_stdout(db.sql_conn)
-
 def test_server_add_payment_flow():
     # Setup DB
     err                       = base.ErrorSink()
@@ -239,17 +237,19 @@ def test_server_add_payment_flow():
                                                                            rotating_pkey=new_rotating_key.verify_key,
                                                                            unix_ts_s=unix_ts_s)
 
+        request_body = {
+            'version':       version,
+            'master_pkey':   bytes(master_key.verify_key).hex(),
+            'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
+            'unix_ts_s':     unix_ts_s,
+            'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
+            'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
+        }
+
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
                                                   endpoint=server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF,
-                                                  request_body={
-                                                      'version':       version,
-                                                      'master_pkey':   bytes(master_key.verify_key).hex(),
-                                                      'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
-                                                      'unix_ts_s':     unix_ts_s,
-                                                      'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                      'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
-                                                  })
+                                                  request_body=request_body)
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -305,17 +305,19 @@ def test_server_add_payment_flow():
                                                                 rotating_pkey=rotating_key.verify_key,
                                                                 payment_token_hash=new_payment_token_hash)
 
+        request_body={
+            'version':       version,
+            'master_pkey':   bytes(master_key.verify_key).hex(),
+            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+            'payment_token': new_payment_token_hash.hex(),
+            'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+            'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+        }
+
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
                                                   endpoint=server.ROUTE_ADD_PAYMENT,
-                                                  request_body={
-                                                      'version':       version,
-                                                      'master_pkey':   bytes(master_key.verify_key).hex(),
-                                                      'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-                                                      'payment_token': new_payment_token_hash.hex(),
-                                                      'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-                                                      'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-                                                  })
+                                                  request_body=request_body)
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -359,10 +361,11 @@ def test_server_add_payment_flow():
 
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
+        request_body={'version': 0, 'ticket':  0}
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
                                                   endpoint=server.ROUTE_GET_REVOCATIONS,
-                                                  request_body={'version': 0, 'ticket':  0})
+                                                  request_body=request_body)
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -439,18 +442,20 @@ def test_server_add_payment_flow():
     # Try grabbing the payments list
     if 1:
         version:      int   = 0
-        timestamp:    int   = int(time.time())
+        unix_ts_s:    int   = int(time.time())
         page:         int   = 0
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, timestamp=timestamp, page=page)
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
+
+        request_body={'version':     version,
+                      'master_pkey': bytes(master_key.verify_key).hex(),
+                      'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                      'unix_ts_s':   unix_ts_s,
+                      'page':        page}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
                                                   endpoint=server.ROUTE_GET_PAYMENTS,
-                                                  request_body={'version':     version,
-                                                                'master_pkey': bytes(master_key.verify_key).hex(),
-                                                                'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                'timestamp':   timestamp,
-                                                                'page':        page})
+                                                  request_body=request_body)
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -469,26 +474,26 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:  int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_list:     list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
-        result_pages:    int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
-        result_payments: int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
+        result_version:  int                        = base.dict_require(d=result_json, key='version',  default_val=0,  err_msg='Missing field', err=err)
+        result_list:     list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',     default_val=[], err_msg='Missing field', err=err)
+        result_pages:    int                        = base.dict_require(d=result_json, key='pages',    default_val=0,  err_msg='Missing field', err=err)
+        result_payments: int                        = base.dict_require(d=result_json, key='payments', default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_pages      == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert result_payments   == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert len(result_list)  == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but use a too old timestamp
         if 1:
-            timestamp:    int   = int(time.time() + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S * 2))
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, timestamp=timestamp, page=page)
+            unix_ts_s:    int   = int(time.time() + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S * 2))
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'timestamp':   timestamp,
+                                                                    'unix_ts_s':   unix_ts_s,
                                                                     'page':        page})
 
             # POST and get response
@@ -507,15 +512,15 @@ def test_server_add_payment_flow():
 
         # Retry the request but create a hash with the rotating key
         if 1:
-            timestamp:    int   = int(time.time())
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, timestamp=timestamp, page=page)
+            unix_ts_s:    int   = int(time.time())
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'timestamp':   timestamp,
+                                                                    'unix_ts_s':   unix_ts_s,
                                                                     'page':        page})
 
             # POST and get response
@@ -534,16 +539,16 @@ def test_server_add_payment_flow():
 
         # Retry the request but with a large page number
         if 1:
-            timestamp:    int   = int(time.time())
+            unix_ts_s:    int   = int(time.time())
             page:         int   = 100
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, timestamp=timestamp, page=page)
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'timestamp':   timestamp,
+                                                                    'unix_ts_s':   unix_ts_s,
                                                                     'page':        page})
 
             # POST and get response
@@ -566,10 +571,10 @@ def test_server_add_payment_flow():
             result_version:  int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
             result_list:     list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
             result_pages:    int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
-            result_payments: int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
+            result_payments: int                        = base.dict_require(d=result_json, key='payments',default_val=0,  err_msg='Missing field', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
-            assert result_pages      == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert result_payments   == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
             assert len(result_list)  == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
