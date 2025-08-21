@@ -195,7 +195,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -261,7 +262,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -329,7 +331,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -377,7 +380,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -420,7 +424,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -467,7 +472,8 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
         assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -506,9 +512,9 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 400, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert 'msg' in response_json,         f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['msg']) > 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 1,     f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert len(response_json['errors']) > 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert 'result' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but create a hash with the rotating key
         if 1:
@@ -533,9 +539,9 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 400, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert 'msg' in response_json,         f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['msg']) > 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 1,     f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert len(response_json['errors']) > 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert 'result' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but with a large page number
         if 1:
@@ -561,7 +567,8 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 200, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
             # Parse result object is at root
             assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'

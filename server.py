@@ -17,8 +17,8 @@ API
   All response endpoints follow the basic structure for success and failure
   respectively:
 
-  { "result": { <content...> },                                        "status": 200 } // On success
-  { "msg":    [ "1st reason for error", "2nd reason for error", ... ], "status": 400 } // On failure
+  { "version": 0, "status": 0, "result": { <content...> },                                       } // On success
+  { "version": 0, "status": 1, "errors": [ "1st reason for error", "2nd reason for error", ... ] } // On failure
 
   Which means that calling code should conditionally handle a root level
   `result` or `msg` type payload based on the status. `200` for success and
@@ -93,7 +93,8 @@ API
           "sig": "90db1086e810606cceafb9641584434a711a3989863b270b5a2e6dd9ed44d90996da8c7b0f0d457836dbe21ab41f66f964786817b7a1da398974a5db12e38702",
           "version": 0
         },
-        "status": 200
+        "status": 0,
+        "version": 0
       }
 
   /get_pro_subscription_proof
@@ -163,7 +164,8 @@ API
           "sig": "a1ea79c2a274afc0a61e5946976297b42e1dcfdbde29f007c8fe43d2e616fc7e5db5865d05212e392a6395fabe1ed69f976fb19c25f4640df5b89a5870739e0e",
           "version": 0
         },
-        "status": 200
+        "status": 0,
+        "version": 0
       }
 
   /get_revocations
@@ -233,7 +235,8 @@ API
           "ticket": 1,
           "version": 0
         },
-        "status": 200
+        "status": 0,
+        "version": 0
       }
 
   /get_payments
@@ -327,7 +330,8 @@ API
           "payments": 2,
           "version": 0
         },
-        "status": 200
+        "status": 0,
+        "version": 0
       }
 '''
 
@@ -360,6 +364,10 @@ ROUTE_GET_PRO_SUBSCRIPTION_PROOF = '/get_pro_subscription_proof'
 ROUTE_GET_REVOCATIONS            = '/get_revocations'
 ROUTE_GET_PAYMENTS               = '/get_payments'
 
+RESPONSE_SUCCESS_VERSION         = 0
+RESPONSE_FAILED_VERSION          = 0
+RESPONSE_SUCCESS                 = 0
+
 # How many seconds can the timestamp in the get all payments route can drift
 # from the current server's timestamp before it's flat out rejected
 GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S = 5
@@ -368,13 +376,13 @@ GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S = 5
 # into an app that accepts Session Pro Backend client requests.
 flask_blueprint = flask.Blueprint('session-pro-backend-blueprint', __name__)
 
-def html_bad_response(http_status: int, msg: str | list[str]) -> flask.Response:
-    result        = flask.jsonify({ 'status': http_status, 'msg': msg})
-    result.status = http_status
+def make_error_response(status: int, errors: list[str]) -> flask.Response:
+    assert status != RESPONSE_SUCCESS, f"{RESPONSE_SUCCESS} is reserved for success"
+    result = flask.jsonify({'status': status, 'version': RESPONSE_FAILED_VERSION, 'errors': errors})
     return result
 
-def html_good_response(dict_result: typing.Any) -> flask.Response:
-    result = flask.jsonify({ 'status': 200, 'result': dict_result})
+def make_success_response(dict_result: dict[str, str | int]) -> flask.Response:
+    result = flask.jsonify({'status': RESPONSE_SUCCESS, 'version': RESPONSE_SUCCESS_VERSION, 'result': dict_result})
     return result
 
 def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskRequest:
@@ -415,7 +423,7 @@ def add_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return html_bad_response(400, get.err_msg)
+        return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
     err                = base.ErrorSink()
@@ -426,7 +434,7 @@ def add_payment():
     master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
     rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -438,7 +446,7 @@ def add_payment():
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Submit the payment to the DB
     with open_db_from_flask_request_context(flask.current_app) as db:
@@ -454,7 +462,10 @@ def add_payment():
                                                       rotating_sig       = rotating_sig_bytes,
                                                       err                = err)
 
-    result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
+    if len(err.msg_list):
+        return make_error_response(status=1, errors=err.msg_list)
+
+    result = make_success_response(dict_result=proof.to_dict())
     return result
 
 def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDBAtPath:
@@ -470,7 +481,7 @@ def get_pro_subscription_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return html_bad_response(400, get.err_msg)
+        return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
     err                = base.ErrorSink()
@@ -481,7 +492,7 @@ def get_pro_subscription_proof() -> flask.Response:
     master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
     rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -491,7 +502,7 @@ def get_pro_subscription_proof() -> flask.Response:
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Request proof from the backend
     with open_db_from_flask_request_context(flask.current_app) as db:
@@ -506,7 +517,10 @@ def get_pro_subscription_proof() -> flask.Response:
                                                    rotating_sig   = rotating_sig_bytes,
                                                    err            = err)
 
-    result = html_bad_response(400, err.msg_list) if len(err.msg_list) else html_good_response(proof.to_dict())
+    if len(err.msg_list):
+        return make_error_response(status=1, errors=err.msg_list)
+
+    result = make_success_response(dict_result=proof.to_dict())
     return result
 
 @flask_blueprint.route(ROUTE_GET_REVOCATIONS, methods=['POST'])
@@ -514,20 +528,20 @@ def get_revocations():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return html_bad_response(400, get.err_msg)
+        return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
     err          = base.ErrorSink()
     version: int = base.dict_require(d=get.json, key='version', default_val=0, err_msg="Missing version from body",          err=err)
     ticket:  int = base.dict_require(d=get.json, key='ticket',  default_val=0, err_msg="Missing revocation ticket from body", err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     revocation_list:   list[dict[str, str | int]] = []
     revocation_ticket: int = 0
@@ -547,7 +561,10 @@ def get_revocations():
                         'gen_index_hash':   gen_index_hash.hex(),
                     })
 
-    result = html_good_response({'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
+    if len(err.msg_list):
+        return make_error_response(status=1, errors=err.msg_list)
+
+    result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
     return result
 
 @flask_blueprint.route(ROUTE_GET_PAYMENTS, methods=['POST'])
@@ -555,7 +572,7 @@ def get_payments():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return html_bad_response(400, get.err_msg)
+        return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
     err              = base.ErrorSink()
@@ -565,7 +582,7 @@ def get_payments():
     unix_ts_s:   int = base.dict_require(d=get.json, key='unix_ts_s',   default_val=0,  err_msg="Missing unix timestamp from body",    err=err)
     page:        int = base.dict_require(d=get.json, key='page',        default_val=0,  err_msg="Missing page from body",              err=err)
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -582,7 +599,7 @@ def get_payments():
         err.msg_list.append(f'Timestamp is too old to permit retrieval of payments, delta was {timestamp_delta}s')
 
     if len(err.msg_list):
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
@@ -591,7 +608,7 @@ def get_payments():
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception as e:
         err.msg_list.append('Signature failed to be verified')
-        return html_bad_response(400, err.msg_list)
+        return make_error_response(status=1, errors=err.msg_list)
 
     total_payments: int                        = 0
     total_pages:    int                        = 0
@@ -618,5 +635,5 @@ def get_payments():
                     'archive_unix_ts_s':       archive_unix_ts_s,
                 })
 
-    result = html_good_response({'version': 0, 'pages': total_pages, 'payments': total_payments, 'list': item_list})
+    result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'list': item_list})
     return result
