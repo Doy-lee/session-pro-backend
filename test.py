@@ -71,16 +71,16 @@ def test_backend_same_user_stacks_subscription():
                                                             rotating_pkey=rotating_key.verify_key,
                                                             payment_token_hash=it.payment_token_hash)
 
-        it.proof = backend.add_payment(version            = version,
-                                       sql_conn           = db.sql_conn,
-                                       signing_key        = backend_key,
-                                       creation_unix_ts_s = creation_unix_ts_s,
-                                       master_pkey        = master_key.verify_key,
-                                       rotating_pkey      = rotating_key.verify_key,
-                                       payment_token_hash = it.payment_token_hash,
-                                       master_sig         = master_key.sign(add_payment_hash).signature,
-                                       rotating_sig       = rotating_key.sign(add_payment_hash).signature,
-                                       err                = err)
+        it.proof = backend.add_pro_payment(version            = version,
+                                           sql_conn           = db.sql_conn,
+                                           signing_key        = backend_key,
+                                           creation_unix_ts_s = creation_unix_ts_s,
+                                           master_pkey        = master_key.verify_key,
+                                           rotating_pkey      = rotating_key.verify_key,
+                                           payment_token_hash = it.payment_token_hash,
+                                           master_sig         = master_key.sign(add_payment_hash).signature,
+                                           rotating_sig       = rotating_key.sign(add_payment_hash).signature,
+                                           err                = err)
         assert it.proof.success, '{}'.format(err.msg_list)
 
         # Verify payment was redeemed
@@ -175,7 +175,7 @@ def test_server_add_payment_flow():
                                                                 payment_token_hash=payment_token_hash)
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                shared_key=shared_key,
-                                               endpoint=server.ROUTE_ADD_PAYMENT,
+                                               endpoint=server.ROUTE_ADD_PRO_PAYMENT,
                                                request_body={
                                                    'version':       version,
                                                    'master_pkey':   bytes(master_key.verify_key).hex(),
@@ -249,7 +249,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_SUBSCRIPTION_PROOF,
+                                                  endpoint=server.ROUTE_GET_PRO_PROOF,
                                                   request_body=request_body)
 
         # POST and get response
@@ -318,7 +318,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_ADD_PAYMENT,
+                                                  endpoint=server.ROUTE_ADD_PRO_PAYMENT,
                                                   request_body=request_body)
 
         # POST and get response
@@ -367,7 +367,7 @@ def test_server_add_payment_flow():
         request_body={'version': 0, 'ticket':  0}
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_REVOCATIONS,
+                                                  endpoint=server.ROUTE_GET_PRO_REVOCATIONS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -411,7 +411,7 @@ def test_server_add_payment_flow():
     if 1:
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_REVOCATIONS,
+                                                  endpoint=server.ROUTE_GET_PRO_REVOCATIONS,
                                                   request_body={'version': 0, 'ticket':  curr_revocation_ticket})
 
         # POST and get response
@@ -459,7 +459,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PAYMENTS,
+                                                  endpoint=server.ROUTE_GET_PRO_PAYMENTS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -495,7 +495,7 @@ def test_server_add_payment_flow():
             hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -522,7 +522,7 @@ def test_server_add_payment_flow():
             hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -550,7 +550,7 @@ def test_server_add_payment_flow():
             hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),

@@ -26,7 +26,7 @@ API
 
   All routes accept v4 onion requests under the endpoint /oxen/lsrpc/v4
 
-  /add_payment
+  /add_pro_payment
     Description
       Register a new payment identified by a 32 byte hash of the payment token
       received by the third-party store (e.g.: Google Play Store) to the Session
@@ -95,7 +95,7 @@ API
         "status": 0
       }
 
-  /get_pro_subscription_proof
+  /get_pro_proof
     Description
       Pair a new `rotating_pkey` to a pre-existing Session Pro payment,
       generating a new proof that can be attached to messages to enable
@@ -164,7 +164,7 @@ API
         "status": 0
       }
 
-  /get_revocations
+  /get_pro_revocations
     Description
       Retrieve the list of revoked Session Pro Proofs. Proofs are signed can be
       validated offline in perpetuity until expiry. There are situations where
@@ -234,7 +234,7 @@ API
         "status": 0
       }
 
-  /get_payments
+  /get_pro_payments
     Description
       Retrieve the list of current and historical payments associated with the
       Session Pro master public key. The returned list is in descending order
@@ -349,16 +349,16 @@ class GetJSONFromFlaskRequest:
 
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
-CONFIG_DB_PATH_KEY               = 'session_pro_backend_db_path'
-CONFIG_DB_PATH_IS_URI_KEY        = 'session_pro_backend_db_path_is_uri'
+CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
+CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
-ROUTE_ADD_PAYMENT                = '/add_payment'
-ROUTE_GET_PRO_SUBSCRIPTION_PROOF = '/get_pro_subscription_proof'
-ROUTE_GET_REVOCATIONS            = '/get_revocations'
-ROUTE_GET_PAYMENTS               = '/get_payments'
+ROUTE_ADD_PRO_PAYMENT     = '/add_pro_payment'
+ROUTE_GET_PRO_PROOF       = '/get_pro_proof'
+ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
+ROUTE_GET_PRO_PAYMENTS    = '/get_pro_payments'
 
-RESPONSE_SUCCESS                 = 0
+RESPONSE_SUCCESS          = 0
 
 # How many seconds can the timestamp in the get all payments route can drift
 # from the current server's timestamp before it's flat out rejected
@@ -370,11 +370,11 @@ flask_blueprint = flask.Blueprint('session-pro-backend-blueprint', __name__)
 
 def make_error_response(status: int, errors: list[str]) -> flask.Response:
     assert status != RESPONSE_SUCCESS, f"{RESPONSE_SUCCESS} is reserved for success"
-    result = flask.jsonify({'status': status, 'version': RESPONSE_FAILED_VERSION, 'errors': errors})
+    result = flask.jsonify({'status': status, 'errors': errors})
     return result
 
 def make_success_response(dict_result: dict[str, str | int]) -> flask.Response:
-    result = flask.jsonify({'status': RESPONSE_SUCCESS, 'version': RESPONSE_SUCCESS_VERSION, 'result': dict_result})
+    result = flask.jsonify({'status': RESPONSE_SUCCESS, 'result': dict_result})
     return result
 
 def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskRequest:
@@ -410,8 +410,8 @@ def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_s
     result.register_blueprint(onion_req.flask_blueprint_v4)
     return result
 
-@flask_blueprint.route(ROUTE_ADD_PAYMENT, methods=['POST'])
-def add_payment():
+@flask_blueprint.route(ROUTE_ADD_PRO_PAYMENT, methods=['POST'])
+def add_pro_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -443,16 +443,16 @@ def add_payment():
     # Submit the payment to the DB
     with open_db_from_flask_request_context(flask.current_app) as db:
         creation_unix_ts_s: int = base.round_unix_ts_to_next_day(int(time.time()))
-        proof                   = backend.add_payment(sql_conn           = db.sql_conn,
-                                                      version            = version,
-                                                      signing_key        = db.runtime.backend_key,
-                                                      creation_unix_ts_s = creation_unix_ts_s,
-                                                      master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                      rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                      payment_token_hash = payment_token_bytes,
-                                                      master_sig         = master_sig_bytes,
-                                                      rotating_sig       = rotating_sig_bytes,
-                                                      err                = err)
+        proof                   = backend.add_pro_payment(sql_conn           = db.sql_conn,
+                                                          version            = version,
+                                                          signing_key        = db.runtime.backend_key,
+                                                          creation_unix_ts_s = creation_unix_ts_s,
+                                                          master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                          rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                          payment_token_hash = payment_token_bytes,
+                                                          master_sig         = master_sig_bytes,
+                                                          rotating_sig       = rotating_sig_bytes,
+                                                          err                = err)
 
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
@@ -468,8 +468,8 @@ def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDB
     result         = backend.OpenDBAtPath(db_path, db_path_is_uri)
     return result
 
-@flask_blueprint.route(ROUTE_GET_PRO_SUBSCRIPTION_PROOF, methods=['POST'])
-def get_pro_subscription_proof() -> flask.Response:
+@flask_blueprint.route(ROUTE_GET_PRO_PROOF, methods=['POST'])
+def get_pro_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -498,16 +498,16 @@ def get_pro_subscription_proof() -> flask.Response:
 
     # Request proof from the backend
     with open_db_from_flask_request_context(flask.current_app) as db:
-        proof = backend.get_pro_subscription_proof(sql_conn       = db.sql_conn,
-                                                   version        = version,
-                                                   signing_key    = db.runtime.backend_key,
-                                                   gen_index_salt = db.runtime.gen_index_salt,
-                                                   master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                   rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                   unix_ts_s      = unix_ts_s,
-                                                   master_sig     = master_sig_bytes,
-                                                   rotating_sig   = rotating_sig_bytes,
-                                                   err            = err)
+        proof = backend.get_pro_proof(sql_conn       = db.sql_conn,
+                                      version        = version,
+                                      signing_key    = db.runtime.backend_key,
+                                      gen_index_salt = db.runtime.gen_index_salt,
+                                      master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
+                                      rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                      unix_ts_s      = unix_ts_s,
+                                      master_sig     = master_sig_bytes,
+                                      rotating_sig   = rotating_sig_bytes,
+                                      err            = err)
 
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
@@ -515,8 +515,8 @@ def get_pro_subscription_proof() -> flask.Response:
     result = make_success_response(dict_result=proof.to_dict())
     return result
 
-@flask_blueprint.route(ROUTE_GET_REVOCATIONS, methods=['POST'])
-def get_revocations():
+@flask_blueprint.route(ROUTE_GET_PRO_REVOCATIONS, methods=['POST'])
+def get_pro_revocations():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -541,7 +541,7 @@ def get_revocations():
         revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
         if ticket < revocation_ticket:
             with base.SQLTransaction(db.sql_conn) as tx:
-                list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_revocations_item_list_iterator(tx)
+                list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_pro_revocations_iterator(tx)
                 for row in list_it:
                     gen_index:        int = row[0]
                     expiry_unix_ts_s: int = row[1]
@@ -559,8 +559,8 @@ def get_revocations():
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
     return result
 
-@flask_blueprint.route(ROUTE_GET_PAYMENTS, methods=['POST'])
-def get_payments():
+@flask_blueprint.route(ROUTE_GET_PRO_PAYMENTS, methods=['POST'])
+def get_pro_payments():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -606,12 +606,12 @@ def get_payments():
     total_pages:    int                        = 0
     item_list:      list[dict[str, str | int]] = []
     with open_db_from_flask_request_context(flask.current_app) as db:
-        total_payments = backend.get_all_payments_for_master_pkey_count(db.sql_conn, master_pkey=master_pkey_nacl)
+        total_payments = backend.get_pro_payments_count(db.sql_conn, master_pkey=master_pkey_nacl)
         total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
         offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
         with base.SQLTransaction(db.sql_conn) as tx:
             list_it: collections.abc.Iterator[tuple[int, int, int, bytes, int]] = \
-                    backend.get_all_payments_for_master_pkey_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
+                    backend.get_pro_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
             for row in list_it:
                 subscription_duration_s: int   = row[0]
                 creation_unix_ts_s:      int   = row[1]

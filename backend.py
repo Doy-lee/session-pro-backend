@@ -273,7 +273,7 @@ def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
     return result;
 
 
-def get_all_payments_for_master_pkey_count(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> int:
+def get_pro_payments_count(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> int:
     result: int = 0
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
@@ -287,7 +287,7 @@ def get_all_payments_for_master_pkey_count(sql_conn: sqlite3.Connection, master_
         result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
     return result;
 
-def get_all_payments_for_master_pkey_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, bytes, int]]:
+def get_pro_payments_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, bytes, int]]:
     assert tx.cursor is not None
     _ = tx.cursor.execute(f'''
         SELECT subscription_duration_s, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, 0 as archived_unix_ts_s
@@ -304,7 +304,7 @@ def get_all_payments_for_master_pkey_iterator(tx: base.SQLTransaction, master_pk
     result = typing.cast(collections.abc.Iterator[tuple[int, int, int, bytes, int]], tx.cursor)
     return result;
 
-def get_revocations_item_list_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
+def get_pro_revocations_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
     assert tx.cursor is not None
     _      = tx.cursor.execute('SELECT gen_index, expiry_unix_ts_s FROM revocations')
     result = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
@@ -717,7 +717,7 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     result = len(err.msg_list) == 0
     return result
 
-def add_payment(sql_conn:           sqlite3.Connection,
+def add_pro_payment(sql_conn:           sqlite3.Connection,
                 version:            int,
                 signing_key:        nacl.signing.SigningKey,
                 creation_unix_ts_s: int,
@@ -843,7 +843,7 @@ def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, acti
                                                  master_pkey=pkey,
                                                  activation_unix_ts_s=activation_unix_ts_s)
 
-def get_pro_subscription_proof(sql_conn:       sqlite3.Connection,
+def get_pro_proof(sql_conn:       sqlite3.Connection,
                                version:        int,
                                signing_key:    nacl.signing.SigningKey,
                                gen_index_salt: bytes,
