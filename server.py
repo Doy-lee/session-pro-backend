@@ -17,8 +17,8 @@ API
   All response endpoints follow the basic structure for success and failure
   respectively:
 
-  { "version": 0, "status": 0, "result": { <content...> },                                       } // On success
-  { "version": 0, "status": 1, "errors": [ "1st reason for error", "2nd reason for error", ... ] } // On failure
+  { "status": 0, "result": { <content...> }, "version": 0}                          // On success
+  { "status": 1, "errors": [ "1st reason for error", "2nd reason for error", ... ]} // On failure
 
   Which means that calling code should conditionally handle a root level
   `result` or `msg` type payload based on the status. `200` for success and
@@ -64,7 +64,6 @@ API
                      `rotating_pkey`
 
     Response
-      version:          1 byte version of the response which should be 0.
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
       gen_index_hash:   32 byte hash of the internal generation index that has
                         been allocated to the user.
@@ -93,8 +92,7 @@ API
           "sig": "90db1086e810606cceafb9641584434a711a3989863b270b5a2e6dd9ed44d90996da8c7b0f0d457836dbe21ab41f66f964786817b7a1da398974a5db12e38702",
           "version": 0
         },
-        "status": 0,
-        "version": 0
+        "status": 0
       }
 
   /get_pro_subscription_proof
@@ -135,7 +133,6 @@ API
                      `rotating_pkey`.
 
     Response
-      version:          1 byte version of the response which should be 0.
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
       gen_index_hash:   32 byte hash of the internal generation index that has
                         been allocated to the user.
@@ -164,8 +161,7 @@ API
           "sig": "a1ea79c2a274afc0a61e5946976297b42e1dcfdbde29f007c8fe43d2e616fc7e5db5865d05212e392a6395fabe1ed69f976fb19c25f4640df5b89a5870739e0e",
           "version": 0
         },
-        "status": 0,
-        "version": 0
+        "status": 0
       }
 
   /get_revocations
@@ -235,8 +231,7 @@ API
           "ticket": 1,
           "version": 0
         },
-        "status": 0,
-        "version": 0
+        "status": 0
       }
 
   /get_payments
@@ -330,8 +325,7 @@ API
           "payments": 2,
           "version": 0
         },
-        "status": 0,
-        "version": 0
+        "status": 0
       }
 '''
 
@@ -364,8 +358,6 @@ ROUTE_GET_PRO_SUBSCRIPTION_PROOF = '/get_pro_subscription_proof'
 ROUTE_GET_REVOCATIONS            = '/get_revocations'
 ROUTE_GET_PAYMENTS               = '/get_payments'
 
-RESPONSE_SUCCESS_VERSION         = 0
-RESPONSE_FAILED_VERSION          = 0
 RESPONSE_SUCCESS                 = 0
 
 # How many seconds can the timestamp in the get all payments route can drift
