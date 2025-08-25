@@ -21,8 +21,8 @@ API
   { "status": 1, "errors": [ "1st reason for error", "2nd reason for error", ... ]} // On failure
 
   Which means that calling code should conditionally handle a root level
-  `result` or `msg` type payload based on the status. `200` for success and
-  non-`200` for failures.
+  `result` or `msg` type payload based on the status. `0` for success and
+  non-`0` for failures.
 
   All routes accept v4 onion requests under the endpoint /oxen/lsrpc/v4
 
@@ -210,7 +210,7 @@ API
                list of the Session Pro backend. If this value is the same as the
                request's `ticket` then the list will be empty as there are no
                changes to the revocation list.
-      list:    Array of revocations, can be empty if there are no revocations or
+      items:   Array of revocations, can be empty if there are no revocations or
                the request ticket is the latest ticket managed by the backend.
         expiry_unix_ts_s: 8 byte unix timestamp indicating when the Session Pro
                            Proof identified by its `gen_index_hash` should be
@@ -225,7 +225,7 @@ API
       Response
       {
         "result": {
-          "list": [
+          "items": [
             { "expiry_unix_ts_s": 1758412800, "gen_index_hash": "3ab824a62d2b6004449d44962383294a5e6e833d6ed491930fbba726a2569c68" }
           ],
           "ticket": 1,
@@ -264,12 +264,11 @@ API
                    how many pages there are.
 
     Response
-      version:  1 byte, current version of the response which should be 0
       pages:    4 byte integer indicating the total number of pages starting
                 from 0
       payments: 4 byte integer indicating the total number of payments associated
                 with the `master_pkey`
-      list:     Array of payments associated with `master_pkey`. Payments are
+      items:    Array of payments associated with `master_pkey`. Payments are
                 returned in descending order by the payment date
         activation_unix_ts_s:    8 byte unix timestamp indicating if the payment
                                  is has been activated to enable entitlement to
@@ -305,7 +304,7 @@ API
       Response
       {
         "result": {
-          "list": [
+          "items": [
             {
               "activation_unix_ts_s": 1755734400,
               "archive_unix_ts_s": 0,
@@ -373,7 +372,7 @@ def make_error_response(status: int, errors: list[str]) -> flask.Response:
     result = flask.jsonify({'status': status, 'errors': errors})
     return result
 
-def make_success_response(dict_result: dict[str, str | int]) -> flask.Response:
+def make_success_response(dict_result: typing.Any) -> flask.Response:
     result = flask.jsonify({'status': RESPONSE_SUCCESS, 'result': dict_result})
     return result
 
@@ -535,7 +534,7 @@ def get_pro_revocations():
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
-    revocation_list:   list[dict[str, str | int]] = []
+    revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
     with open_db_from_flask_request_context(flask.current_app) as db:
         revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
@@ -548,7 +547,7 @@ def get_pro_revocations():
                     gen_index_hash: bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=db.runtime.gen_index_salt)
                     assert gen_index < db.runtime.gen_index
                     assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
-                    revocation_list.append({
+                    revocation_items.append({
                         'expiry_unix_ts_s': expiry_unix_ts_s,
                         'gen_index_hash':   gen_index_hash.hex(),
                     })
@@ -556,7 +555,7 @@ def get_pro_revocations():
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
-    result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'list': revocation_list})
+    result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result
 
 @flask_blueprint.route(ROUTE_GET_PRO_PAYMENTS, methods=['POST'])
@@ -604,7 +603,7 @@ def get_pro_payments():
 
     total_payments: int                        = 0
     total_pages:    int                        = 0
-    item_list:      list[dict[str, str | int]] = []
+    items:          list[dict[str, str | int]] = []
     with open_db_from_flask_request_context(flask.current_app) as db:
         total_payments = backend.get_pro_payments_count(db.sql_conn, master_pkey=master_pkey_nacl)
         total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
@@ -619,7 +618,7 @@ def get_pro_payments():
                 payment_token_hash:      bytes = row[3]
                 archive_unix_ts_s:       int   = row[4]
 
-                item_list.append({
+                items.append({
                     'subscription_duration_s': subscription_duration_s,
                     'creation_unix_ts_s':      creation_unix_ts_s,
                     'activation_unix_ts_s':    activation_unix_ts_s,
@@ -627,5 +626,5 @@ def get_pro_payments():
                     'archive_unix_ts_s':       archive_unix_ts_s,
                 })
 
-    result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'list': item_list})
+    result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'items': items})
     return result
