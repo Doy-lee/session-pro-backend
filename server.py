@@ -64,6 +64,7 @@ API
                      `rotating_pkey`
 
     Response
+      version:          1 byte version value from the request
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
       gen_index_hash:   32 byte hash of the internal generation index that has
                         been allocated to the user.
@@ -133,6 +134,7 @@ API
                      `rotating_pkey`.
 
     Response
+      version:          1 byte version value from the request
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
       gen_index_hash:   32 byte hash of the internal generation index that has
                         been allocated to the user.

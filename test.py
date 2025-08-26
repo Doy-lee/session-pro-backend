@@ -81,7 +81,6 @@ def test_backend_same_user_stacks_subscription():
                                            master_sig         = master_key.sign(add_payment_hash).signature,
                                            rotating_sig       = rotating_key.sign(add_payment_hash).signature,
                                            err                = err)
-        assert it.proof.success, '{}'.format(err.msg_list)
 
         # Verify payment was redeemed
         unredeemed_payment_list = backend.get_unredeemed_payments_list(db.sql_conn)
@@ -220,10 +219,10 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.make_pro_subscription_proof_hash(result_version,
-                                                                     result_gen_index_hash,
-                                                                     result_rotating_pkey,
-                                                                     result_expiry_unix_ts_s)
+        proof_hash: bytes = backend.make_pro_proof_hash(result_version,
+                                                        result_gen_index_hash,
+                                                        result_rotating_pkey,
+                                                        result_expiry_unix_ts_s)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         first_gen_index_hash   = result_gen_index_hash
@@ -233,7 +232,7 @@ def test_server_add_payment_flow():
         new_rotating_key    = nacl.signing.SigningKey.generate()
         version             = 0
         unix_ts_s           = int(time.time())
-        hash_to_sign: bytes = backend.make_get_pro_subscription_proof_hash(version=version,
+        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version=version,
                                                                            master_pkey=master_key.verify_key,
                                                                            rotating_pkey=new_rotating_key.verify_key,
                                                                            unix_ts_s=unix_ts_s)
@@ -287,10 +286,10 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == new_rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash = backend.make_pro_subscription_proof_hash(result_version,
-                                                              result_gen_index_hash,
-                                                              result_rotating_pkey,
-                                                              result_expiry_unix_ts_s)
+        proof_hash = backend.make_pro_proof_hash(result_version,
+                                                 result_gen_index_hash,
+                                                 result_rotating_pkey,
+                                                 result_expiry_unix_ts_s)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     if 1: # Register another payment on the same user, this will revoke the old proof
@@ -356,10 +355,10 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.make_pro_subscription_proof_hash(result_version,
-                                                                     result_gen_index_hash,
-                                                                     result_rotating_pkey,
-                                                                     result_expiry_unix_ts_s)
+        proof_hash: bytes = backend.make_pro_proof_hash(result_version,
+                                                        result_gen_index_hash,
+                                                        result_rotating_pkey,
+                                                        result_expiry_unix_ts_s)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0

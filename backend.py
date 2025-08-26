@@ -27,7 +27,6 @@ class SubscriptionDuration(enum.Enum):
     Days365 = 2
 
 class ProSubscriptionProof:
-    success:          bool                   = False
     version:          int                    = 0
     gen_index_hash:   bytes                  = b''
     rotating_pkey:    nacl.signing.VerifyKey = nacl.signing.VerifyKey(ZERO_BYTES32)
@@ -625,7 +624,7 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
 
     return result
 
-def make_pro_subscription_proof_hash(version:          int,
+def make_pro_proof_hash(version:          int,
                                      gen_index_hash:   bytes,
                                      rotating_pkey:    nacl.signing.VerifyKey,
                                      expiry_unix_ts_s: int) -> bytes:
@@ -638,10 +637,10 @@ def make_pro_subscription_proof_hash(version:          int,
     result: bytes = hasher.digest()
     return result
 
-def make_get_pro_subscription_proof_hash(version:       int,
-                                         master_pkey:   nacl.signing.VerifyKey,
-                                         rotating_pkey: nacl.signing.VerifyKey,
-                                         unix_ts_s:     int) -> bytes:
+def make_get_pro_proof_hash(version:       int,
+                            master_pkey:   nacl.signing.VerifyKey,
+                            rotating_pkey: nacl.signing.VerifyKey,
+                            unix_ts_s:     int) -> bytes:
     '''Make the hash to sign for a pre-existing subscription by authorising
     a new rotating_pkey to be used for the Session Pro subscription associated
     with master_pkey'''
@@ -661,15 +660,14 @@ def build_proof(gen_index:        int,
     assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
     result: ProSubscriptionProof = ProSubscriptionProof()
     result.version               = 0
-    result.success               = True
     result.gen_index_hash        = make_gen_index_hash(gen_index=gen_index, gen_index_salt=gen_index_salt)
     result.rotating_pkey         = rotating_pkey
     result.expiry_unix_ts_s      = expiry_unix_ts_s
 
-    hash_to_sign: bytes = make_pro_subscription_proof_hash(version=result.version,
-                                                           gen_index_hash=result.gen_index_hash,
-                                                           rotating_pkey=result.rotating_pkey,
-                                                           expiry_unix_ts_s=result.expiry_unix_ts_s)
+    hash_to_sign: bytes = make_pro_proof_hash(version=result.version,
+                                              gen_index_hash=result.gen_index_hash,
+                                              rotating_pkey=result.rotating_pkey,
+                                              expiry_unix_ts_s=result.expiry_unix_ts_s)
     result.sig = signing_key.sign(hash_to_sign).signature
     return result
 
@@ -722,16 +720,18 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     return result
 
 def add_pro_payment(sql_conn:           sqlite3.Connection,
-                version:            int,
-                signing_key:        nacl.signing.SigningKey,
-                creation_unix_ts_s: int,
-                master_pkey:        nacl.signing.VerifyKey,
-                rotating_pkey:      nacl.signing.VerifyKey,
-                payment_token_hash: bytes,
-                master_sig:         bytes,
-                rotating_sig:       bytes,
-                err:                base.ErrorSink) -> ProSubscriptionProof:
+                    version:            int,
+                    signing_key:        nacl.signing.SigningKey,
+                    creation_unix_ts_s: int,
+                    master_pkey:        nacl.signing.VerifyKey,
+                    rotating_pkey:      nacl.signing.VerifyKey,
+                    payment_token_hash: bytes,
+                    master_sig:         bytes,
+                    rotating_sig:       bytes,
+                    err:                base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
+
+    add_unredeemed_payment(sql_conn, payment_token_hash, base.SECONDS_IN_DAY * 30, err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_payment_hash(version=version,
@@ -860,10 +860,10 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # Verify some of the request parameters
-    hash_to_sign: bytes = make_get_pro_subscription_proof_hash(version=version,
-                                                               master_pkey=master_pkey,
-                                                               rotating_pkey=rotating_pkey,
-                                                               unix_ts_s=unix_ts_s)
+    hash_to_sign: bytes = make_get_pro_proof_hash(version=version,
+                                                  master_pkey=master_pkey,
+                                                  rotating_pkey=rotating_pkey,
+                                                  unix_ts_s=unix_ts_s)
 
     _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key=signing_key,
                                                                    master_pkey=master_pkey,
@@ -902,7 +902,6 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
                              expiry_unix_ts_s=user.expiry_unix_ts_s,
                              signing_key=signing_key,
                              gen_index_salt=gen_index_salt);
-        assert result.success
     else:
         err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(user.master_pkey).hex()} {user.gen_index} {user.expiry_unix_ts_s}')
 
