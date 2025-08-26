@@ -153,7 +153,7 @@ class OpenDBAtPath:
         return False
 
 def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
-    personalization = b'SeshProBackend'
+    personalization = b'SeshProBackend__'
     final_salt      = salt  if salt else b''
     result          = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE, person=personalization, salt=final_salt)
     return result
@@ -361,7 +361,7 @@ def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSi
 
     return result
 
-def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
+def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signing.SigningKey | None = None) -> SetupDBResult:
     result: SetupDBResult = SetupDBResult()
     result.path           = path
     try:
@@ -492,13 +492,17 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink) -> SetupDBResult:
         assert tx.cursor is not None
 
         try:
-            _ = tx.cursor.executescript(sql_stmt)
-            _ = tx.cursor.execute('''
-                INSERT INTO runtime
-                SELECT 0, ?, ?, 0, 0
-                WHERE NOT EXISTS (SELECT 1 FROM runtime)
-            ''', (os.urandom(hashlib.blake2b.SALT_SIZE),
-                  bytes(nacl.signing.SigningKey.generate())))
+            _                  = tx.cursor.executescript(sql_stmt)
+            _                  = tx.cursor.execute('SELECT EXISTS (SELECT 1 FROM runtime) as row_exists')
+            runtime_row_exists = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
+            if not runtime_row_exists:
+                if backend_key == None:
+                    backend_key = nacl.signing.SigningKey.generate()
+
+                _ = tx.cursor.execute('''
+                    INSERT INTO runtime
+                    SELECT 0, ?, ?, 0, 0
+                ''', (os.urandom(hashlib.blake2b.SALT_SIZE), bytes(backend_key)))
             result.success = True
         except Exception as e:
             err.msg_list.append(f"Failed to bootstrap DB tables: {e}")
@@ -844,15 +848,15 @@ def add_revocation(sql_conn: sqlite3.Connection, payment_token_hash: bytes, acti
                                                  activation_unix_ts_s=activation_unix_ts_s)
 
 def get_pro_proof(sql_conn:       sqlite3.Connection,
-                               version:        int,
-                               signing_key:    nacl.signing.SigningKey,
-                               gen_index_salt: bytes,
-                               master_pkey:    nacl.signing.VerifyKey,
-                               rotating_pkey:  nacl.signing.VerifyKey,
-                               unix_ts_s:      int,
-                               master_sig:     bytes,
-                               rotating_sig:   bytes,
-                               err:            base.ErrorSink) -> ProSubscriptionProof:
+                  version:        int,
+                  signing_key:    nacl.signing.SigningKey,
+                  gen_index_salt: bytes,
+                  master_pkey:    nacl.signing.VerifyKey,
+                  rotating_pkey:  nacl.signing.VerifyKey,
+                  unix_ts_s:      int,
+                  master_sig:     bytes,
+                  rotating_sig:   bytes,
+                  err:            base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # Verify some of the request parameters

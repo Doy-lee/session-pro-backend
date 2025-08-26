@@ -22,6 +22,7 @@ import time
 import datetime
 import signal
 import types
+import nacl.signing
 
 import base
 import backend
@@ -94,6 +95,7 @@ def entry_point() -> flask.Flask:
     db_path:        str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',                 './backend.db')
     db_path_is_uri: bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI', False)
     print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
+    dev_backend:    bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',            False)
 
     # Ensure the path is setup for writing the database
     try:
@@ -102,9 +104,15 @@ def entry_point() -> flask.Flask:
         print(f'Failed to create directory for {db_path}: {e}')
         os._exit(1)
 
+    # A developer backend generates a deterministic key for testing purposes
+    backend_key: nacl.signing.SigningKey | None = None
+    if dev_backend:
+        DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
+        backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
+
     # Open the DB (create tables if necessary)
     err = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(path=str(db_path), uri=db_path_is_uri, err=err)
+    db: backend.SetupDBResult = backend.setup_db(path=str(db_path), uri=db_path_is_uri, err=err, backend_key=backend_key)
     if len(err.msg_list) > 0:
         print(f"{err.msg_list}")
         os._exit(1)

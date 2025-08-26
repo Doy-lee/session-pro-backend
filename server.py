@@ -32,7 +32,7 @@ API
       received by the third-party store (e.g.: Google Play Store) to the Session
       Pro backend. The hash of the token is defined as:
 
-        hash = blake2b32(person='SeshProBackend', payment_token)
+        hash = blake2b32(person='SeshProBackend__', payment_token)
 
       The master public key `master_pkey` should be the deterministically
       derived Ed25519 public key from the user's Session Account seed. The
@@ -42,7 +42,7 @@ API
       The embedded `master_sig` and `rotating_sig` signature must sign over a
       32 byte hash of the request components (in little endian):
 
-        hash = blake2b32(person='SeshProBackend', version || master_pkey || rotating_pkey || payment_token_hash)
+        hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_token_hash)
 
       This request will fail if the Session Pro backend has not witnessed the
       equivalent hashed payment token independently from the storefront that the
@@ -106,7 +106,7 @@ API
       The embedded `master_sig` and `rotating_sig` signature must sign over a
       32 byte hash of the request components (in little endian):
 
-        hash = blake2b32(person='SeshProBackend', version || master_pkey || rotating_pkey || unix_ts_s)
+        hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || unix_ts_s)
 
       Once the response has been received, the caller should store the proof
       offline and embed it into their messages on the Session Protocol, signing
@@ -248,7 +248,7 @@ API
       The embedded `master_sig` signature must sign over the 32 byte hash of the
       requests contents (in little endian):
 
-        hash = blake2b32(person='SeshProBackend', version || master_pkey || unix_ts_s || page)
+        hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_s || page)
 
     Request
       version:     1 byte, current version of the request which should be 0

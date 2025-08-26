@@ -49,6 +49,18 @@ SESH_PRO_BACKEND_DB_PATH_IS_URI=[0|1] (default: 0)
 # Pretty print the contents of the tables in the database to standard out and
 # exit
 SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)
+
+# Start the server in developer mode, this is most likely only interesting if
+# you are developing locally. If the the DB hasn't been bootstrapped yet, this
+# causes the backend to generate a deterministic secret Ed25519 key with 32 0xCD
+# bytes and hence creates the following key pairs:
+#
+#   Secret: 0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+#   Public: 0xfc947730f49eb01427a66e050733294d9e520e545c7a27125a780634e0860a27
+#
+# If the DB already exists this won't have any effect as it will not overwrite
+# the existing DB.
+SESH_PRO_BACKEND_DEV=[0|1] (default: 0)
 ```
 
 ## Build and run
