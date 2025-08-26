@@ -66,7 +66,7 @@ def test_backend_same_user_stacks_subscription():
 
         # Register the payment
         version: int = 0
-        add_payment_hash: bytes = backend.make_payment_hash(version=version,
+        add_payment_hash: bytes = backend.make_add_pro_payment_hash(version=version,
                                                             master_pkey=master_key.verify_key,
                                                             rotating_pkey=rotating_key.verify_key,
                                                             payment_token_hash=it.payment_token_hash)
@@ -168,7 +168,7 @@ def test_server_add_payment_flow():
     first_expiry_unix_ts_s: int = 0
     if 1: # Simulate client request to register a payment
         version: int = 0
-        payment_hash_to_sign: bytes = backend.make_payment_hash(version=version,
+        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
                                                                 master_pkey=master_key.verify_key,
                                                                 rotating_pkey=rotating_key.verify_key,
                                                                 payment_token_hash=payment_token_hash)
@@ -219,10 +219,10 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.make_pro_proof_hash(result_version,
-                                                        result_gen_index_hash,
-                                                        result_rotating_pkey,
-                                                        result_expiry_unix_ts_s)
+        proof_hash: bytes = backend.build_proof_hash(result_version,
+                                                     result_gen_index_hash,
+                                                     result_rotating_pkey,
+                                                     result_expiry_unix_ts_s)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         first_gen_index_hash   = result_gen_index_hash
@@ -233,9 +233,9 @@ def test_server_add_payment_flow():
         version             = 0
         unix_ts_s           = int(time.time())
         hash_to_sign: bytes = backend.make_get_pro_proof_hash(version=version,
-                                                                           master_pkey=master_key.verify_key,
-                                                                           rotating_pkey=new_rotating_key.verify_key,
-                                                                           unix_ts_s=unix_ts_s)
+                                                              master_pkey=master_key.verify_key,
+                                                              rotating_pkey=new_rotating_key.verify_key,
+                                                              unix_ts_s=unix_ts_s)
 
         request_body = {
             'version':       version,
@@ -286,10 +286,10 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == new_rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash = backend.make_pro_proof_hash(result_version,
-                                                 result_gen_index_hash,
-                                                 result_rotating_pkey,
-                                                 result_expiry_unix_ts_s)
+        proof_hash = backend.build_proof_hash(result_version,
+                                              result_gen_index_hash,
+                                              result_rotating_pkey,
+                                              result_expiry_unix_ts_s)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     if 1: # Register another payment on the same user, this will revoke the old proof
@@ -301,10 +301,10 @@ def test_server_add_payment_flow():
                                        subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                        err=err)
 
-        payment_hash_to_sign: bytes = backend.make_payment_hash(version=version,
-                                                                master_pkey=master_key.verify_key,
-                                                                rotating_pkey=rotating_key.verify_key,
-                                                                payment_token_hash=new_payment_token_hash)
+        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
+                                                                        master_pkey=master_key.verify_key,
+                                                                        rotating_pkey=rotating_key.verify_key,
+                                                                        payment_token_hash=new_payment_token_hash)
 
         request_body={
             'version':       version,
@@ -355,7 +355,7 @@ def test_server_add_payment_flow():
         assert result_rotating_pkey == rotating_key.verify_key
 
         # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.make_pro_proof_hash(result_version,
+        proof_hash: bytes = backend.build_proof_hash(result_version,
                                                         result_gen_index_hash,
                                                         result_rotating_pkey,
                                                         result_expiry_unix_ts_s)

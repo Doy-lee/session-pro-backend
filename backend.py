@@ -164,10 +164,10 @@ def make_gen_index_hash(gen_index: int, gen_index_salt: bytes) -> bytes:
     result = hasher.digest()
     return result
 
-def make_payment_hash(version:            int,
-                      master_pkey:        nacl.signing.VerifyKey,
-                      rotating_pkey:      nacl.signing.VerifyKey,
-                      payment_token_hash: bytes) -> bytes:
+def make_add_pro_payment_hash(version:            int,
+                              master_pkey:        nacl.signing.VerifyKey,
+                              rotating_pkey:      nacl.signing.VerifyKey,
+                              payment_token_hash: bytes) -> bytes:
     hasher: hashlib.blake2b = make_blake2b_hasher()
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
@@ -624,19 +624,6 @@ def update_db_after_payments_changed(tx:                   base.SQLTransaction,
 
     return result
 
-def make_pro_proof_hash(version:          int,
-                                     gen_index_hash:   bytes,
-                                     rotating_pkey:    nacl.signing.VerifyKey,
-                                     expiry_unix_ts_s: int) -> bytes:
-    '''Make the hash to sign for an new/updated subscription'''
-    hasher: hashlib.blake2b = make_blake2b_hasher()
-    hasher.update(version.to_bytes(length=1, byteorder='little'))
-    hasher.update(gen_index_hash)
-    hasher.update(bytes(rotating_pkey))
-    hasher.update(expiry_unix_ts_s.to_bytes(length=8, byteorder='little'))
-    result: bytes = hasher.digest()
-    return result
-
 def make_get_pro_proof_hash(version:       int,
                             master_pkey:   nacl.signing.VerifyKey,
                             rotating_pkey: nacl.signing.VerifyKey,
@@ -652,6 +639,19 @@ def make_get_pro_proof_hash(version:       int,
     result: bytes = hasher.digest()
     return result
 
+def build_proof_hash(version:          int,
+                     gen_index_hash:   bytes,
+                     rotating_pkey:    nacl.signing.VerifyKey,
+                     expiry_unix_ts_s: int) -> bytes:
+    '''Make the hash to the backend signs for to certify the proof'''
+    hasher: hashlib.blake2b = make_blake2b_hasher()
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
+    hasher.update(gen_index_hash)
+    hasher.update(bytes(rotating_pkey))
+    hasher.update(expiry_unix_ts_s.to_bytes(length=8, byteorder='little'))
+    result: bytes = hasher.digest()
+    return result
+
 def build_proof(gen_index:        int,
                 rotating_pkey:    nacl.signing.VerifyKey,
                 expiry_unix_ts_s: int,
@@ -664,10 +664,10 @@ def build_proof(gen_index:        int,
     result.rotating_pkey         = rotating_pkey
     result.expiry_unix_ts_s      = expiry_unix_ts_s
 
-    hash_to_sign: bytes = make_pro_proof_hash(version=result.version,
-                                              gen_index_hash=result.gen_index_hash,
-                                              rotating_pkey=result.rotating_pkey,
-                                              expiry_unix_ts_s=result.expiry_unix_ts_s)
+    hash_to_sign: bytes = build_proof_hash(version=result.version,
+                                           gen_index_hash=result.gen_index_hash,
+                                           rotating_pkey=result.rotating_pkey,
+                                           expiry_unix_ts_s=result.expiry_unix_ts_s)
     result.sig = signing_key.sign(hash_to_sign).signature
     return result
 
@@ -734,10 +734,10 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
     add_unredeemed_payment(sql_conn, payment_token_hash, base.SECONDS_IN_DAY * 30, err)
 
     # Verify some of the request parameters
-    hash_to_sign: bytes = make_payment_hash(version=version,
-                                            master_pkey=master_pkey,
-                                            rotating_pkey=rotating_pkey,
-                                            payment_token_hash=payment_token_hash)
+    hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
+                                                    master_pkey=master_pkey,
+                                                    rotating_pkey=rotating_pkey,
+                                                    payment_token_hash=payment_token_hash)
     _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key=signing_key,
                                                                    master_pkey=master_pkey,
                                                                    rotating_pkey=rotating_pkey,
