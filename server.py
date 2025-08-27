@@ -432,7 +432,6 @@ def add_pro_payment():
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-        nacl.signing.SigningKey
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
     rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
     payment_token_bytes = base.hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)

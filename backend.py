@@ -731,7 +731,26 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
                     err:                base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
 
-    add_unredeemed_payment(sql_conn, payment_token_hash, base.SECONDS_IN_DAY * 30, err)
+    # In developer mode, the server is intended to be launched locally and we
+    # typically run libsession tests against it (to get accurate request and
+    # response payloads) from the server. In these tests we try and register
+    # a payment, but the design of the pro backend is that it pulls payment
+    # tokens from the 3rd party storefronts.
+    #
+    # It must have pulled the token first before permitting the payment token to
+    # be registered. Here we skipping the pulling step by implicitly registering
+    # the token into our unredeemed queue, then process the payment from the
+    # unredeemed queue immediately.
+    #
+    # There is a sanity check to _only_ allow this in developer mode. In
+    # any other context having this turn on would be a critical failure and
+    # would allow someone to register arbitrary Session Pro subscriptions
+    # without a valid payment.
+    if base.DEV_BACKEND_MODE:
+        runtime_row: RuntimeRow = get_runtime(sql_conn)
+        assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
+                "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+        add_unredeemed_payment(sql_conn, payment_token_hash, base.SECONDS_IN_DAY * 30, err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,

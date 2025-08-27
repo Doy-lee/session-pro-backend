@@ -107,6 +107,7 @@ def entry_point() -> flask.Flask:
     # A developer backend generates a deterministic key for testing purposes
     backend_key: nacl.signing.SigningKey | None = None
     if dev_backend:
+        base.DEV_BACKEND_MODE          = True
         DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
@@ -117,13 +118,35 @@ def entry_point() -> flask.Flask:
         print(f"{err.msg_list}")
         os._exit(1)
 
+    # Sanity check dev mode
+    if base.DEV_BACKEND_MODE:
+        assert db.sql_conn
+        runtime_row: backend.RuntimeRow = backend.get_runtime(db.sql_conn)
+        assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
+                "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+
     # Dump some startup diagnostics
     assert db.sql_conn is not None
     info_string: str = backend.db_info_string(sql_conn=db.sql_conn, db_path=db.path, err=err)
     if len(err.msg_list) > 0:
         print(f"{err.msg_list}")
         os._exit(1)
+
+    if dev_backend:
+        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
+        print("### @@@ !!!                  !!! @@@ ###")
+        print("### @@@ !!! Dev Mode Enabled !!! @@@ ###")
+        print("### @@@ !!!                  !!! @@@ ###")
+        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
+
     print(f'Session Pro Backend\n{info_string}')
+
+    if dev_backend:
+        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
+        print("### @@@ !!!                  !!! @@@ ###")
+        print("### @@@ !!! Dev Mode Enabled !!! @@@ ###")
+        print("### @@@ !!!                  !!! @@@ ###")
+        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
 
     # Handle printing of the DB to standard out if requested
     if print_tables:

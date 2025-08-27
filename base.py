@@ -10,7 +10,9 @@ import sqlite3
 import datetime
 import typing
 
-SECONDS_IN_DAY: int   = 60 * 60 * 24
+SECONDS_IN_DAY:                 int  = 60 * 60 * 24
+DEV_BACKEND_MODE:               bool = False
+DEV_BACKEND_DETERMINISTIC_SKEY       = bytes([0xCD] * 32)
 
 class ErrorSink:
     '''
