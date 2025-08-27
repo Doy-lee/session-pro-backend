@@ -818,7 +818,11 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
         runtime_row: RuntimeRow = get_runtime(sql_conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
-        add_unredeemed_payment(sql_conn, payment_token_hash, base.SECONDS_IN_DAY * 30, err)
+        add_unredeemed_payment(sql_conn=sql_conn,
+                               payment_token_hash=payment_token_hash,
+                               subscription_duration_s=base.SECONDS_IN_DAY * 30,
+                               payment_provider=base.PaymentProvider.GooglePlayStore,
+                               err=err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
