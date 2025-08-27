@@ -894,22 +894,9 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
     if len(err.msg_list) > 0:
         return result
 
-    # Then verify version and time
+    # Then verify version
     if version != 0:
         err.msg_list.append(f'Unrecognised version {version} was given')
-
-    # Validate the timestamp is within 5 minutes of the current time (mitigate replay attacks)
-    UNIX_TS_S_THRESHOLD: int = 60 * 5;
-    now:                 int = int(time.time())
-    max_unix_ts_s:       int = now + UNIX_TS_S_THRESHOLD
-    min_unix_ts_s:       int = now - UNIX_TS_S_THRESHOLD
-
-    if unix_ts_s < min_unix_ts_s:
-        err.msg_list.append(f'Nonce timestamp is too far in the past: {unix_ts_s} (min {min_unix_ts_s})')
-
-    if unix_ts_s > max_unix_ts_s:
-        err.msg_list.append(f'Nonce timestamp is too far in the future: {unix_ts_s} (max {max_unix_ts_s})')
-
     if len(err.msg_list) > 0:
         return result
 

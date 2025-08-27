@@ -388,7 +388,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_list:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
+        result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
         result_ticket:  int                        = base.dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0
@@ -397,8 +397,8 @@ def test_server_add_payment_flow():
 
         # Check that the server returned the revocation list with the iniital
         # payment that got revoked after we stacked a new subscription ontop
-        assert len(result_list) == 1
-        for it in result_list:
+        assert len(result_items) == 1
+        for it in result_items:
             it: dict[str, int | str]
             assert 'expiry_unix_ts_s' in it and isinstance(it['expiry_unix_ts_s'], int)
             assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
@@ -432,7 +432,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_list:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
+        result_items:   list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
         result_ticket:  int                        = base.dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -441,7 +441,7 @@ def test_server_add_payment_flow():
         # List should be empty because we passed in the newest revocation
         # ticket. There are no changes to the revocation list so the backend
         # will return an empty list
-        assert len(result_list) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
     # Try grabbing the payments list
     if 1:
@@ -480,13 +480,13 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version:  int                        = base.dict_require(d=result_json, key='version',  default_val=0,  err_msg='Missing field', err=err)
-        result_list:     list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',     default_val=[], err_msg='Missing field', err=err)
+        result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',    default_val=[], err_msg='Missing field', err=err)
         result_pages:    int                        = base.dict_require(d=result_json, key='pages',    default_val=0,  err_msg='Missing field', err=err)
         result_payments: int                        = base.dict_require(d=result_json, key='payments', default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert len(result_list)  == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items)  == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but use a too old timestamp
         if 1:
@@ -575,13 +575,13 @@ def test_server_add_payment_flow():
 
             # Extract the fields
             result_version:  int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-            result_list:     list[dict[str, int | str]] = base.dict_require(d=result_json, key='list',    default_val=[], err_msg='Missing field', err=err)
+            result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
             result_pages:    int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
             result_payments: int                        = base.dict_require(d=result_json, key='payments',default_val=0,  err_msg='Missing field', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
             assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(result_list)  == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert len(result_items)  == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently

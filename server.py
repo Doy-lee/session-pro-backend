@@ -493,6 +493,19 @@ def get_pro_proof() -> flask.Response:
     rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+
+    # Validate the timestamp is within 5 minutes of the current time (mitigate replay attacks)
+    UNIX_TS_S_THRESHOLD: int = 60 * 5;
+    now:                 int = int(time.time())
+    max_unix_ts_s:       int = now + UNIX_TS_S_THRESHOLD
+    min_unix_ts_s:       int = now - UNIX_TS_S_THRESHOLD
+
+    if unix_ts_s < min_unix_ts_s:
+        err.msg_list.append(f'Nonce timestamp is too far in the past: {unix_ts_s} (min {min_unix_ts_s})')
+
+    if unix_ts_s > max_unix_ts_s:
+        err.msg_list.append(f'Nonce timestamp is too far in the future: {unix_ts_s} (max {max_unix_ts_s})')
+
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
