@@ -623,17 +623,19 @@ def get_pro_payments():
         total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
         offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
         with base.SQLTransaction(db.sql_conn) as tx:
-            list_it: collections.abc.Iterator[tuple[int, int, int, bytes, int]] = \
+            list_it: collections.abc.Iterator[tuple[int, int, int, int, bytes, int]] = \
                     backend.get_pro_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
             for row in list_it:
                 subscription_duration_s: int   = row[0]
-                creation_unix_ts_s:      int   = row[1]
-                activation_unix_ts_s:    int   = row[2]
-                payment_token_hash:      bytes = row[3]
-                archive_unix_ts_s:       int   = row[4]
+                payment_provider:        int   = row[1]
+                creation_unix_ts_s:      int   = row[2]
+                activation_unix_ts_s:    int   = row[3]
+                payment_token_hash:      bytes = row[4]
+                archive_unix_ts_s:       int   = row[5]
 
                 items.append({
                     'subscription_duration_s': subscription_duration_s,
+                    'payment_provider':        payment_provider,
                     'creation_unix_ts_s':      creation_unix_ts_s,
                     'activation_unix_ts_s':    activation_unix_ts_s,
                     'payment_token_hash':      payment_token_hash.hex(),

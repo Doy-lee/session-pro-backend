@@ -9,6 +9,12 @@ import traceback
 import sqlite3
 import datetime
 import typing
+import enum
+
+class PaymentProvider(enum.Enum):
+    Nil             = 0
+    GooglePlayStore = 1
+    iOSAppStore     = 2
 
 SECONDS_IN_DAY:                 int  = 60 * 60 * 24
 DEV_BACKEND_MODE:               bool = False
@@ -159,6 +165,16 @@ def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
                             seconds = int(value)
                             days    = seconds / SECONDS_IN_DAY
                             content.append(f'{seconds} ({days:.2f} days)')
+                        elif col == 'payment_provider':
+                            value_int = int(value)
+                            if value_int == PaymentProvider.Nil.value:
+                                content.append(f'Nil ({value_int})')
+                            elif value_int == PaymentProvider.GooglePlayStore.value:
+                                content.append(f'Google Play Store ({value_int})')
+                            elif value_int == PaymentProvider.iOSAppStore.value:
+                                content.append(f'iOS App Store ({value_int})')
+                            else:
+                                content.append(f'Unknown ({value_int})')
                         else:
                             content.append(str(value))
                     table_str.contents.append(content)

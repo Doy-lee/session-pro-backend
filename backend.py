@@ -3,10 +3,9 @@ import nacl.signing
 import sqlite3
 import hashlib
 import os
-import enum
-import time
 import typing
 import collections.abc
+import datetime
 
 import base
 
@@ -20,11 +19,6 @@ class ExpireResult:
     payments:                     int  = 0
     revocations:                  int  = 0
     users:                        int  = 0
-
-class SubscriptionDuration(enum.Enum):
-    Days30  = 0
-    Days90  = 1
-    Days365 = 2
 
 class ProSubscriptionProof:
     version:          int                    = 0
@@ -44,25 +38,28 @@ class ProSubscriptionProof:
         return result
 
 class UnredeemedPaymentRow:
-    payment_token_hash:      bytes = ZERO_BYTES32
-    subscription_duration_s: int   = 0
+    payment_token_hash:      bytes                = ZERO_BYTES32
+    subscription_duration_s: int                  = 0
+    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
 
 class HistoricalPaymentRow:
-    id:                      int        = 0
-    master_pkey:             bytes      = ZERO_BYTES32
-    subscription_duration_s: int        = 0
-    creation_unix_ts_s:      int        = 0
-    activation_unix_ts_s:    int | None = None
-    payment_token_hash:      bytes      = ZERO_BYTES32
-    archived_unix_ts_s:      int        = 0
+    id:                      int                  = 0
+    master_pkey:             bytes                = ZERO_BYTES32
+    subscription_duration_s: int                  = 0
+    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
+    creation_unix_ts_s:      int                  = 0
+    activation_unix_ts_s:    int | None           = None
+    payment_token_hash:      bytes                = ZERO_BYTES32
+    archived_unix_ts_s:      int                  = 0
 
 class PaymentRow:
-    id:                      int        = 0
-    master_pkey:             bytes      = ZERO_BYTES32
-    subscription_duration_s: int        = 0
-    creation_unix_ts_s:      int        = 0
-    activation_unix_ts_s:    int | None = None
-    payment_token_hash:      bytes      = ZERO_BYTES32
+    id:                      int                  = 0
+    master_pkey:             bytes                = ZERO_BYTES32
+    subscription_duration_s: int                  = 0
+    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
+    creation_unix_ts_s:      int                  = 0
+    activation_unix_ts_s:    int | None           = None
+    payment_token_hash:      bytes                = ZERO_BYTES32
 
 class UserRow:
     master_pkey:      bytes = ZERO_BYTES32
@@ -182,11 +179,12 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[Unredeeme
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM unredeemed_payments')
 
-        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int]], tx.cursor)
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int]], tx.cursor)
         for row in rows:
             item                         = UnredeemedPaymentRow()
             item.payment_token_hash      = row[0]
             item.subscription_duration_s = row[1]
+            item.payment_provider        = base.PaymentProvider(row[2])
             result.append(item)
     return result;
 
@@ -195,15 +193,16 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM payments')
-        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, bytes]], tx.cursor)
+        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, int, bytes]], tx.cursor)
         for row in rows:
             item                         = PaymentRow()
             item.id                      = row[0]
             item.master_pkey             = row[1]
             item.subscription_duration_s = row[2]
-            item.creation_unix_ts_s      = row[3]
-            item.activation_unix_ts_s    = row[4]
-            item.payment_token_hash      = row[5]
+            item.payment_provider        = base.PaymentProvider(row[3])
+            item.creation_unix_ts_s      = row[4]
+            item.activation_unix_ts_s    = row[5]
+            item.payment_token_hash      = row[6]
             result.append(item)
     return result;
 
@@ -212,16 +211,17 @@ def get_historical_payments_list(sql_conn: sqlite3.Connection) -> list[Historica
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _    = tx.cursor.execute('SELECT * FROM historical_payments')
-        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, bytes, int]], tx.cursor)
+        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes, int, int, int, int, bytes, int]], tx.cursor)
         for row in rows:
             item                         = HistoricalPaymentRow()
             item.id                      = row[0]
             item.master_pkey             = row[1]
             item.subscription_duration_s = row[2]
-            item.creation_unix_ts_s      = row[3]
-            item.activation_unix_ts_s    = row[4]
-            item.payment_token_hash      = row[5]
-            item.archived_unix_ts_s      = row[6]
+            item.payment_provider        = base.PaymentProvider(row[3])
+            item.creation_unix_ts_s      = row[4]
+            item.activation_unix_ts_s    = row[5]
+            item.payment_token_hash      = row[6]
+            item.archived_unix_ts_s      = row[7]
             result.append(item)
     return result;
 
@@ -286,21 +286,21 @@ def get_pro_payments_count(sql_conn: sqlite3.Connection, master_pkey: nacl.signi
         result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
     return result;
 
-def get_pro_payments_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, bytes, int]]:
+def get_pro_payments_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[tuple[int, int, int, int, bytes, int]]:
     assert tx.cursor is not None
     _ = tx.cursor.execute(f'''
-        SELECT subscription_duration_s, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, 0 as archived_unix_ts_s
+        SELECT subscription_duration_s, payment_provider, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, 0 as archived_unix_ts_s
           FROM payments
           WHERE master_pkey = ?
           UNION ALL
 
-        SELECT subscription_duration_s, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, archived_unix_ts_s
+        SELECT subscription_duration_s, payment_provider, creation_unix_ts_s, COALESCE(activation_unix_ts_s, 0), payment_token_hash, archived_unix_ts_s
           FROM historical_payments
           WHERE master_pkey = ?
           ORDER BY creation_unix_ts_s DESC
           LIMIT {ALL_PAYMENTS_PAGINATION_SIZE} OFFSET ?
     ''', (bytes(master_pkey), bytes(master_pkey), offset))
-    result = typing.cast(collections.abc.Iterator[tuple[int, int, int, bytes, int]], tx.cursor)
+    result = typing.cast(collections.abc.Iterator[tuple[int, int, int, int, bytes, int]], tx.cursor)
     return result;
 
 def get_pro_revocations_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
@@ -373,13 +373,15 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS unredeemed_payments (
                 payment_token_hash      BLOB PRIMARY KEY,
-                subscription_duration_s INTEGER NOT NULL
+                subscription_duration_s INTEGER NOT NULL,
+                payment_provider        INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS historical_payments (
                 id                              INTEGER PRIMARY KEY,
                 master_pkey                     BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
                 subscription_duration_s         INTEGER NOT NULL,
+                payment_provider                INTEGER NOT NULL,
                 creation_unix_ts_s              INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
 
                 -- Timestamp of when a payment is activated. The payment is consumed when the
@@ -413,6 +415,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 id                      INTEGER PRIMARY KEY,
                 master_pkey             BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
                 subscription_duration_s INTEGER NOT NULL,
+                payment_provider        INTEGER NOT NULL,
                 creation_unix_ts_s      INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
 
                 -- Timestamp of when a payment is activated. The payment is consumed when the
@@ -513,21 +516,86 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
 
     return result
 
+
 def verify_payment_token_hash(hash: bytes, err: base.ErrorSink):
     if len(hash) != BLAKE2B_DIGEST_SIZE:
         err.msg_list.append(f'Payment token hash must be {BLAKE2B_DIGEST_SIZE} bytes, received {len(hash)}')
 
+def verify_payment_provider(payment_provider: base.PaymentProvider | int, err: base.ErrorSink):
+    provider = base.PaymentProvider.Nil
+    if isinstance(payment_provider, int):
+        try:
+            provider = base.PaymentProvider(payment_provider)
+        except ValueError:
+            err.msg_list.append('Unrecognised payment provider: {}'.format(payment_provider))
+    else:
+        provider = payment_provider
+
+    if len(err.msg_list) == 0 and provider == base.PaymentProvider.Nil:
+        err.msg_list.append('Nil payment provider is invalid, must be set to a provider')
+
+def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
+    unredeemed_payments: list[UnredeemedPaymentRow] = get_unredeemed_payments_list(sql_conn)
+    for index, it in enumerate(unredeemed_payments):
+        verify_payment_provider(it.payment_provider, err)
+        if len(it.payment_token_hash) != BLAKE2B_DIGEST_SIZE:
+            err.msg_list.append(f'Unredeeemed payment #{index} token is not 32 bytes, was {len(it.payment_token_hash)}')
+        if it.subscription_duration_s != base.SECONDS_IN_DAY * 30 and \
+           it.subscription_duration_s != base.SECONDS_IN_DAY * 90 and \
+           it.subscription_duration_s != base.SECONDS_IN_DAY * 365:
+               err.msg_list.append(f'Unredeemed payment #{index} had an invalid subscription duration, expected 30, 90 or 365 day duration in seconds, received ({it.subscription_duration_s})')
+
+    # NOTE: Wednesday, 27 August 2025 00:00:00, arbitrary date in the past that PRO cannot
+    # possibly be before. We should update this to to the PRO release date.
+    PRO_ENABLED_UNIX_TS: int = 1756252800
+
+    payments: list[PaymentRow] = get_payments_list(sql_conn)
+    for index, it in enumerate(payments):
+        if it.master_pkey == ZERO_BYTES32:
+            err.msg_list.append(f'Payment #{index} has a master public key set to the zero key')
+        if it.subscription_duration_s != base.SECONDS_IN_DAY * 30 and \
+           it.subscription_duration_s != base.SECONDS_IN_DAY * 90 and \
+           it.subscription_duration_s != base.SECONDS_IN_DAY * 365:
+               err.msg_list.append(f'Payment #{index} had an invalid subscription duration, expected 30, 90 or 365 day duration in seconds, received ({it.subscription_duration_s})')
+        verify_payment_provider(it.payment_provider, err)
+
+        if it.creation_unix_ts_s < PRO_ENABLED_UNIX_TS:
+          date_str = datetime.datetime.fromtimestamp(it.creation_unix_ts_s).strftime('%Y-%m-%d')
+          err.msg_list.append(f'Payment #{index} specified a creation date before PRO was enabled: {it.creation_unix_ts_s} ({date_str})')
+
+        if isinstance(it.activation_unix_ts_s, int) and it.creation_unix_ts_s > it.activation_unix_ts_s:
+          create_date_str = datetime.datetime.fromtimestamp(it.creation_unix_ts_s).strftime('%Y-%m-%d')
+          activate_date_str = datetime.datetime.fromtimestamp(it.activation_unix_ts_s).strftime('%Y-%m-%d')
+          err.msg_list.append(f'Payment #{index} specified a creation date after the activation time: {it.creation_unix_ts_s} ({create_date_str}) vs {it.activation_unix_ts_s} ({activate_date_str})')
+        verify_payment_token_hash(it.payment_token_hash, err)
+
+    users: list[UserRow] = get_users_list(sql_conn)
+    for index, it in enumerate(users):
+        if it.master_pkey == ZERO_BYTES32:
+            err.msg_list.append(f'User #{index} has a master public key set to the zero key')
+        if it.expiry_unix_ts_s < PRO_ENABLED_UNIX_TS:
+          expiry_date_str = datetime.datetime.fromtimestamp(it.expiry_unix_ts_s).strftime('%Y-%m-%d')
+          err.msg_list.append(f'Payment #{index} specified a expiry date before PRO was enabled: {it.expiry_unix_ts_s} ({expiry_date_str})')
+
+    result = len(err.msg_list) == 0
+    return result
+
 def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
                            payment_token_hash:      bytes,
                            subscription_duration_s: int,
+                           payment_provider:        base.PaymentProvider,
                            err:                     base.ErrorSink):
     verify_payment_token_hash(payment_token_hash, err)
+    verify_payment_provider(payment_provider, err)
+    if len(err.msg_list) > 0:
+        return
+
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         _ = tx.cursor.execute('''
-            INSERT INTO unredeemed_payments (payment_token_hash, subscription_duration_s)
-            VALUES (?, ?)
-        ''', (payment_token_hash, subscription_duration_s));
+            INSERT INTO unredeemed_payments (payment_token_hash, subscription_duration_s, payment_provider)
+            VALUES (?, ?, ?)
+        ''', (payment_token_hash, subscription_duration_s, payment_provider.value));
 
 def update_db_after_payments_changed(tx:                   base.SQLTransaction,
                                      master_pkey:          nacl.signing.VerifyKey,
@@ -790,32 +858,35 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
         _ = tx.cursor.execute('''
             DELETE FROM unredeemed_payments
             WHERE       payment_token_hash = ?
-            RETURNING   subscription_duration_s
+            RETURNING   subscription_duration_s, payment_provider
         ''', (payment_token_hash,))
 
-        delete_operation_row = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-        if delete_operation_row:
+        delete_operation_row = typing.cast(tuple[int, int] | None, tx.cursor.fetchone())
+        if delete_operation_row and tx.cursor.rowcount > 0:
             assert tx.cursor.rowcount <= 1
             master_pkey_bytes:       bytes = bytes(master_pkey)
             subscription_duration_s: int   = delete_operation_row[0]
+            payment_provider:        int   = delete_operation_row[1]
+            verify_payment_provider(payment_provider, err)
+            if len(err.msg_list) == 0:
+                # Redeem the payment token: second, register the payment
+                _ = tx.cursor.execute('''
+                    INSERT INTO payments (master_pkey, subscription_duration_s, creation_unix_ts_s, payment_token_hash, payment_provider)
+                    VALUES(?, ?, ?, ?, ?)
+                ''', (master_pkey_bytes,
+                      subscription_duration_s,
+                      creation_unix_ts_s,
+                      payment_token_hash,
+                      payment_provider))
 
-            # Redeem the payment token: second, register the payment
-            _ = tx.cursor.execute('''
-                INSERT INTO payments (master_pkey, subscription_duration_s, creation_unix_ts_s, payment_token_hash)
-                VALUES(?, ?, ?, ?)
-            ''', (master_pkey_bytes,
-                  subscription_duration_s,
-                  creation_unix_ts_s,
-                  payment_token_hash))
-
-            update: UpdateAfterPaymentsModified = update_db_after_payments_changed(tx=tx,
-                                                                                   master_pkey=master_pkey,
-                                                                                   activation_unix_ts_s=creation_unix_ts_s)
-            result = build_proof(gen_index=update.gen_index,
-                                 rotating_pkey=rotating_pkey,
-                                 expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
-                                 signing_key=signing_key,
-                                 gen_index_salt=update.gen_index_salt)
+                update: UpdateAfterPaymentsModified = update_db_after_payments_changed(tx=tx,
+                                                                                       master_pkey=master_pkey,
+                                                                                       activation_unix_ts_s=creation_unix_ts_s)
+                result = build_proof(gen_index=update.gen_index,
+                                     rotating_pkey=rotating_pkey,
+                                     expiry_unix_ts_s=update.latest_expiry_unix_ts_s,
+                                     signing_key=signing_key,
+                                     gen_index_salt=update.gen_index_salt)
         else:
             err.msg_list.append(f"Server has not received the payment for this token ({payment_token_hash.hex()}) and cannot be used")
 
@@ -824,7 +895,7 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
 def delete_and_archive_payments_internal(tx: base.SQLTransaction, payment_token_hash_or_unix_ts: bytes | int, archive_unix_ts_s: int) -> list[nacl.signing.VerifyKey]:
     result: list[nacl.signing.VerifyKey] = []
     assert tx.cursor is not None
-    return_fields = 'master_pkey, subscription_duration_s, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash'
+    return_fields = 'master_pkey, subscription_duration_s, payment_provider, creation_unix_ts_s, activation_unix_ts_s, payment_token_hash'
     if isinstance(payment_token_hash_or_unix_ts, int):
         unix_ts_s = payment_token_hash_or_unix_ts
         _ = tx.cursor.execute(f'''
@@ -841,17 +912,18 @@ def delete_and_archive_payments_internal(tx: base.SQLTransaction, payment_token_
             RETURNING {return_fields}
         ''', (payment_token_hash,))
 
-    rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int, int, bytes]], tx.cursor)
+    rows = typing.cast(collections.abc.Iterator[tuple[bytes, int, int, int, int, bytes]], tx.cursor)
     for row in rows:
         master_pkey:             bytes = row[0]
         subscription_duration_s: int   = row[1]
-        creation_unix_ts_s:      int   = row[2]
-        activation_unix_ts_s:    int   = row[3]
-        payment_token_hash:      bytes = row[4]
+        payment_provider:        int   = row[2]
+        creation_unix_ts_s:      int   = row[3]
+        activation_unix_ts_s:    int   = row[4]
+        payment_token_hash:      bytes = row[5]
         _ = tx.cursor.execute(f'''
             INSERT INTO historical_payments ({return_fields}, archived_unix_ts_s)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (master_pkey, subscription_duration_s, creation_unix_ts_s,
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (master_pkey, subscription_duration_s, payment_provider, creation_unix_ts_s,
               activation_unix_ts_s, payment_token_hash, archive_unix_ts_s))
         result.append(nacl.signing.VerifyKey(master_pkey))
     return result
