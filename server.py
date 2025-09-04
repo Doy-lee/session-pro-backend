@@ -340,6 +340,7 @@ import collections.abc
 import hashlib
 import json
 
+import platform_apple
 import base
 import backend
 from vendor import onion_req
@@ -409,6 +410,7 @@ def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_s
     result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
     result.register_blueprint(onion_req.flask_blueprint_v4)
+    result.register_blueprint(platform_apple.flask_blueprint)
     return result
 
 @flask_blueprint.route(ROUTE_ADD_PRO_PAYMENT, methods=['POST'])
