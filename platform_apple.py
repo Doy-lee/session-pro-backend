@@ -1,8 +1,8 @@
 import flask
 
-ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/notifications_v2_apple_app_connect_sandbox'
+ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
 
-flask_blueprint = flask.Blueprint('session-pro-backend-notifications-apple-app-connect', __name__)
+flask_blueprint = flask.Blueprint('session-pro-backend-apple', __name__)
 
 @flask_blueprint.route(ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
 def notifications_apple_app_connect_sandbox() -> flask.Response:
