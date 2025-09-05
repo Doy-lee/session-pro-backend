@@ -4,7 +4,7 @@ import typing
 import base
 import backend
 import sqlite3
-import platform_apple_config
+import sys
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -13,6 +13,7 @@ from appstoreserverlibrary.models.Type                          import Type     
 from appstoreserverlibrary.models.TransactionReason             import TransactionReason             as AppleTransactionReason
 from appstoreserverlibrary.models.JWSTransactionDecodedPayload  import JWSTransactionDecodedPayload  as AppleJWSTransactionDecodedPayload
 from appstoreserverlibrary.models.Data                          import Data                          as AppleData
+from appstoreserverlibrary.models.ResponseBodyV2DecodedPayload  import ResponseBodyV2DecodedPayload  as AppleResponseBodyV2DecodedPayload
 from appstoreserverlibrary.models.NotificationTypeV2            import NotificationTypeV2            as AppleNotificationV2
 
 from appstoreserverlibrary.api_client import (
@@ -23,8 +24,57 @@ from appstoreserverlibrary.api_client import (
 from appstoreserverlibrary.signed_data_verifier import (
     VerificationException        as AppleVerificationException,
     SignedDataVerifier           as AppleSignedDataVerifier,
-    ResponseBodyV2DecodedPayload as AppleResponseBodyV2DecodedPayload,
 )
+
+# NOTE: Enforce the presence of platform_config.py and the variables required for Apple
+# integration
+try:
+    import platform_config
+    import_error = False
+    if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+        print("ERROR: Missing 'apple_key_id' string in platform_config.py")
+        import_error = True
+
+    if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+        print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
+        import_error = True
+
+    if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+        print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
+        import_error = True
+
+    if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
+        print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
+        import_error = True
+
+    if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
+        print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+        import_error = True
+
+    if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
+        print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+        import_error = True
+
+    if import_error:
+        raise ImportError
+
+except ImportError:
+    print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
+  ```python
+  import pathlib
+  apple_key_id: str      = '<Private Key ID>'
+  apple_issuer_id: str   = '<Key Issuer ID>'
+  apple_bundle_id: str   = 'com.your_organisation.your_project'
+  apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
+  apple_root_certs: list[bytes] = [
+      pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
+      pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
+      pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
+  ]
+  ```
+''')
+    sys.exit(1)
+
 
 ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
 flask_blueprint                               = flask.Blueprint('session-pro-backend-apple', __name__)
@@ -109,16 +159,16 @@ def entry_point():
     if apple_env != AppleEnvironment.SANDBOX:
         assert app_apple_id is not None, "App ID must be set in a non-sandbox environment"
 
-    apple_client = AppleAppStoreServerAPIClient(signing_key=platform_apple_config.key_bytes,
-                                                key_id=platform_apple_config.key_id,
-                                                issuer_id=platform_apple_config.issuer_id,
-                                                bundle_id=platform_apple_config.bundle_id,
+    apple_client = AppleAppStoreServerAPIClient(signing_key=platform_config.apple_key_bytes,
+                                                key_id=platform_config.apple_key_id,
+                                                issuer_id=platform_config.apple_issuer_id,
+                                                bundle_id=platform_config.apple_bundle_id,
                                                 environment=apple_env)
 
-    apple_verifier   = AppleSignedDataVerifier(root_certificates=platform_apple_config.root_certs,
+    apple_verifier   = AppleSignedDataVerifier(root_certificates=platform_config.apple_root_certs,
                                                enable_online_checks=True,
                                                environment=apple_env,
-                                               bundle_id=platform_apple_config.bundle_id,
+                                               bundle_id=platform_config.apple_bundle_id,
                                                app_apple_id=app_apple_id)
 
     try:

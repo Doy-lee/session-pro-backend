@@ -1,3 +1,4 @@
 __pycache__
 data
 backend.db
+platform_config.py
