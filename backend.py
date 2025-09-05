@@ -591,11 +591,36 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
         return
 
     with base.SQLTransaction(sql_conn) as tx:
+        # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist somewhere
+        # else.
+        #
+        # For Apple, restoring a subscription to another device re-uses the transaction ID (payment
+        # token). It's unclear to me if this means a new notification is received with said details.
+        # In which case we would re-submit the payment token into the backend. We guard against that
+        # here.
         assert tx.cursor is not None
         _ = tx.cursor.execute('''
             INSERT INTO unredeemed_payments (payment_token_hash, subscription_duration_s, payment_provider)
             VALUES (?, ?, ?)
-        ''', (payment_token_hash, subscription_duration_s, payment_provider.value));
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM unredeemed_payments
+                WHERE payment_token_hash = ? AND payment_provider = ?
+                UNION
+                SELECT 1
+                FROM historical_payments
+                WHERE payment_token_hash = ? AND payment_provider = ?
+                UNION
+                SELECT 1
+                FROM payments
+                WHERE payment_token_hash = ? AND payment_provider = ?
+            )
+        ''', (
+              payment_token_hash, subscription_duration_s, payment_provider.value, # insert values
+              payment_token_hash, payment_provider.value,                          # unredeemed table
+              payment_token_hash, payment_provider.value,                          # historical table
+              payment_token_hash, payment_provider.value,                          # payments table
+             ));
 
 def update_db_after_payments_changed(tx:                   base.SQLTransaction,
                                      master_pkey:          nacl.signing.VerifyKey,
