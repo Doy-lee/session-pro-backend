@@ -6,6 +6,7 @@ import os
 import typing
 import collections.abc
 import datetime
+import typing
 
 import base
 
@@ -36,6 +37,38 @@ class ProSubscriptionProof:
             "sig":              self.sig.hex(),
         }
         return result
+
+class SQLField:
+    name: str = ''
+    type: str = ''
+    def __init__(self, name: str, type: str):
+        self.name = name
+        self.type = type
+
+SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
+  SQLField('master_pkey',                'BLOB NOT NULL'),     # Session Pro master public key associated with the payment
+  SQLField('subscription_duration_s',    'INTEGER NOT NULL'),
+  SQLField('payment_provider',           'INTEGER NOT NULL'),
+  SQLField('creation_unix_ts_s',         'INTEGER NOT NULL'), # Timestamp of when the payment was added to the backend
+
+  # Timestamp of when a payment is activated. The payment is consumed when the
+  # subscription duration has elapsed relative to this time whereby the next payment
+  # is activated. There is only one activated record per master key at a time.
+  #
+  # Activating payments one at a time allows correct calculation of the total
+  # duration a user is entitled to Pro features. For example if a payment is refunded
+  # that may abruptly end a user's entitlement mid-way through their subscription.
+  # By activating the next record from the current timestamp and summing the
+  # remaining subscription durations forward, this correctly accounts for that user's
+  # remaining entitlement by knowing the starting timestamp to sum the subscription
+  # durations to.
+  SQLField('activation_unix_ts_s',       'INTEGER'),
+  SQLField('payment_token_hash',         'BLOB NOT NULL'),    # BLAKE2B hash of the token provided by the payment provider
+  SQLField('apple_original_tx_id',       'BLOB'),
+  SQLField('apple_tx_id',                'BLOB'),
+  SQLField('apple_web_line_order_tx_id', 'BLOB'),
+  SQLField('google_payment_token',       'BLOB'),
+]
 
 class UnredeemedPaymentRow:
     payment_token_hash:      bytes                = ZERO_BYTES32
@@ -148,6 +181,19 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
+def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
+    result = ''
+    for index, it in enumerate(fields):
+        if schema:
+            if index:
+                result += '\n'
+            result += f'{it.name} {it.type},'
+        else:
+            if index:
+                result += ' '
+            result += f'{it.name},'
+    return result
+
 def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
     personalization = b'SeshProBackend__'
     final_salt      = salt  if salt else b''
@@ -187,6 +233,8 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[Unredeeme
             item.payment_provider        = base.PaymentProvider(row[2])
             result.append(item)
     return result;
+
+def get_payments_sql_fields() -> list[PaymentRow]:
 
 def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
@@ -372,65 +420,26 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
     with base.SQLTransaction(result.sql_conn) as tx:
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS unredeemed_payments (
-                payment_token_hash      BLOB PRIMARY KEY,
-                subscription_duration_s INTEGER NOT NULL,
-                payment_provider        INTEGER NOT NULL
+                payment_token_hash         BLOB PRIMARY KEY NOT NULL,
+                payment_provider           INTEGER NOT NULL,
+                subscription_duration_s    INTEGER NOT NULL,
+
+                apple_original_tx_id       BLOB,
+                apple_tx_id                BLOB,
+                apple_web_line_order_tx_id BLOB,
+
+                google_payment_token       BLOB,
             );
 
             CREATE TABLE IF NOT EXISTS historical_payments (
-                id                              INTEGER PRIMARY KEY,
-                master_pkey                     BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
-                subscription_duration_s         INTEGER NOT NULL,
-                payment_provider                INTEGER NOT NULL,
-                creation_unix_ts_s              INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
-
-                -- Timestamp of when a payment is activated. The payment is consumed when the
-                -- subscription duration has elapsed relative to this time whereby the next payment
-                -- is activated. There is only one activated record per master key at a time.
-                --
-                -- Activating payments one at a time allows correct calculation of the total
-                -- duration a user is entitled to Pro features. For example if a payment is refunded
-                -- that may abruptly end a user's entitlement mid-way through their subscription.
-                -- By activating the next record from the current timestamp and summing the
-                -- remaining subscription durations forward, this correctly accounts for that user's
-                -- remaining entitlement by knowing the starting timestamp to sum the subscription
-                -- durations to.
-                activation_unix_ts_s            INTEGER,
-                payment_token_hash              BLOB    NOT NULL,  -- BLAKE2B hash of the token provided by the payment provider
-
-                -- The unix timestamp at which the subscription was archived at. Useful for
-                -- calculating the actual duration that a subscription was activated for. The
-                -- activation unix timestamp can be null if a payment was refunded before it was
-                -- activated. Similarly the elapsed duration between a non-null activation timestamp
-                -- and the archived timestamp can be less than the subscription duration if the
-                -- subscription was terminated (e.g.: refunded) before the subscription was
-                -- completed.
-                --
-                -- The duration between the activation and archived timestamp may exceed the
-                -- subscription duration if the expiring of payments is delayed for whatever reason.
-                archived_unix_ts_s              INTEGER NOT NULL
+                id                 INTEGER PRIMARY KEY NOT NULL,
+                archived_unix_ts_s INTEGER NOT NULL,
+                {string_from_sql_fields(fields=SQL_TABLE_PAYMENTS_FIELD, schema=True)}
             );
 
             CREATE TABLE IF NOT EXISTS payments (
-                id                      INTEGER PRIMARY KEY,
-                master_pkey             BLOB    NOT NULL,    -- Session Pro master public key associated with the payment
-                subscription_duration_s INTEGER NOT NULL,
-                payment_provider        INTEGER NOT NULL,
-                creation_unix_ts_s      INTEGER NOT NULL,    -- Timestamp of when the payment was added to the backend
-
-                -- Timestamp of when a payment is activated. The payment is consumed when the
-                -- subscription duration has elapsed relative to this time whereby the next payment
-                -- is activated. There is only one activated record per master key at a time.
-                --
-                -- Activating payments one at a time allows correct calculation of the total
-                -- duration a user is entitled to Pro features. For example if a payment is refunded
-                -- that may abruptly end a user's entitlement mid-way through their subscription.
-                -- By activating the next record from the current timestamp and summing the
-                -- remaining subscription durations forward, this correctly accounts for that user's
-                -- remaining entitlement by knowing the starting timestamp to sum the subscription
-                -- durations to.
-                activation_unix_ts_s    INTEGER,
-                payment_token_hash      BLOB    NOT NULL     -- BLAKE2B hash of the token provided by the payment provider
+                id INTEGER PRIMARY KEY NOT NULL,
+                {string_from_sql_fields(fields=SQL_TABLE_PAYMENTS_FIELD, schema=True)}
             );
 
             CREATE TABLE IF NOT EXISTS users (
@@ -579,6 +588,83 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
     result = len(err.msg_list) == 0
     return result
+
+def add_unredeemed_apple_payment(sql_conn:                   sqlite3.Connection,
+                                 apple_tx_id:                str,
+                                 apple_original_tx_id:       str,
+                                 apple_web_line_order_tx_id: str | None,
+                                 subscription_duration_s:    int,
+                                 payment_provider:           base.PaymentProvider,
+                                 err:                        base.ErrorSink):
+    assert False, "Unimplemented"
+
+def delete_apple_payment(sql_conn:                   sqlite3.Connection,
+                         apple_web_line_order_tx_id: str | None,
+                         apple_original_tx_id:       str,
+                         archived_unix_ts_s:         int):
+
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+
+        # NOTE: Delete the apple payment from the payments
+        payments_table_fields: str = string_from_sql_fields(SQL_TABLE_PAYMENTS_FIELD, schema=False)
+        if apple_web_line_order_tx_id:
+            _ = tx.cursor.execute(f'''
+                DELETE FROM payments
+                WHERE       apple_original_tx_id = ? AND apple_web_line_order_tx_id = ? AND payment_provider = ?
+                RETURNING   {payments_table_fields}
+            ''', (apple_original_tx_id,
+                  apple_web_line_order_tx_id,
+                  base.PaymentProvider.iOSAppStore.value));
+        else:
+            _ = tx.cursor.execute(f'''
+                DELETE FROM payments
+                WHERE       apple_original_tx_id = ? AND payment_provider = ?
+                RETURNING   {payments_table_fields}
+            ''', (apple_original_tx_id,
+                  base.PaymentProvider.iOSAppStore.value));
+
+        # NOTE: Archive the payments by inserting the deleted rows into the historical table
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes, # master pkey
+                                                          int,   # subscription duration s
+                                                          int,   # payment provider
+                                                          int,   # creation unix ts s
+                                                          int,   # activation unix ts s
+                                                          bytes, # payment token hash
+                                                          bytes, # apple original tx id
+                                                          bytes, # apple tx id
+                                                          bytes, # apple web line order tx id
+                                                          bytes] # google payment token
+                                                          ], tx.cursor)
+        insert_values_stmt = '?, ' * len(SQL_TABLE_PAYMENTS_FIELD)
+
+        for row in rows:
+            _ = tx.cursor.execute(f'''
+                INSERT INTO historical_payments ({payments_table_fields}, archived_unix_ts_s)
+                VALUES ({insert_values_stmt}, ?)
+            ''', (*row, archived_unix_ts_s));
+
+        # NOTE: We also need to delete from the unredeemed payments incase the user has never
+        # registered the payment
+        # TODO: What about if they reverse the delete (e.g. a refund?)
+        if apple_web_line_order_tx_id:
+            _ = tx.cursor.execute(f'''
+                DELETE FROM unredeemed_payments
+                WHERE       apple_original_tx_id = ? AND apple_web_line_order_tx_id = ? AND payment_provider = ?
+            ''', (apple_original_tx_id,
+                  apple_web_line_order_tx_id,
+                  base.PaymentProvider.iOSAppStore.value));
+        else:
+            _ = tx.cursor.execute(f'''
+                DELETE FROM unredeemed_payments
+                WHERE       apple_original_tx_id = ? AND payment_provider = ?
+                RETURNING   {payments_table_fields}
+            ''', (apple_original_tx_id,
+                  base.PaymentProvider.iOSAppStore.value));
+
+
+def revert_apple_payment(sql_conn: sqlite3.Connection, apple_original_tx_id: str):
+    assert False, "Unimplemented"
 
 def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
                            payment_token_hash:      bytes,
@@ -730,6 +816,12 @@ def make_get_pro_proof_hash(version:       int,
     hasher.update(bytes(rotating_pkey))
     hasher.update(unix_ts_s.to_bytes(length=8, byteorder='little'))
     result: bytes = hasher.digest()
+    return result
+
+def make_payment_token_hash(payment_token: str) -> bytes:
+    hasher = backend.make_blake2b_hasher()
+    hasher.update(payment_token.encode(encoding='utf-8'))
+    result = hasher.digest()
     return result
 
 def build_proof_hash(version:          int,
