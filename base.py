@@ -59,6 +59,18 @@ class TableStrings:
     name:     str = ''
     contents: list[list[str]] = []
 
+def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink):
+    provider = PaymentProvider.Nil
+    if isinstance(payment_provider, int):
+        try:
+            provider = PaymentProvider(payment_provider)
+        except ValueError:
+            err.msg_list.append('Unrecognised payment provider: {}'.format(payment_provider))
+    else:
+        provider = payment_provider
+
+    if len(err.msg_list) == 0 and provider == PaymentProvider.Nil:
+        err.msg_list.append('Nil payment provider is invalid, must be set to a provider')
 
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.

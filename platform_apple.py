@@ -172,19 +172,19 @@ def entry_point():
                                                bundle_id=platform_config.apple_bundle_id,
                                                app_apple_id=app_apple_id)
 
-    try:
-        response_test_notif: AppleSendTestNotificationResponse = apple_client.request_test_notification()
-        print("Send test notif: ", response_test_notif)
+    # try:
+    #     response_test_notif: AppleSendTestNotificationResponse = apple_client.request_test_notification()
+    #     print("Send test notif: ", response_test_notif)
 
-        notification_token = response_test_notif.testNotificationToken
-        if notification_token:
-            response_check_test_notif: AppleCheckTestNotificationResponse = apple_client.get_test_notification_status(test_notification_token=notification_token)
-            print("Check test notif: ", response_check_test_notif)
-            if response_check_test_notif.signedPayload:
-                decoded_response: AppleResponseBodyV2DecodedPayload = apple_verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
-                print('Decoded test response: ', decoded_response)
-    except AppleAPIException as e:
-        print(e)
+    #     notification_token = response_test_notif.testNotificationToken
+    #     if notification_token:
+    #         response_check_test_notif: AppleCheckTestNotificationResponse = apple_client.get_test_notification_status(test_notification_token=notification_token)
+    #         print("Check test notif: ", response_check_test_notif)
+    #         if response_check_test_notif.signedPayload:
+    #             decoded_response: AppleResponseBodyV2DecodedPayload = apple_verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
+    #             print('Decoded test response: ', decoded_response)
+    # except AppleAPIException as e:
+    #     print(e)
 
 def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
     result: int | None = None
@@ -230,6 +230,18 @@ def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBod
                 err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
 
     return result
+
+def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload) -> backend.PaymentProviderTransaction:
+    result = backend.PaymentProviderTransaction()
+    if not tx.originalTransactionId or not tx.transactionId:
+        return result
+    result.provider             = base.PaymentProvider.iOSAppStore
+    result.apple_original_tx_id = tx.originalTransactionId
+    result.apple_tx_id          = tx.transactionId
+    if tx.webOrderLineItemId:
+        result.apple_web_line_order_tx_id = tx.webOrderLineItemId
+    return result
+
 
 def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBodyV2DecodedPayload, sql_conn: sqlite3.Connection):
     # NOTE: Exhaustively handle all the notification types defined by Apple:
@@ -382,13 +394,12 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                 # NOTE: Process notification
                 if len(err.msg_list) == 0:
                     assert isinstance(subscription_duration_s, int)
-                    backend.add_unredeemed_apple_payment(sql_conn                   = sql_conn,
-                                                         apple_tx_id                = tx.originalTransactionId,
-                                                         apple_original_tx_id       = tx.transactionId,
-                                                         apple_web_line_order_tx_id = tx.webOrderLineItemId,
-                                                         subscription_duration_s    = subscription_duration_s,
-                                                         payment_provider           = base.PaymentProvider.iOSAppStore,
-                                                         err                        = err)
+                    payment_tx = payment_tx_from_apple_jws_transaction(tx)
+                    backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                                                    payment_tx              = payment_tx,
+                                                    subscription_duration_s = subscription_duration_s,
+                                                    payment_provider        = base.PaymentProvider.iOSAppStore,
+                                                    err                     = err)
 
     elif body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
         # A notification type that, along with its subtype, indicates that the customer made a
@@ -455,13 +466,12 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                                                      archived_unix_ts_s=unix_ts_s)
 
                         # TODO: Submit/upgrade the payment
-                        backend.add_unredeemed_apple_payment(sql_conn                   = sql_conn,
-                                                             apple_tx_id                = tx.originalTransactionId,
-                                                             apple_original_tx_id       = tx.transactionId,
-                                                             apple_web_line_order_tx_id = tx.webOrderLineItemId,
-                                                             subscription_duration_s    = subscription_duration_s,
-                                                             payment_provider           = base.PaymentProvider.iOSAppStore,
-                                                             err                        = err)
+                        payment_tx = payment_tx_from_apple_jws_transaction(tx)
+                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                                                        payment_tx              = payment_tx,
+                                                        subscription_duration_s = subscription_duration_s,
+                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
+                                                        err                     = err)
 
     elif body.notificationType == AppleNotificationV2.OFFER_REDEEMED:
         # A notification type that, along with its subtype, indicates that a customer with an active
@@ -510,13 +520,12 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     assert isinstance(subscription_duration_s, int)
                     if not body.subtype:
                         # NOTE: User is redeeming an offer to start(?) a sub. Submit the payment
-                        backend.add_unredeemed_apple_payment(sql_conn                   = sql_conn,
-                                                             apple_tx_id                = tx.originalTransactionId,
-                                                             apple_original_tx_id       = tx.transactionId,
-                                                             apple_web_line_order_tx_id = tx.webOrderLineItemId,
-                                                             subscription_duration_s    = subscription_duration_s,
-                                                             payment_provider           = base.PaymentProvider.iOSAppStore,
-                                                             err                        = err)
+                        payment_tx = payment_tx_from_apple_jws_transaction(tx)
+                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                                                        payment_tx              = payment_tx,
+                                                        subscription_duration_s = subscription_duration_s,
+                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
+                                                        err                     = err)
                     elif body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
                         # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
@@ -538,13 +547,12 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                                                                                archived_unix_ts_s   = unix_ts_s)
 
                         # TODO: Submit the "new" payment
-                        backend.add_unredeemed_apple_payment(sql_conn                   = sql_conn,
-                                                             apple_tx_id                = tx.originalTransactionId,
-                                                             apple_original_tx_id       = tx.transactionId,
-                                                             apple_web_line_order_tx_id = tx.webOrderLineItemId,
-                                                             subscription_duration_s    = subscription_duration_s,
-                                                             payment_provider           = base.PaymentProvider.iOSAppStore,
-                                                             err                        = err)
+                        payment_tx = payment_tx_from_apple_jws_transaction(tx)
+                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                                                        payment_tx              = payment_tx,
+                                                        subscription_duration_s = subscription_duration_s,
+                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
+                                                        err                     = err)
 
     elif body.notificationType == AppleNotificationV2.REFUND or body.notificationType == AppleNotificationV2.REVOKE:
         # AppleNotificationV2.REFUND

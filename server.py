@@ -421,22 +421,34 @@ def add_pro_payment():
         return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
-    err                = base.ErrorSink()
-    version:       int = base.dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:   str = base.dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey: str = base.dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
-    payment_token: str = base.dict_require(d=get.json, key='payment_token', default_val='', err_msg="Missing payment token from body",       err=err)
-    master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
+    err                   = base.ErrorSink()
+    version:          int = base.json_dict_require(d=get.json, key='version',          default_val=0,  err_msg="Missing version from body",             err=err)
+    master_pkey:      str = base.json_dict_require(d=get.json, key='master_pkey',      default_val='', err_msg="Missing master public key from body",   err=err)
+    rotating_pkey:    str = base.json_dict_require(d=get.json, key='rotating_pkey',    default_val='', err_msg="Missing rotating public key from body", err=err)
+    master_sig:       str = base.json_dict_require(d=get.json, key='master_sig',       default_val='', err_msg="Missing master signature from body",    err=err)
+    rotating_sig:     str = base.json_dict_require(d=get.json, key='rotating_sig',     default_val='', err_msg="Missing rotating signature from body",  err=err)
+    payment_provider: int = base.json_dict_require(d=get.json, key='payment_provider', default_val=0,  err_msg="Missing payment provider from body",    err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
+
+    # Build payment TX
+    base.verify_payment_provider(payment_provider, err)
+    if len(err.msg_list):
+        return make_error_response(status=1, errors=err.msg_list)
+    payment_tx          = backend.AddProPaymentUserTransaction()
+    payment_tx.provider = base.PaymentProvider(payment_provider)
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        payment_tx.google_payment_token = base.json_dict_require(d=get.json, key='google_payment_token', default_val='', err_msg="Missing google payment token from body", err=err)
+    elif payment_provider == base.PaymentProvider.iOSAppStore:
+        payment_tx.apple_tx_id = base.json_dict_require(d=get.json, key='apple_tx_id', default_val='', err_msg="Missing google payment token from body", err=err)
+
+    # Parse other components
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
     rotating_pkey_bytes = base.hex_to_bytes(hex=rotating_pkey, label='Rotating public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
-    payment_token_bytes = base.hex_to_bytes(hex=payment_token, label='Payment token',          hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
@@ -451,7 +463,7 @@ def add_pro_payment():
                                                           creation_unix_ts_s = creation_unix_ts_s,
                                                           master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
                                                           rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                          payment_token_hash = payment_token_bytes,
+                                                          payment_tx         = payment_tx,
                                                           master_sig         = master_sig_bytes,
                                                           rotating_sig       = rotating_sig_bytes,
                                                           err                = err)
@@ -479,12 +491,12 @@ def get_pro_proof() -> flask.Response:
 
     # Extract values from JSON
     err                = base.ErrorSink()
-    version:       int = base.dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:   str = base.dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey: str = base.dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
-    unix_ts_s:     int = base.dict_require(d=get.json, key='unix_ts_s',     default_val=0,  err_msg="Missing unix timestamp from body",      err=err)
-    master_sig:    str = base.dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:  str = base.dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
+    version:       int = base.json_dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
+    master_pkey:   str = base.json_dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
+    rotating_pkey: str = base.json_dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
+    unix_ts_s:     int = base.json_dict_require(d=get.json, key='unix_ts_s',     default_val=0,  err_msg="Missing unix timestamp from body",      err=err)
+    master_sig:    str = base.json_dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
+    rotating_sig:  str = base.json_dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -539,8 +551,8 @@ def get_pro_revocations():
 
     # Extract values from JSON
     err          = base.ErrorSink()
-    version: int = base.dict_require(d=get.json, key='version', default_val=0, err_msg="Missing version from body",          err=err)
-    ticket:  int = base.dict_require(d=get.json, key='ticket',  default_val=0, err_msg="Missing revocation ticket from body", err=err)
+    version: int = base.json_dict_require(d=get.json, key='version', default_val=0, err_msg="Missing version from body",          err=err)
+    ticket:  int = base.json_dict_require(d=get.json, key='ticket',  default_val=0, err_msg="Missing revocation ticket from body", err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -583,11 +595,11 @@ def get_pro_payments():
 
     # Extract values from JSON
     err              = base.ErrorSink()
-    version:     int = base.dict_require(d=get.json, key='version',     default_val=0,  err_msg="Missing version from body",           err=err)
-    master_pkey: str = base.dict_require(d=get.json, key='master_pkey', default_val='', err_msg="Missing master public key from body", err=err)
-    master_sig:  str = base.dict_require(d=get.json, key='master_sig',  default_val='', err_msg="Missing master signature from body",  err=err)
-    unix_ts_s:   int = base.dict_require(d=get.json, key='unix_ts_s',   default_val=0,  err_msg="Missing unix timestamp from body",    err=err)
-    page:        int = base.dict_require(d=get.json, key='page',        default_val=0,  err_msg="Missing page from body",              err=err)
+    version:     int = base.json_dict_require(d=get.json, key='version',     default_val=0,  err_msg="Missing version from body",           err=err)
+    master_pkey: str = base.json_dict_require(d=get.json, key='master_pkey', default_val='', err_msg="Missing master public key from body", err=err)
+    master_sig:  str = base.json_dict_require(d=get.json, key='master_sig',  default_val='', err_msg="Missing master signature from body",  err=err)
+    unix_ts_s:   int = base.json_dict_require(d=get.json, key='unix_ts_s',   default_val=0,  err_msg="Missing unix timestamp from body",    err=err)
+    page:        int = base.json_dict_require(d=get.json, key='page',        default_val=0,  err_msg="Missing page from body",              err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -625,24 +637,39 @@ def get_pro_payments():
         total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
         offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
         with base.SQLTransaction(db.sql_conn) as tx:
-            list_it: collections.abc.Iterator[tuple[int, int, int, int, bytes, int]] = \
+            list_it: collections.abc.Iterator[backend.SQLProPaymentsIteratorRowTuple] = \
                     backend.get_pro_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
             for row in list_it:
-                subscription_duration_s: int   = row[0]
-                payment_provider:        int   = row[1]
-                creation_unix_ts_s:      int   = row[2]
-                activation_unix_ts_s:    int   = row[3]
-                payment_token_hash:      bytes = row[4]
-                archive_unix_ts_s:       int   = row[5]
+                subscription_duration_s: int        = row[0]
+                payment_provider                    = base.PaymentProvider(row[1])
+                creation_unix_ts_s:      int        = row[2]
+                activation_unix_ts_s:    int        = row[3]
+                apple_original_tx_id:    str        = row[4]
+                apple_tx_id:             str        = row[5]
+                apple_web_line_order_id: str | None = row[6]
+                google_payment_token:    str        = row[7]
+                archive_unix_ts_s:       int        = row[8]
 
-                items.append({
-                    'subscription_duration_s': subscription_duration_s,
-                    'payment_provider':        payment_provider,
-                    'creation_unix_ts_s':      creation_unix_ts_s,
-                    'activation_unix_ts_s':    activation_unix_ts_s,
-                    'payment_token_hash':      payment_token_hash.hex(),
-                    'archive_unix_ts_s':       archive_unix_ts_s,
-                })
+                if payment_provider == base.PaymentProvider.GooglePlayStore:
+                    items.append({
+                        'subscription_duration_s': subscription_duration_s,
+                        'payment_provider':        int(payment_provider.value),
+                        'creation_unix_ts_s':      creation_unix_ts_s,
+                        'activation_unix_ts_s':    activation_unix_ts_s,
+                        'google_payment_token':    google_payment_token,
+                        'archive_unix_ts_s':       archive_unix_ts_s,
+                    })
+                elif payment_provider == base.PaymentProvider.iOSAppStore:
+                    items.append({
+                        'subscription_duration_s': subscription_duration_s,
+                        'payment_provider':        int(payment_provider.value),
+                        'creation_unix_ts_s':      creation_unix_ts_s,
+                        'activation_unix_ts_s':    activation_unix_ts_s,
+                        'archive_unix_ts_s':       archive_unix_ts_s,
+                        'apple_original_tx_id':    apple_original_tx_id,
+                        'apple_tx_id':             apple_tx_id,
+                        'apple_web_line_order_id': apple_web_line_order_id if apple_web_line_order_id else '',
+                    })
 
     result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'items': items})
     return result

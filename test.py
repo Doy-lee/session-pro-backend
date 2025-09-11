@@ -40,39 +40,49 @@ def test_backend_same_user_stacks_subscription():
     rotating_key:       nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
     creation_unix_ts_s: int                     = base.round_unix_ts_to_next_day(int(time.time()))
     class Scenario:
-        payment_token_hash:      bytes                        = b''
+        google_payment_token:    str                          = ''
         subscription_duration_s: int                          = 0
         proof:                   backend.ProSubscriptionProof = backend.ProSubscriptionProof()
         payment_provider:        base.PaymentProvider         = base.PaymentProvider.Nil
-        def __init__(self, payment_token_hash: bytes, subscription_duration_s: int, payment_provider: base.PaymentProvider):
-            self.payment_token_hash      = payment_token_hash
+        def __init__(self, google_payment_token: str, subscription_duration_s: int, payment_provider: base.PaymentProvider):
+            self.google_payment_token    = google_payment_token
             self.subscription_duration_s = subscription_duration_s
             self.payment_provider        = payment_provider
 
     scenarios: list[Scenario] = [
-        Scenario(payment_token_hash=os.urandom(backend.BLAKE2B_DIGEST_SIZE), subscription_duration_s=30 * base.SECONDS_IN_DAY, payment_provider=base.PaymentProvider.GooglePlayStore),
-        Scenario(payment_token_hash=os.urandom(backend.BLAKE2B_DIGEST_SIZE), subscription_duration_s=365 * base.SECONDS_IN_DAY, payment_provider=base.PaymentProvider.iOSAppStore)
+        Scenario(google_payment_token=os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(), subscription_duration_s=30 * base.SECONDS_IN_DAY, payment_provider=base.PaymentProvider.GooglePlayStore),
+        Scenario(google_payment_token=os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(), subscription_duration_s=365 * base.SECONDS_IN_DAY, payment_provider=base.PaymentProvider.GooglePlayStore)
     ]
 
     for it in scenarios:
-        # Verify unredeemed payments
-        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                       payment_token_hash=it.payment_token_hash,
-                                       subscription_duration_s=it.subscription_duration_s,
-                                       payment_provider=it.payment_provider,
-                                       err=err)
+        # Add the "unredeemed" version of the payment, e.g. mock the notification from
+        # IOS App Store/Google Play Store
+        assert it.payment_provider == base.PaymentProvider.GooglePlayStore, "Currently only google is mocked"
+        payment_tx                      = backend.PaymentProviderTransaction()
+        payment_tx.provider             = it.payment_provider
+        payment_tx.google_payment_token = it.google_payment_token
+        backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
+                                        payment_tx=payment_tx,
+                                        subscription_duration_s=it.subscription_duration_s,
+                                        err=err)
+        assert len(err.msg_list) == 0
 
         unredeemed_payment_list: list[backend.UnredeemedPaymentRow] = backend.get_unredeemed_payments_list(db.sql_conn)
         assert len(unredeemed_payment_list)                       == 1
-        assert unredeemed_payment_list[0].payment_token_hash      == it.payment_token_hash
+        assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
+        assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
 
         # Register the payment
         version: int = 0
+        add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx.provider             = payment_tx.provider
+        add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
+
         add_payment_hash: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                            master_pkey=master_key.verify_key,
-                                                            rotating_pkey=rotating_key.verify_key,
-                                                            payment_token_hash=it.payment_token_hash)
+                                                                    master_pkey=master_key.verify_key,
+                                                                    rotating_pkey=rotating_key.verify_key,
+                                                                    payment_tx=add_pro_payment_tx)
 
         it.proof = backend.add_pro_payment(version            = version,
                                            sql_conn           = db.sql_conn,
@@ -80,7 +90,7 @@ def test_backend_same_user_stacks_subscription():
                                            creation_unix_ts_s = creation_unix_ts_s,
                                            master_pkey        = master_key.verify_key,
                                            rotating_pkey      = rotating_key.verify_key,
-                                           payment_token_hash = it.payment_token_hash,
+                                           payment_tx         = add_pro_payment_tx,
                                            master_sig         = master_key.sign(add_payment_hash).signature,
                                            rotating_sig       = rotating_key.sign(add_payment_hash).signature,
                                            err                = err)
@@ -98,26 +108,32 @@ def test_backend_same_user_stacks_subscription():
     assert user_list[0].gen_index                  == runtime.gen_index - 1
     assert user_list[0].expiry_unix_ts_s           == creation_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
 
-    payment_list: list[backend.PaymentRow]          = backend.get_payments_list(db.sql_conn)
-    assert len(payment_list)                       == 2
-    assert payment_list[0].master_pkey             == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[0].subscription_duration_s == scenarios[0].subscription_duration_s
-    assert payment_list[0].payment_provider        == scenarios[0].payment_provider
-    assert payment_list[0].creation_unix_ts_s      == creation_unix_ts_s
-    assert payment_list[0].activation_unix_ts_s    == creation_unix_ts_s
-    assert payment_list[0].payment_token_hash      == scenarios[0].payment_token_hash
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
+    assert len(payment_list)                               == 2
+    assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
+    assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
+    assert payment_list[0].payment_provider                == scenarios[0].payment_provider
+    assert payment_list[0].creation_unix_ts_s              == creation_unix_ts_s
+    assert payment_list[0].activation_unix_ts_s            == creation_unix_ts_s
+    assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
+    assert len(payment_list[0].apple.tx_id)                == 0
+    assert len(payment_list[0].apple.original_tx_id)       == 0
+    assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
-    assert payment_list[1].master_pkey             == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[1].subscription_duration_s == scenarios[1].subscription_duration_s
-    assert payment_list[1].payment_provider        == scenarios[1].payment_provider
-    assert payment_list[1].creation_unix_ts_s      == creation_unix_ts_s
-    assert payment_list[1].activation_unix_ts_s    == None
-    assert payment_list[1].payment_token_hash      == scenarios[1].payment_token_hash
+    assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
+    assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
+    assert payment_list[1].payment_provider                == scenarios[1].payment_provider
+    assert payment_list[1].creation_unix_ts_s              == creation_unix_ts_s
+    assert payment_list[1].activation_unix_ts_s            == None
+    assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
+    assert len(payment_list[0].apple.tx_id)                == 0
+    assert len(payment_list[0].apple.original_tx_id)       == 0
+    assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
-    revocation_list: list[backend.RevocationRow]    = backend.get_revocations_list(db.sql_conn)
-    assert len(revocation_list)                    == 1
-    assert revocation_list[0].gen_index            == 0
-    assert revocation_list[0].expiry_unix_ts_s     == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
+    revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.sql_conn)
+    assert len(revocation_list)                            == 1
+    assert revocation_list[0].gen_index                    == 0
+    assert revocation_list[0].expiry_unix_ts_s             == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
 
     assert isinstance(payment_list[0].activation_unix_ts_s, int)
 
@@ -130,15 +146,18 @@ def test_backend_same_user_stacks_subscription():
     assert expire_result.revocations                  == 1
     assert expire_result.users                        == 0
 
-    archived_payment_list: list[backend.HistoricalPaymentRow] = backend.get_historical_payments_list(db.sql_conn)
-    assert len(archived_payment_list)                       == 1
-    assert archived_payment_list[0].master_pkey             == payment_list[0].master_pkey
-    assert archived_payment_list[0].subscription_duration_s == payment_list[0].subscription_duration_s
-    assert archived_payment_list[0].payment_provider        == payment_list[0].payment_provider
-    assert archived_payment_list[0].creation_unix_ts_s      == payment_list[0].creation_unix_ts_s
-    assert archived_payment_list[0].activation_unix_ts_s    == payment_list[0].activation_unix_ts_s
-    assert archived_payment_list[0].payment_token_hash      == payment_list[0].payment_token_hash
-    assert archived_payment_list[0].archived_unix_ts_s      == expire_unix_ts_s
+    archived_payment_list: list[backend.HistoricalPaymentRow]   = backend.get_historical_payments_list(db.sql_conn)
+    assert len(archived_payment_list)                          == 1
+    assert archived_payment_list[0].master_pkey                == payment_list[0].master_pkey
+    assert archived_payment_list[0].subscription_duration_s    == payment_list[0].subscription_duration_s
+    assert archived_payment_list[0].payment_provider           == payment_list[0].payment_provider
+    assert archived_payment_list[0].creation_unix_ts_s         == payment_list[0].creation_unix_ts_s
+    assert archived_payment_list[0].activation_unix_ts_s       == payment_list[0].activation_unix_ts_s
+    assert archived_payment_list[0].google_payment_token       == payment_list[0].google_payment_token
+    assert archived_payment_list[0].archived_unix_ts_s         == expire_unix_ts_s
+    assert archived_payment_list[0].apple.web_line_order_tx_id == payment_list[0].apple.web_line_order_tx_id
+    assert archived_payment_list[0].apple.tx_id                == payment_list[0].apple.tx_id
+    assert archived_payment_list[0].apple.original_tx_id       == payment_list[0].apple.original_tx_id
 
     _ = backend.verify_db(db.sql_conn, err)
     if len(err.msg_list) > 0:
@@ -167,34 +186,40 @@ def test_server_add_payment_flow():
                                                    server_x25519_pkey=server_x25519_skey.public_key)
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
-    master_key             = nacl.signing.SigningKey.generate()
-    rotating_key           = nacl.signing.SigningKey.generate()
-    payment_token_hash     = os.urandom(backend.BLAKE2B_DIGEST_SIZE)
-    backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                   payment_token_hash=payment_token_hash,
-                                   subscription_duration_s=30 * base.SECONDS_IN_DAY,
-                                   payment_provider=base.PaymentProvider.GooglePlayStore,
-                                   err=err)
+    master_key                      = nacl.signing.SigningKey.generate()
+    rotating_key                    = nacl.signing.SigningKey.generate()
+    payment_tx                      = backend.PaymentProviderTransaction()
+    payment_tx.provider             = base.PaymentProvider.GooglePlayStore
+    payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
+    backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
+                                    payment_tx=payment_tx,
+                                    subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
     first_gen_index_hash:   bytes = b''
     first_expiry_unix_ts_s: int = 0
     if 1: # Simulate client request to register a payment
-        version: int = 0
+        version: int                            = 0
+        add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx.provider             = payment_tx.provider
+        add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
+
         payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                master_pkey=master_key.verify_key,
-                                                                rotating_pkey=rotating_key.verify_key,
-                                                                payment_token_hash=payment_token_hash)
+                                                                        master_pkey=master_key.verify_key,
+                                                                        rotating_pkey=rotating_key.verify_key,
+                                                                        payment_tx=add_pro_payment_tx)
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                shared_key=shared_key,
                                                endpoint=server.ROUTE_ADD_PRO_PAYMENT,
                                                request_body={
-                                                   'version':       version,
-                                                   'master_pkey':   bytes(master_key.verify_key).hex(),
-                                                   'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-                                                   'payment_token': payment_token_hash.hex(),
-                                                   'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-                                                   'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                                   'version':              version,
+                                                   'master_pkey':          bytes(master_key.verify_key).hex(),
+                                                   'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+                                                   'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                                   'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                                   'payment_provider':     add_pro_payment_tx.provider.value,
+                                                   'google_payment_token': add_pro_payment_tx.google_payment_token,
                                                })
 
         # POST and get response
@@ -215,11 +240,11 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
+        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -282,11 +307,11 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
+        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -306,27 +331,31 @@ def test_server_add_payment_flow():
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     if 1: # Register another payment on the same user, this will revoke the old proof
-        version:                int   = 0
-        new_payment_token_hash: bytes = os.urandom(len(payment_token_hash))
+        version: int                        = 0
+        new_payment_tx                      = backend.PaymentProviderTransaction()
+        new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
+        new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
+        backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
+                                        payment_tx=new_payment_tx,
+                                        subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                        err=err)
 
-        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                       payment_token_hash=new_payment_token_hash,
-                                       subscription_duration_s=30 * base.SECONDS_IN_DAY,
-                                       payment_provider=base.PaymentProvider.iOSAppStore,
-                                       err=err)
-
+        new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        new_add_pro_payment_tx.provider             = new_payment_tx.provider
+        new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
         payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
                                                                         master_pkey=master_key.verify_key,
                                                                         rotating_pkey=rotating_key.verify_key,
-                                                                        payment_token_hash=new_payment_token_hash)
+                                                                        payment_tx=new_add_pro_payment_tx)
 
-        request_body={
-            'version':       version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-            'payment_token': new_payment_token_hash.hex(),
-            'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+        request_body = {
+            'version':              version,
+            'master_pkey':          bytes(master_key.verify_key).hex(),
+            'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+            'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+            'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+            'payment_provider':     new_add_pro_payment_tx.provider.value,
+            'google_payment_token': new_add_pro_payment_tx.google_payment_token,
         }
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
@@ -352,11 +381,11 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
+        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -401,9 +430,9 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version: int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-        result_ticket:  int                        = base.dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
+        result_version: int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
+        result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
+        result_ticket:  int                        = base.json_dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0
         assert result_ticket  == 1
@@ -445,9 +474,9 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version: int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_items:   list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-        result_ticket:  int                        = base.dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
+        result_version: int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
+        result_items:   list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
+        result_ticket:  int                        = base.json_dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert result_ticket  == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -493,10 +522,10 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:  int                        = base.dict_require(d=result_json, key='version',  default_val=0,  err_msg='Missing field', err=err)
-        result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',    default_val=[], err_msg='Missing field', err=err)
-        result_pages:    int                        = base.dict_require(d=result_json, key='pages',    default_val=0,  err_msg='Missing field', err=err)
-        result_payments: int                        = base.dict_require(d=result_json, key='payments', default_val=0,  err_msg='Missing field', err=err)
+        result_version:  int                        = base.json_dict_require(d=result_json, key='version',  default_val=0,  err_msg='Missing field', err=err)
+        result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',    default_val=[], err_msg='Missing field', err=err)
+        result_pages:    int                        = base.json_dict_require(d=result_json, key='pages',    default_val=0,  err_msg='Missing field', err=err)
+        result_payments: int                        = base.json_dict_require(d=result_json, key='payments', default_val=0,  err_msg='Missing field', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -588,10 +617,10 @@ def test_server_add_payment_flow():
             result_json = response_json['result']
 
             # Extract the fields
-            result_version:  int                        = base.dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-            result_items:    list[dict[str, int | str]] = base.dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-            result_pages:    int                        = base.dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
-            result_payments: int                        = base.dict_require(d=result_json, key='payments',default_val=0,  err_msg='Missing field', err=err)
+            result_version:  int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
+            result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
+            result_pages:    int                        = base.json_dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
+            result_payments: int                        = base.json_dict_require(d=result_json, key='payments',default_val=0,  err_msg='Missing field', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
             assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
