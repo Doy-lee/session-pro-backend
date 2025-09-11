@@ -234,8 +234,6 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[Unredeeme
             result.append(item)
     return result;
 
-def get_payments_sql_fields() -> list[PaymentRow]:
-
 def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
     with base.SQLTransaction(sql_conn) as tx:
@@ -443,7 +441,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             );
 
             CREATE TABLE IF NOT EXISTS users (
-                master_pkey      BLOB PRIMARY KEY,
+                master_pkey      BLOB PRIMARY KEY NOT NULL,
 
                 -- Current generation index allocated for the user. A new index is allocated
                 -- everytime a payment is added/removed for the associated master key which will
@@ -473,7 +471,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             );
 
             CREATE TABLE IF NOT EXISTS revocations (
-                gen_index        INTEGER PRIMARY KEY,
+                gen_index        INTEGER PRIMARY KEY NOT NULL,
                 expiry_unix_ts_s INTEGER NOT NULL
             );
 
@@ -598,6 +596,59 @@ def add_unredeemed_apple_payment(sql_conn:                   sqlite3.Connection,
                                  err:                        base.ErrorSink):
     assert False, "Unimplemented"
 
+def restore_apple_payment(sql_conn:                   sqlite3.Connection,
+                          apple_web_line_order_tx_id: str | None,
+                          apple_original_tx_id:       str,
+                          archived_unix_ts_s:         int):
+    assert False, "Unimplemented"
+
+def delete_newest_apple_payment_for_original_tx_id(sql_conn: sqlite3.Connection, apple_original_tx_id: str, archived_unix_ts_s: int):
+
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+
+        # NOTE: Delete the apple payment from the payments
+        payments_table_fields: str = string_from_sql_fields(SQL_TABLE_PAYMENTS_FIELD, schema=False)
+        _ = tx.cursor.execute(f'''
+            DELETE FROM payments
+            WHERE       apple_original_tx_id = ? AND payment_provider = ?
+            ORDER BY    creation_unix_ts_s DESC
+            LIMIT       1
+            RETURNING   {payments_table_fields}
+        ''', (apple_original_tx_id,
+              base.PaymentProvider.iOSAppStore.value));
+
+        # NOTE: Archive the payments by inserting the deleted rows into the historical table
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes,        # master pkey
+                                                          int,          # subscription duration s
+                                                          int,          # payment provider
+                                                          int,          # creation unix ts s
+                                                          int | None,   # activation unix ts s
+                                                          bytes,        # payment token hash
+                                                          bytes | None, # apple original tx id
+                                                          bytes | None, # apple tx id
+                                                          bytes | None, # apple web line order tx id
+                                                          bytes | None] # google payment token
+                                                          ], tx.cursor)
+        insert_values_stmt = '?, ' * len(SQL_TABLE_PAYMENTS_FIELD)
+
+        for row in rows:
+            _ = tx.cursor.execute(f'''
+                INSERT INTO historical_payments ({payments_table_fields}, archived_unix_ts_s)
+                VALUES ({insert_values_stmt} ?)
+            ''', (*row, archived_unix_ts_s));
+
+        # NOTE: We also need to delete from the unredeemed payments incase the user has never
+        # registered the payment
+        # TODO: What about if they reverse the delete (e.g. a refund?)
+        _ = tx.cursor.execute(f'''
+            DELETE FROM unredeemed_payments
+            WHERE       apple_original_tx_id = ? AND payment_provider = ?
+            RETURNING   {payments_table_fields}
+        ''', (apple_original_tx_id,
+              base.PaymentProvider.iOSAppStore.value));
+
+
 def delete_apple_payment(sql_conn:                   sqlite3.Connection,
                          apple_web_line_order_tx_id: str | None,
                          apple_original_tx_id:       str,
@@ -625,23 +676,23 @@ def delete_apple_payment(sql_conn:                   sqlite3.Connection,
                   base.PaymentProvider.iOSAppStore.value));
 
         # NOTE: Archive the payments by inserting the deleted rows into the historical table
-        rows = typing.cast(collections.abc.Iterator[tuple[bytes, # master pkey
-                                                          int,   # subscription duration s
-                                                          int,   # payment provider
-                                                          int,   # creation unix ts s
-                                                          int,   # activation unix ts s
-                                                          bytes, # payment token hash
-                                                          bytes, # apple original tx id
-                                                          bytes, # apple tx id
-                                                          bytes, # apple web line order tx id
-                                                          bytes] # google payment token
+        rows = typing.cast(collections.abc.Iterator[tuple[bytes,        # master pkey
+                                                          int,          # subscription duration s
+                                                          int,          # payment provider
+                                                          int,          # creation unix ts s
+                                                          int | None,   # activation unix ts s
+                                                          bytes,        # payment token hash
+                                                          bytes | None, # apple original tx id
+                                                          bytes | None, # apple tx id
+                                                          bytes | None, # apple web line order tx id
+                                                          bytes | None] # google payment token
                                                           ], tx.cursor)
         insert_values_stmt = '?, ' * len(SQL_TABLE_PAYMENTS_FIELD)
 
         for row in rows:
             _ = tx.cursor.execute(f'''
                 INSERT INTO historical_payments ({payments_table_fields}, archived_unix_ts_s)
-                VALUES ({insert_values_stmt}, ?)
+                VALUES ({insert_values_stmt} ?)
             ''', (*row, archived_unix_ts_s));
 
         # NOTE: We also need to delete from the unredeemed payments incase the user has never

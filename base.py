@@ -64,7 +64,7 @@ class TableStrings:
 # our use-case only needs a small subset of it as of current so KISS.
 JSONValue = typing.TypeVar('JSONValue', int, str, list[dict[str, int | str]])
 
-def dict_require(d: dict[str, JSONValue], key: str, default_val: JSONValue, err_msg: str, err: ErrorSink) -> JSONValue:
+def json_dict_require(d: dict[str, JSONValue], key: str, default_val: JSONValue, err_msg: str, err: ErrorSink) -> JSONValue:
     if not key in d:
         err.msg_list.append(f'{err_msg}: \'{key}\'')
 

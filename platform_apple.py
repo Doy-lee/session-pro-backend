@@ -27,56 +27,6 @@ from appstoreserverlibrary.signed_data_verifier import (
     SignedDataVerifier           as AppleSignedDataVerifier,
 )
 
-# NOTE: Enforce the presence of platform_config.py and the variables required for Apple
-# integration
-try:
-    import platform_config
-    import_error = False
-    if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print("ERROR: Missing 'apple_key_id' string in platform_config.py")
-        import_error = True
-
-    if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
-        import_error = True
-
-    if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
-        import_error = True
-
-    if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
-        import_error = True
-
-    if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
-        import_error = True
-
-    if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
-        print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
-        import_error = True
-
-    if import_error:
-        raise ImportError
-
-except ImportError:
-    print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
-  ```python
-  import pathlib
-  apple_key_id: str      = '<Private Key ID>'
-  apple_issuer_id: str   = '<Key Issuer ID>'
-  apple_bundle_id: str   = 'com.your_organisation.your_project'
-  apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
-  apple_root_certs: list[bytes] = [
-      pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
-      pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
-      pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
-  ]
-  ```
-''')
-    sys.exit(1)
-
-
 ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
 flask_blueprint                               = flask.Blueprint('session-pro-backend-apple', __name__)
 
@@ -156,6 +106,55 @@ def test_apple_signed_payload():
               's2x0-ByhW9fgGWFLgLpSanCEwkzbX2B4C92s5bV-rhB0JtxBLmmyAlUnH7jhVILoGalp-Xnz_qRg'
 
 def entry_point():
+    # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
+    # integration
+    try:
+        import platform_config
+        import_error = False
+        if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print("ERROR: Missing 'apple_key_id' string in platform_config.py")
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            import_error = True
+
+        if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            import_error = True
+
+        if import_error:
+            raise ImportError
+
+    except ImportError:
+        print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
+      ```python
+      import pathlib
+      apple_key_id: str      = '<Private Key ID>'
+      apple_issuer_id: str   = '<Key Issuer ID>'
+      apple_bundle_id: str   = 'com.your_organisation.your_project'
+      apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
+      apple_root_certs: list[bytes] = [
+          pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
+          pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
+          pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
+      ]
+      ```
+    ''')
+        sys.exit(1)
+
     app_apple_id: int | None = None
     apple_env                = AppleEnvironment.SANDBOX
     if apple_env != AppleEnvironment.SANDBOX:
@@ -439,7 +438,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     if not body.subtype:
                         # User is cancelling their upgrade. End the current subscription and revive the old subscription
                         # TODO: Err, how do I find the "previous" subscription and re-activate it.
-                        backend.revert_apple_payment(sql_conn, tx.originalTransactionId)
+                        pass
 
                     elif body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
@@ -521,18 +520,22 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     elif body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
                         # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
-                        # notification which handles this for us at the end of the month when they
-                        # renew.
+                        # notification which handles this for us at the end of the billing cycle
+                        # when they renew.
                         pass
                     elif body.subtype == AppleSubtype.UPGRADE:
-                        # NOTE User is upgrading to a better subscription. Upgrade happens
+                        # NOTE: User is upgrading to a better subscription. Upgrade happens
                         # immediately, current plan is ended. The only link we have to the current
                         # plan is the original transaction ID, so we use that to cancel the old
                         # payment and issue a new one.
-                        backend.delete_apple_payment(sql_conn=sql_conn,
-                                                     apple_web_line_order_tx_id=tx.webOrderLineItemId,
-                                                     apple_original_tx_id=tx.originalTransactionId,
-                                                     archived_unix_ts_s=unix_ts_s)
+
+                        # TODO: According to the docs though, the original transaction ID is only
+                        # relevant for the same subscription and product pairing. If you're upgrading
+                        # we're moving to a different product .. so the original transaction ID
+                        # might not match us to the previous subscription for this user, I think.
+                        backend.delete_newest_apple_payment_for_original_tx_id(sql_conn             = sql_conn,
+                                                                               apple_original_tx_id = tx.originalTransactionId,
+                                                                               archived_unix_ts_s   = unix_ts_s)
 
                         # TODO: Submit the "new" payment
                         backend.add_unredeemed_apple_payment(sql_conn                   = sql_conn,
@@ -617,10 +620,13 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
 
                 # NOTE: Extract components
                 if len(err.msg_list) == 0:
-                    backend.delete_apple_payment(sql_conn=sql_conn,
-                                                 apple_web_line_order_tx_id=tx.webOrderLineItemId,
-                                                 apple_original_tx_id=tx.originalTransactionId,
-                                                 archived_unix_ts_s=unix_ts_s)
+                    err.msg_list.append(f'Received TX: {tx}, TODO: this needs to be handled but first check what data we got')
+                    # TODO: I'm not sure if the notification gives you information about which transaction needs to be reversed.
+                    # Need to inspect payload
+                    # backend.restore_apple_payment(sql_conn=sql_conn,
+                    #                               apple_web_line_order_tx_id=tx.webOrderLineItemId,
+                    #                               apple_original_tx_id=tx.originalTransactionId,
+                    #                               apple_tx_id=tx.transactionId)
 
 
     elif body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_STATUS:
@@ -759,5 +765,6 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
     if len(err.msg_list):
         err_msg = '\n'.join(err.msg_list)
         print(f'ERROR: {err_msg}\nPayload was: {json.dumps(body, indent=1)}')
+
 
 entry_point()
