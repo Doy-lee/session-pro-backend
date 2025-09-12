@@ -114,7 +114,9 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
     assert payment_list[0].creation_unix_ts_s              == creation_unix_ts_s
-    assert payment_list[0].activation_unix_ts_s            == creation_unix_ts_s
+    assert payment_list[0].activated_unix_ts_s             == creation_unix_ts_s
+    assert payment_list[0].expired_unix_ts_s               is None
+    assert payment_list[0].refunded_unix_ts_s              is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -124,7 +126,9 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
     assert payment_list[1].creation_unix_ts_s              == creation_unix_ts_s
-    assert payment_list[1].activation_unix_ts_s            == None
+    assert payment_list[1].activated_unix_ts_s             == None
+    assert payment_list[1].expired_unix_ts_s               is None
+    assert payment_list[1].refunded_unix_ts_s              is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -135,29 +139,16 @@ def test_backend_same_user_stacks_subscription():
     assert revocation_list[0].gen_index                    == 0
     assert revocation_list[0].expiry_unix_ts_s             == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
 
-    assert isinstance(payment_list[0].activation_unix_ts_s, int)
+    assert isinstance(payment_list[0].activated_unix_ts_s, int)
 
-    expire_unix_ts_s: int = base.round_unix_ts_to_next_day(payment_list[0].activation_unix_ts_s + payment_list[0].subscription_duration_s + 1)
-    expire_result: backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
-                                                                                        unix_ts_s=expire_unix_ts_s)
+    expire_unix_ts_s: int                  = base.round_unix_ts_to_next_day(payment_list[0].activated_unix_ts_s + payment_list[0].subscription_duration_s + 1)
+    expire_result:    backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
+                                                                                           unix_ts_s=expire_unix_ts_s)
     assert expire_result.already_done_by_someone_else == False
     assert expire_result.success                      == True
     assert expire_result.payments                     == 1
     assert expire_result.revocations                  == 1
     assert expire_result.users                        == 0
-
-    archived_payment_list: list[backend.HistoricalPaymentRow]   = backend.get_historical_payments_list(db.sql_conn)
-    assert len(archived_payment_list)                          == 1
-    assert archived_payment_list[0].master_pkey                == payment_list[0].master_pkey
-    assert archived_payment_list[0].subscription_duration_s    == payment_list[0].subscription_duration_s
-    assert archived_payment_list[0].payment_provider           == payment_list[0].payment_provider
-    assert archived_payment_list[0].creation_unix_ts_s         == payment_list[0].creation_unix_ts_s
-    assert archived_payment_list[0].activation_unix_ts_s       == payment_list[0].activation_unix_ts_s
-    assert archived_payment_list[0].google_payment_token       == payment_list[0].google_payment_token
-    assert archived_payment_list[0].archived_unix_ts_s         == expire_unix_ts_s
-    assert archived_payment_list[0].apple.web_line_order_tx_id == payment_list[0].apple.web_line_order_tx_id
-    assert archived_payment_list[0].apple.tx_id                == payment_list[0].apple.tx_id
-    assert archived_payment_list[0].apple.original_tx_id       == payment_list[0].apple.original_tx_id
 
     _ = backend.verify_db(db.sql_conn, err)
     if len(err.msg_list) > 0:

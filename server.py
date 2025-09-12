@@ -631,42 +631,49 @@ def get_pro_payments():
     total_pages:    int                        = 0
     items:          list[dict[str, str | int]] = []
     with open_db_from_flask_request_context(flask.current_app) as db:
-        total_payments = backend.get_pro_payments_count(db.sql_conn, master_pkey=master_pkey_nacl)
+        total_payments = backend.get_payments_count(db.sql_conn, master_pkey=master_pkey_nacl)
         total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
         offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
         with base.SQLTransaction(db.sql_conn) as tx:
-            list_it: collections.abc.Iterator[backend.SQLProPaymentsIteratorRowTuple] = \
-                    backend.get_pro_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
+            list_it: collections.abc.Iterator[backend.SQLTablePaymentRowTuple] = \
+                    backend.get_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
             for row in list_it:
-                subscription_duration_s: int        = row[0]
-                payment_provider                    = base.PaymentProvider(row[1])
-                creation_unix_ts_s:      int        = row[2]
-                activation_unix_ts_s:    int        = row[3]
-                apple_original_tx_id:    str        = row[4]
-                apple_tx_id:             str        = row[5]
-                apple_web_line_order_id: str | None = row[6]
-                google_payment_token:    str        = row[7]
-                archive_unix_ts_s:       int        = row[8]
+                master_pkey:             bytes = row[0]
+                status                         = backend.PaymentStatus(row[1])
+                subscription_duration_s: int   = row[2]
+                payment_provider               = base.PaymentProvider(row[3])
+                creation_unix_ts_s:      int   = row[4]
+                activation_unix_ts_s:    int   = row[5]  if row[5]  else 0
+                expired_unix_ts_s:       int   = row[6]  if row[6]  else 0
+                refunded_unix_ts_s:      int   = row[7]  if row[7]  else 0
+                apple_original_tx_id:    str   = row[8]  if row[8]  else ''
+                apple_tx_id:             str   = row[9]  if row[9]  else ''
+                apple_web_line_order_id: str   = row[10] if row[10] else ''
+                google_payment_token:    str   = row[11] if row[11] else ''
 
                 if payment_provider == base.PaymentProvider.GooglePlayStore:
                     items.append({
+                        'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
                         'creation_unix_ts_s':      creation_unix_ts_s,
                         'activation_unix_ts_s':    activation_unix_ts_s,
+                        'expired_unix_ts_s':       expired_unix_ts_s,
+                        'refunded_unix_ts_s':      refunded_unix_ts_s,
                         'google_payment_token':    google_payment_token,
-                        'archive_unix_ts_s':       archive_unix_ts_s,
                     })
                 elif payment_provider == base.PaymentProvider.iOSAppStore:
                     items.append({
+                        'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
                         'creation_unix_ts_s':      creation_unix_ts_s,
                         'activation_unix_ts_s':    activation_unix_ts_s,
-                        'archive_unix_ts_s':       archive_unix_ts_s,
+                        'expired_unix_ts_s':       expired_unix_ts_s,
+                        'refunded_unix_ts_s':      refunded_unix_ts_s,
                         'apple_original_tx_id':    apple_original_tx_id,
                         'apple_tx_id':             apple_tx_id,
-                        'apple_web_line_order_id': apple_web_line_order_id if apple_web_line_order_id else '',
+                        'apple_web_line_order_id': apple_web_line_order_id,
                     })
 
     result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'items': items})

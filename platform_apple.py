@@ -20,7 +20,7 @@ from appstoreserverlibrary.models.NotificationTypeV2            import Notificat
 
 from appstoreserverlibrary.api_client import (
     AppStoreServerAPIClient as AppleAppStoreServerAPIClient,
-    APIException as AppleAPIException,
+    APIException            as AppleAPIException,
 )
 
 from appstoreserverlibrary.signed_data_verifier import (
@@ -43,68 +43,6 @@ def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bo
 def notifications_apple_app_connect_sandbox() -> flask.Response:
     print(f"Request: {flask.request.data}")
     flask.abort(500)
-
-def test_apple_signed_payload():
-    # Sample test notification payload from the testing endpoint
-    payload = 'eyJhbGciOiJFUzI1NiIsIng1YyI6WyJNSUlFTURDQ0E3YWdBd0lCQWdJUWZUbGZkMGZOdkZXdnpDMVlJQ' + \
-              'U5zWGpBS0JnZ3Foa2pPUFFRREF6QjFNVVF3UWdZRFZRUURERHRCY0hCc1pTQlhiM0pzWkhkcFpHVWdSR1' + \
-              'YyWld4dmNHVnlJRkpsYkdGMGFXOXVjeUJEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURUxNQWt' + \
-              'HQTFVRUN3d0NSell4RXpBUkJnTlZCQW9NQ2tGd2NHeGxJRWx1WXk0eEN6QUpCZ05WQkFZVEFsVlRNQjRY' + \
-              'RFRJek1Ea3hNakU1TlRFMU0xb1hEVEkxTVRBeE1URTVOVEUxTWxvd2daSXhRREErQmdOVkJBTU1OMUJ5Y' + \
-              'jJRZ1JVTkRJRTFoWXlCQmNIQWdVM1J2Y21VZ1lXNWtJR2xVZFc1bGN5QlRkRzl5WlNCU1pXTmxhWEIwSU' + \
-              'ZOcFoyNXBibWN4TERBcUJnTlZCQXNNSTBGd2NHeGxJRmR2Y214a2QybGtaU0JFWlhabGJHOXdaWElnVW1' + \
-              'Wc1lYUnBiMjV6TVJNd0VRWURWUVFLREFwQmNIQnNaU0JKYm1NdU1Rc3dDUVlEVlFRR0V3SlZVekJaTUJN' + \
-              'R0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEEwSUFCRUZFWWUvSnFUcXlRdi9kdFhrYXVESENTY1YxMjlGW' + \
-              'VJWLzB4aUIyNG5DUWt6UWYzYXNISk9OUjVyMFJBMGFMdko0MzJoeTFTWk1vdXZ5ZnBtMjZqWFNqZ2dJSU' + \
-              '1JSUNCREFNQmdOVkhSTUJBZjhFQWpBQU1COEdBMVVkSXdRWU1CYUFGRDh2bENOUjAxREptaWc5N2JCODV' + \
-              'jK2xrR0taTUhBR0NDc0dBUVVGQndFQkJHUXdZakF0QmdnckJnRUZCUWN3QW9ZaGFIUjBjRG92TDJObGNu' + \
-              'UnpMbUZ3Y0d4bExtTnZiUzkzZDJSeVp6WXVaR1Z5TURFR0NDc0dBUVVGQnpBQmhpVm9kSFJ3T2k4dmIyT' + \
-              'npjQzVoY0hCc1pTNWpiMjB2YjJOemNEQXpMWGQzWkhKbk5qQXlNSUlCSGdZRFZSMGdCSUlCRlRDQ0FSRX' + \
-              'dnZ0VOQmdvcWhraUc5Mk5rQlFZQk1JSCtNSUhEQmdnckJnRUZCUWNDQWpDQnRneUJzMUpsYkdsaGJtTmx' + \
-              'JRzl1SUhSb2FYTWdZMlZ5ZEdsbWFXTmhkR1VnWW5rZ1lXNTVJSEJoY25SNUlHRnpjM1Z0WlhNZ1lXTmpa' + \
-              'WEIwWVc1alpTQnZaaUIwYUdVZ2RHaGxiaUJoY0hCc2FXTmhZbXhsSUhOMFlXNWtZWEprSUhSbGNtMXpJR' + \
-              '0Z1WkNCamIyNWthWFJwYjI1eklHOW1JSFZ6WlN3Z1kyVnlkR2xtYVdOaGRHVWdjRzlzYVdONUlHRnVaQ0' + \
-              'JqWlhKMGFXWnBZMkYwYVc5dUlIQnlZV04wYVdObElITjBZWFJsYldWdWRITXVNRFlHQ0NzR0FRVUZCd0l' + \
-              'CRmlwb2RIUndPaTh2ZDNkM0xtRndjR3hsTG1OdmJTOWpaWEowYVdacFkyRjBaV0YxZEdodmNtbDBlUzh3' + \
-              'SFFZRFZSME9CQllFRkFNczhQanM2VmhXR1FsekUyWk9FK0dYNE9vL01BNEdBMVVkRHdFQi93UUVBd0lIZ' + \
-              '0RBUUJnb3Foa2lHOTJOa0Jnc0JCQUlGQURBS0JnZ3Foa2pPUFFRREF3Tm9BREJsQWpFQTh5Uk5kc2twNT' + \
-              'A2REZkUExnaExMSndBdjVKOGhCR0xhSThERXhkY1BYK2FCS2pqTzhlVW85S3BmcGNOWVVZNVlBakFQWG1' + \
-              'NWEVaTCtRMDJhZHJtbXNoTnh6M05uS20rb3VRd1U3dkJUbjBMdmxNN3ZwczJZc2xWVGFtUllMNGFTczVr' + \
-              'PSIsIk1JSURGakNDQXB5Z0F3SUJBZ0lVSXNHaFJ3cDBjMm52VTRZU3ljYWZQVGp6Yk5jd0NnWUlLb1pJe' + \
-              'mowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN6TVNZd0pBWURWUVFMRE' + \
-              'IxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVHQTFVRUNnd0tRWEJ3Ykd' + \
-              'VZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NakV3TXpFM01qQXpOekV3V2hjTk16WXdNekU1TURB' + \
-              'd01EQXdXakIxTVVRd1FnWURWUVFERER0QmNIQnNaU0JYYjNKc1pIZHBaR1VnUkdWMlpXeHZjR1Z5SUZKb' + \
-              'GJHRjBhVzl1Y3lCRFpYSjBhV1pwWTJGMGFXOXVJRUYxZEdodmNtbDBlVEVMTUFrR0ExVUVDd3dDUnpZeE' + \
-              'V6QVJCZ05WQkFvTUNrRndjR3hsSUVsdVl5NHhDekFKQmdOVkJBWVRBbFZUTUhZd0VBWUhLb1pJemowQ0F' + \
-              'RWUZLNEVFQUNJRFlnQUVic1FLQzk0UHJsV21aWG5YZ3R4emRWSkw4VDBTR1luZ0RSR3BuZ24zTjZQVDhK' + \
-              'TUViN0ZEaTRiQm1QaENuWjMvc3E2UEYvY0djS1hXc0w1dk90ZVJoeUo0NXgzQVNQN2NPQithYW85MGZjc' + \
-              'HhTdi9FWkZibmlBYk5nWkdoSWhwSW80SDZNSUgzTUJJR0ExVWRFd0VCL3dRSU1BWUJBZjhDQVFBd0h3WU' + \
-              'RWUjBqQkJnd0ZvQVV1N0Rlb1ZnemlKcWtpcG5ldnIzcnI5ckxKS3N3UmdZSUt3WUJCUVVIQVFFRU9qQTR' + \
-              'NRFlHQ0NzR0FRVUZCekFCaGlwb2RIUndPaTh2YjJOemNDNWhjSEJzWlM1amIyMHZiMk56Y0RBekxXRndj' + \
-              'R3hsY205dmRHTmhaek13TndZRFZSMGZCREF3TGpBc29DcWdLSVltYUhSMGNEb3ZMMk55YkM1aGNIQnNaU' + \
-              'zVqYjIwdllYQndiR1Z5YjI5MFkyRm5NeTVqY213d0hRWURWUjBPQkJZRUZEOHZsQ05SMDFESm1pZzk3Yk' + \
-              'I4NWMrbGtHS1pNQTRHQTFVZER3RUIvd1FFQXdJQkJqQVFCZ29xaGtpRzkyTmtCZ0lCQkFJRkFEQUtCZ2d' + \
-              'xaGtqT1BRUURBd05vQURCbEFqQkFYaFNxNUl5S29nTUNQdHc0OTBCYUI2NzdDYUVHSlh1ZlFCL0VxWkdk' + \
-              'NkNTamlDdE9udU1UYlhWWG14eGN4ZmtDTVFEVFNQeGFyWlh2TnJreFUzVGtVTUkzM3l6dkZWVlJUNHd4V' + \
-              '0pDOTk0T3NkY1o0K1JHTnNZRHlSNWdtZHIwbkRHZz0iLCJNSUlDUXpDQ0FjbWdBd0lCQWdJSUxjWDhpTk' + \
-              'xGUzVVd0NnWUlLb1pJemowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN' + \
-              '6TVNZd0pBWURWUVFMREIxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVH' + \
-              'QTFVRUNnd0tRWEJ3YkdVZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NVFF3TkRNd01UZ3hPVEEyV' + \
-              '2hjTk16a3dORE13TVRneE9UQTJXakJuTVJzd0dRWURWUVFEREJKQmNIQnNaU0JTYjI5MElFTkJJQzBnUn' + \
-              'pNeEpqQWtCZ05WQkFzTUhVRndjR3hsSUVObGNuUnBabWxqWVhScGIyNGdRWFYwYUc5eWFYUjVNUk13RVF' + \
-              'ZRFZRUUtEQXBCY0hCc1pTQkpibU11TVFzd0NRWURWUVFHRXdKVlV6QjJNQkFHQnlxR1NNNDlBZ0VHQlN1' + \
-              'QkJBQWlBMklBQkpqcEx6MUFjcVR0a3lKeWdSTWMzUkNWOGNXalRuSGNGQmJaRHVXbUJTcDNaSHRmVGpqV' + \
-              'HV4eEV0WC8xSDdZeVlsM0o2WVJiVHpCUEVWb0EvVmhZREtYMUR5eE5CMGNUZGRxWGw1ZHZNVnp0SzUxN0' + \
-              'lEdll1VlRaWHBta09sRUtNYU5DTUVBd0hRWURWUjBPQkJZRUZMdXczcUZZTTRpYXBJcVozcjY5NjYvYXl' + \
-              '5U3JNQThHQTFVZEV3RUIvd1FGTUFNQkFmOHdEZ1lEVlIwUEFRSC9CQVFEQWdFR01Bb0dDQ3FHU000OUJB' + \
-              'TURBMmdBTUdVQ01RQ0Q2Y0hFRmw0YVhUUVkyZTN2OUd3T0FFWkx1Tit5UmhIRkQvM21lb3locG12T3dnU' + \
-              'FVuUFdUeG5TNGF0K3FJeFVDTUcxbWloREsxQTNVVDgyTlF6NjBpbU9sTTI3amJkb1h0MlFmeUZNbStZaG' + \
-              'lkRGtMRjF2TFVhZ002QmdENTZLeUtBPT0iXX0.eyJub3RpZmljYXRpb25UeXBlIjoiVEVTVCIsIm5vdGl' + \
-              'maWNhdGlvblVVSUQiOiI1OTI3NTFlZi1jMWI4LTQ3ZmMtOTI5ZS1kNjJkZWU2NmRmNGMiLCJkYXRhIjp7' + \
-              'ImJ1bmRsZUlkIjoiY29tLmxva2ktcHJvamVjdC5sb2tpLW1lc3NlbmdlciIsImVudmlyb25tZW50IjoiU' + \
-              '2FuZGJveCJ9LCJ2ZXJzaW9uIjoiMi4wIiwic2lnbmVkRGF0ZSI6MTc1NzAzNTQ3MjY4Nn0.n9l9_ZitkG' + \
-              's2x0-ByhW9fgGWFLgLpSanCEwkzbX2B4C92s5bV-rhB0JtxBLmmyAlUnH7jhVILoGalp-Xnz_qRg'
 
 def entry_point():
     # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
@@ -156,6 +94,10 @@ def entry_point():
     ''')
         sys.exit(1)
 
+    # NOTE: For version 2 notifications, it retries five times, at 1, 12, 24, 48, and 72 hours after the previous attempt.
+    #
+    #   https://developer.apple.com/documentation/appstoreservernotifications/responding-to-app-store-server-notifications
+
     app_apple_id: int | None = None
     apple_env                = AppleEnvironment.SANDBOX
     if apple_env != AppleEnvironment.SANDBOX:
@@ -167,11 +109,11 @@ def entry_point():
                                                 bundle_id=platform_config.apple_bundle_id,
                                                 environment=apple_env)
 
-    apple_verifier   = AppleSignedDataVerifier(root_certificates=platform_config.apple_root_certs,
-                                               enable_online_checks=True,
-                                               environment=apple_env,
-                                               bundle_id=platform_config.apple_bundle_id,
-                                               app_apple_id=app_apple_id)
+    apple_verifier = AppleSignedDataVerifier(root_certificates=platform_config.apple_root_certs,
+                                             enable_online_checks=True,
+                                             environment=apple_env,
+                                             bundle_id=platform_config.apple_bundle_id,
+                                             app_apple_id=app_apple_id)
 
     # try:
     #     response_test_notif: AppleSendTestNotificationResponse = apple_client.request_test_notification()
@@ -459,10 +401,10 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         # User is upgrading to a better subscription. Upgrade happens immediately, current plan is ended.
                         # NOTE: The only link we have to the current plan is the original transaction ID, so we use that
                         # to cancel the old payment and issue a new one.
-                        backend.delete_apple_payment(sql_conn=sql_conn,
+                        backend.refund_apple_payment(sql_conn=sql_conn,
                                                      apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                      apple_original_tx_id=tx.originalTransactionId,
-                                                     archived_unix_ts_s=unix_ts_s)
+                                                     refunded_unix_ts_s=unix_ts_s)
 
                         # NOTE: Submit/upgrade the payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
@@ -539,9 +481,9 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         # relevant for the same subscription and product pairing. If you're upgrading
                         # we're moving to a different product .. so the original transaction ID
                         # might not match us to the previous subscription for this user, I think.
-                        backend.delete_newest_apple_payment_for_original_tx_id(sql_conn             = sql_conn,
+                        backend.refund_newest_apple_payment_for_original_tx_id(sql_conn             = sql_conn,
                                                                                apple_original_tx_id = tx.originalTransactionId,
-                                                                               archived_unix_ts_s   = unix_ts_s)
+                                                                               refund_unix_ts_s     = unix_ts_s)
 
                         # TODO: Submit the "new" payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
@@ -591,10 +533,10 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
 
                 # NOTE: Extract components
                 if len(err.msg_list) == 0:
-                    backend.delete_apple_payment(sql_conn=sql_conn,
+                    backend.refund_apple_payment(sql_conn=sql_conn,
                                                  apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                  apple_original_tx_id=tx.originalTransactionId,
-                                                 archived_unix_ts_s=unix_ts_s)
+                                                 refunded_unix_ts_s=unix_ts_s)
 
     elif body.notificationType == AppleNotificationV2.REFUND_REVERSED:
         # A notification type that indicates the App Store reversed a previously granted refund due
