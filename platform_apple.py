@@ -5,6 +5,7 @@ import base
 import backend
 import sqlite3
 import sys
+import time
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -242,7 +243,6 @@ def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload)
         result.apple_web_line_order_tx_id = tx.webOrderLineItemId
     return result
 
-
 def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBodyV2DecodedPayload, sql_conn: sqlite3.Connection):
     # NOTE: Exhaustively handle all the notification types defined by Apple:
     #
@@ -332,8 +332,8 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #   Family Sharing to the same subscription or to another subscription within the same
         #   subscription group.
         #
-        #   For notifications about other product type purchases, see the ONE_TIME_CHARGE notification
-        #   type.
+        #   For notifications about other product type purchases, see the ONE_TIME_CHARGE
+        #   notification type.
         #
         #   Triggers (https://developer.apple.com/documentation/appstoreservernotifications/notificationtype#Handle-use-cases-for-in-app-purchase-life-cycle-events)
         #     Customer subscribes for the first time to any subscription within a subscription group. (subtype INITIAL_BUY)
@@ -398,7 +398,6 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     backend.add_unredeemed_payment2(sql_conn                = sql_conn,
                                                     payment_tx              = payment_tx,
                                                     subscription_duration_s = subscription_duration_s,
-                                                    payment_provider        = base.PaymentProvider.iOSAppStore,
                                                     err                     = err)
 
     elif body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
@@ -465,12 +464,11 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                                                      apple_original_tx_id=tx.originalTransactionId,
                                                      archived_unix_ts_s=unix_ts_s)
 
-                        # TODO: Submit/upgrade the payment
+                        # NOTE: Submit/upgrade the payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
                         backend.add_unredeemed_payment2(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
-                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
                                                         err                     = err)
 
     elif body.notificationType == AppleNotificationV2.OFFER_REDEEMED:
@@ -524,7 +522,6 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         backend.add_unredeemed_payment2(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
-                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
                                                         err                     = err)
                     elif body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
@@ -551,7 +548,6 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         backend.add_unredeemed_payment2(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
-                                                        payment_provider        = base.PaymentProvider.iOSAppStore,
                                                         err                     = err)
 
     elif body.notificationType == AppleNotificationV2.REFUND or body.notificationType == AppleNotificationV2.REVOKE:

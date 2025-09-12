@@ -238,15 +238,10 @@ class OpenDBAtPath:
 
 def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
     result = ''
-    for index, it in enumerate(fields):
-        if schema:
-            if index:
-                result += ',\n'
-            result += f'{it.name} {it.type}'
-        else:
-            if index:
-                result += ', '
-            result += f'{it.name}'
+    if schema:
+        result = ',\n'.join([it.name for it in fields]) # Create '<field0> <type0>,\n<field1> <type1>, ...'
+    else:
+        result = ', '.join([it.name for it in fields])  # Create '<field0>, <field1>, ...'
     return result
 
 def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
@@ -653,17 +648,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     result = len(err.msg_list) == 0
     return result
 
-def restore_apple_payment(sql_conn:                   sqlite3.Connection,
-                          apple_web_line_order_tx_id: str | None,
-                          apple_original_tx_id:       str,
-                          archived_unix_ts_s:         int):
-    assert False, "Unimplemented"
-
-def revert_apple_payment(sql_conn: sqlite3.Connection, apple_original_tx_id: str):
-    assert False, "Unimplemented"
-
 def delete_newest_apple_payment_for_original_tx_id(sql_conn: sqlite3.Connection, apple_original_tx_id: str, archived_unix_ts_s: int):
-
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
 
@@ -675,17 +660,16 @@ def delete_newest_apple_payment_for_original_tx_id(sql_conn: sqlite3.Connection,
             ORDER BY    creation_unix_ts_s DESC
             LIMIT       1
             RETURNING   {payments_table_fields}
-        ''', (apple_original_tx_id,
-              base.PaymentProvider.iOSAppStore.value));
+        ''', (apple_original_tx_id, int(base.PaymentProvider.iOSAppStore.value)));
 
         # NOTE: Archive the payments by inserting the deleted rows into the historical table
         rows               = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
-        insert_values_stmt = '?, ' * len(SQL_TABLE_PAYMENTS_FIELD)
+        insert_values_stmt = ', '.join(['?' for _ in SQL_TABLE_PAYMENTS_FIELD])  # Create '?,        ?,        ...'
 
         for row in rows:
             _ = tx.cursor.execute(f'''
                 INSERT INTO historical_payments ({payments_table_fields}, archived_unix_ts_s)
-                VALUES ({insert_values_stmt} ?)
+                VALUES ({insert_values_stmt}, ?)
             ''', (*row, archived_unix_ts_s));
 
         # NOTE: We also need to delete from the unredeemed payments incase the user has never
@@ -713,44 +697,31 @@ def delete_apple_payment(sql_conn:                   sqlite3.Connection,
                 DELETE FROM payments
                 WHERE       apple_original_tx_id = ? AND apple_web_line_order_tx_id = ? AND payment_provider = ?
                 RETURNING   {payments_table_fields}
-            ''', (apple_original_tx_id,
-                  apple_web_line_order_tx_id,
-                  base.PaymentProvider.iOSAppStore.value));
+            ''', (apple_original_tx_id, apple_web_line_order_tx_id, base.PaymentProvider.iOSAppStore.value));
         else:
             _ = tx.cursor.execute(f'''
                 DELETE FROM payments
                 WHERE       apple_original_tx_id = ? AND payment_provider = ?
                 RETURNING   {payments_table_fields}
-            ''', (apple_original_tx_id,
-                  base.PaymentProvider.iOSAppStore.value));
+            ''', (apple_original_tx_id, base.PaymentProvider.iOSAppStore.value));
 
         # NOTE: Archive the payments by inserting the deleted rows into the historical table
-        rows = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
-        insert_values_stmt = '?, ' * len(SQL_TABLE_PAYMENTS_FIELD)
+        rows               = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
+        insert_values_stmt = ', '.join(['?' for _ in SQL_TABLE_PAYMENTS_FIELD])  # Create '?,        ?,        ...'
 
         for row in rows:
             _ = tx.cursor.execute(f'''
                 INSERT INTO historical_payments ({payments_table_fields}, archived_unix_ts_s)
-                VALUES ({insert_values_stmt} ?)
+                VALUES ({insert_values_stmt}, ?)
             ''', (*row, archived_unix_ts_s));
 
         # NOTE: We also need to delete from the unredeemed payments incase the user has never
         # registered the payment
         # TODO: What about if they reverse the delete (e.g. a refund?)
-        if apple_web_line_order_tx_id:
-            _ = tx.cursor.execute(f'''
-                DELETE FROM unredeemed_payments
-                WHERE       apple_original_tx_id = ? AND apple_web_line_order_tx_id = ? AND payment_provider = ?
-            ''', (apple_original_tx_id,
-                  apple_web_line_order_tx_id,
-                  base.PaymentProvider.iOSAppStore.value));
-        else:
-            _ = tx.cursor.execute(f'''
-                DELETE FROM unredeemed_payments
-                WHERE       apple_original_tx_id = ? AND payment_provider = ?
-                RETURNING   {payments_table_fields}
-            ''', (apple_original_tx_id,
-                  base.PaymentProvider.iOSAppStore.value));
+        _ = tx.cursor.execute(f'''
+            DELETE FROM unredeemed_payments
+            WHERE       apple_original_tx_id = ? AND apple_web_line_order_tx_id = ? AND payment_provider = ?
+        ''', (apple_original_tx_id, apple_web_line_order_tx_id, int(base.PaymentProvider.iOSAppStore.value)));
 
 def redeem_payment(sql_conn:           sqlite3.Connection,
                    master_pkey:        nacl.signing.VerifyKey,
@@ -856,9 +827,9 @@ def add_unredeemed_payment2(sql_conn:                sqlite3.Connection,
                 FROM payments
                 WHERE payment_provider = ? AND google_payment_token = ?
             ''', (
-                payment_tx.provider.value, payment_tx.google_payment_token,
-                payment_tx.provider.value, payment_tx.google_payment_token,
-                payment_tx.provider.value, payment_tx.google_payment_token
+                int(payment_tx.provider.value), payment_tx.google_payment_token,
+                int(payment_tx.provider.value), payment_tx.google_payment_token,
+                int(payment_tx.provider.value), payment_tx.google_payment_token
             ))
 
             if not tx.cursor.fetchone():
@@ -891,9 +862,9 @@ def add_unredeemed_payment2(sql_conn:                sqlite3.Connection,
                     FROM payments
                     WHERE AND payment_provider = ? AND apple_original_tx_id = ? AND apple_web_line_order_tx_id = ?
             ''', (subscription_duration_s,   payment_tx.provider.value,       payment_tx.apple_original_tx_id,   payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id, # insert values
-                  payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # unredeemed
-                  payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # historical
-                  payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # payments
+                  int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # unredeemed
+                  int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # historical
+                  int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # payments
                  ))
 
             if not tx.cursor.fetchone():
@@ -904,16 +875,9 @@ def add_unredeemed_payment2(sql_conn:                sqlite3.Connection,
                 _ = tx.cursor.execute(f'''
                     INSERT OR IGNORE INTO unredeemed_payments ({stmt_fields})
                     VALUES ({stmt_values})
-                ''', (subscription_duration_s,   payment_tx.provider.value,       payment_tx.apple_original_tx_id,   payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id, # insert values
-                      payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # unredeemed
-                      payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # historical
-                      payment_tx.provider.value, payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id,                                    # payments
-                     ))
+                ''', (subscription_duration_s, int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
 
-def update_db_after_payments_changed(tx:                   base.SQLTransaction,
-                                     master_pkey:          nacl.signing.VerifyKey,
-                                     activation_unix_ts_s: int) -> UpdateAfterPaymentsModified:
-
+def update_db_after_payments_changed(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, activation_unix_ts_s: int) -> UpdateAfterPaymentsModified:
     result:            UpdateAfterPaymentsModified = UpdateAfterPaymentsModified()
     master_pkey_bytes: bytes                       = bytes(master_pkey)
     assert tx.cursor is not None
@@ -1018,12 +982,6 @@ def make_get_pro_proof_hash(version:       int,
     hasher.update(bytes(rotating_pkey))
     hasher.update(unix_ts_s.to_bytes(length=8, byteorder='little'))
     result: bytes = hasher.digest()
-    return result
-
-def make_payment_token_hash(payment_token: str) -> bytes:
-    hasher = backend.make_blake2b_hasher()
-    hasher.update(payment_token.encode(encoding='utf-8'))
-    result = hasher.digest()
     return result
 
 def build_proof_hash(version:          int,
