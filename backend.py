@@ -579,29 +579,106 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
     payments: list[PaymentRow] = get_payments_list(sql_conn)
     for index, it in enumerate(payments):
-        if it.master_pkey == ZERO_BYTES32:
-            err.msg_list.append(f'Payment #{index} has a master public key set to the zero key')
+        # NOTE: Check mandatory fields
+        if it.subscription_duration_s == 0:
+            err.msg_list.append(f'{it.status.name} payment #{index} subscription duration is set to 0 but it should not be. It should have been derived from the platform payment provider (e.g. by converting the purchased product ID to a specified duration)')
+        if it.payment_provider == base.PaymentProvider.Nil:
+            err.msg_list.append(f'{it.status.name} payment #{index} payment provider is set to {it.payment_provider.name} but it should not be. It should have been set by the platform before added to the DB')
+
+        # NOTE: Check mandatory fields or invariants given a particular TX status
+        if it.status == PaymentStatus.Nil:
+            err.msg_list.append(f'Payment #{index} specified a "nil" status which is invalid and should not be in the DB')
+        elif it.status == PaymentStatus.Unredeemed:
+            # NOTE: Check that most fields of the payment should not be set yet when it has not been
+            # redeemed yet
+            if it.master_pkey != ZERO_BYTES32:
+                err.msg_list.append(f'{it.status.name} payment #{index} has a master pkey set but this pkey should not be set until it is redeemed (e.g. the user registers it)')
+            if it.redeemed_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was {it.redeemed_unix_ts_s}. The payment is not redeemed yet so it should be 0')
+            if it.activated_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} activated ts was {it.activated_unix_ts_s}. The payment is not activated yet so it should be 0')
+            if it.expired_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} expired ts was {it.expired_unix_ts_s}. The payment is not expired yet so it should be 0')
+            if it.refunded_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} refunded ts was {it.refunded_unix_ts_s}. The payment is not refunded yet so it should be 0')
+
+        elif it.status == PaymentStatus.Redeemed:
+            # NOTE: Check that the redeemed ts is set
+            if not it.redeemed_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was not set. The payment is redeemed so it should be non-zero')
+
+            # NOTE: Check that expired ts was not set. Note refunded could be set as we can cancel a
+            # refund back into a redeemed state
+            if it.activated_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} activated ts was set. The payment is redeemed so it should not be set')
+            if it.expired_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} expired ts was set. The payment is redeemed so it should not be set')
+
+        elif it.status == PaymentStatus.Activated:
+            # NOTE: Check that redeemed and activated ts is set
+            if not it.redeemed_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was not set. The payment is activated so it should be set')
+            if not it.activated_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} activated ts was not set. The payment is activated so it should be set')
+
+            # NOTE: Check that expired ts was not set. Note refunded could be set as we can cancel a
+            # refund back into an activated state.
+            if it.expired_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} expired ts was set. The payment is activated so it should not be set')
+
+            # NOTE: Check that payment was activated AFTER it was redeemed
+            if it.redeemed_unix_ts_s and it.activated_unix_ts_s:
+                if it.activated_unix_ts_s < it.redeemed_unix_ts_s:
+                    redeemed_date = datetime.datetime.fromtimestamp(it.redeemed_unix_ts_s).strftime('%Y-%m-%d')
+                    activated_date = datetime.datetime.fromtimestamp(it.activated_unix_ts_s).strftime('%Y-%m-%d')
+                    err.msg_list.append(f'{it.status.name} payment #{index} was activated ({activated_date}) before it was redeemed ({redeemed_date})')
+
+        elif it.status == PaymentStatus.Expired:
+            # NOTE: Expired, redeemed and activated ts must be set
+            if not it.expired_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} expired ts was not set. The payment is expired so it should be non-zero')
+            if not it.redeemed_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was not set. The payment is expired so it should be set')
+            if not it.activated_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} activated ts was not set. The payment is expired so it should be set')
+
+            # NOTE: Check that payment was expired AFTER it was activated and activated AFTER it was redeemed
+            if it.redeemed_unix_ts_s and it.activated_unix_ts_s and it.expired_unix_ts_s:
+              redeemed_date = datetime.datetime.fromtimestamp(it.redeemed_unix_ts_s).strftime('%Y-%m-%d')
+              activated_date = datetime.datetime.fromtimestamp(it.activated_unix_ts_s).strftime('%Y-%m-%d')
+              expired_date = datetime.datetime.fromtimestamp(it.expired_unix_ts_s).strftime('%Y-%m-%d')
+              if it.expired_unix_ts_s < it.activated_unix_ts_s:
+                  err.msg_list.append(f'{it.status.name} payment #{index} was expired ({expired_date}) before it was activated ({activated_date})')
+              if it.activated_unix_ts_s < it.redeemed_unix_ts_s:
+                  err.msg_list.append(f'{it.status.name} payment #{index} was activated ({activated_date}) before it was redeemed ({redeemed_date})')
+
+        elif it.status == PaymentStatus.Refunded:
+            # NOTE: Any payment can transition into the refunded state given any status (except for
+            # nil, which is the invalid state). This means that all fields could be set so only a
+            # few checks are needed here.
+            if not it.refunded_unix_ts_s:
+                err.msg_list.append(f'{it.status.name} payment #{index} refunded ts was not set. The payment is refunded so it should be non-zero')
+
+        # NOTE: Verify the subscription duration, it should always be set once
+        # it enters the DB and it should have a duration of a specific amount.
         if it.subscription_duration_s != base.SECONDS_IN_DAY * 30 and \
            it.subscription_duration_s != base.SECONDS_IN_DAY * 90 and \
            it.subscription_duration_s != base.SECONDS_IN_DAY * 365:
                err.msg_list.append(f'Payment #{index} had an invalid subscription duration, expected 30, 90 or 365 day duration in seconds, received ({it.subscription_duration_s})')
         base.verify_payment_provider(it.payment_provider, err)
 
-        if it.redeemed_unix_ts_s < PRO_ENABLED_UNIX_TS:
+        # NOTE: Check that the payment's redeemed ts is a reasonable value
+        if it.redeemed_unix_ts_s and it.redeemed_unix_ts_s < PRO_ENABLED_UNIX_TS:
           date_str = datetime.datetime.fromtimestamp(it.redeemed_unix_ts_s).strftime('%Y-%m-%d')
           err.msg_list.append(f'Payment #{index} specified a creation date before PRO was enabled: {it.redeemed_unix_ts_s} ({date_str})')
 
-        if isinstance(it.activated_unix_ts_s, int) and it.redeemed_unix_ts_s > it.activated_unix_ts_s:
-          create_date_str = datetime.datetime.fromtimestamp(it.redeemed_unix_ts_s).strftime('%Y-%m-%d')
-          activate_date_str = datetime.datetime.fromtimestamp(it.activated_unix_ts_s).strftime('%Y-%m-%d')
-          err.msg_list.append(f'Payment #{index} specified a creation date after the activated time: {it.redeemed_unix_ts_s} ({create_date_str}) vs {it.activated_unix_ts_s} ({activate_date_str})')
-
-
+        # NOTE: Check that the token is set correctly
         if it.payment_provider == base.PaymentProvider.GooglePlayStore:
             verify_google_payment_token_hash(it.google_payment_token, err)
         elif len(it.google_payment_token) != 0:
             err.msg_list.append(f'Payment #{index} speceified a google payment token: {it.google_payment_token} for a non-google platform')
 
+    # NOTE: Verify the users
     users: list[UserRow] = get_users_list(sql_conn)
     for index, it in enumerate(users):
         if it.master_pkey == ZERO_BYTES32:
@@ -612,25 +689,6 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
     result = len(err.msg_list) == 0
     return result
-
-def refund_newest_apple_payment_for_original_tx_id(sql_conn: sqlite3.Connection, apple_original_tx_id: str, refund_unix_ts_s: int):
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        # NOTE: Transition the apple payment into a refunded status
-        payments_table_fields: str = string_from_sql_fields(SQL_TABLE_PAYMENTS_FIELD, schema=False)
-        _ = tx.cursor.execute(f'''
-            UPDATE    payments
-            SET       status = ?, refunded_unix_ts_s = ?
-            WHERE     apple_original_tx_id = ? AND payment_provider = ?
-            ORDER BY  redeemed_unix_ts_s DESC
-            LIMIT     1
-            RETURNING {payments_table_fields}
-        ''', (# SET values
-              int(PaymentStatus.Refunded.value),
-              refund_unix_ts_s,
-              # WHERE values
-              apple_original_tx_id,
-              int(base.PaymentProvider.iOSAppStore.value)))
 
 def refund_apple_payment(sql_conn:                   sqlite3.Connection,
                          apple_web_line_order_tx_id: str | None,
