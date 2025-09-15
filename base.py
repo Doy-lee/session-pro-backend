@@ -10,6 +10,7 @@ import sqlite3
 import datetime
 import typing
 import enum
+import dataclasses
 
 class PaymentProvider(enum.Enum):
     Nil             = 0
@@ -20,6 +21,7 @@ SECONDS_IN_DAY:                 int  = 60 * 60 * 24
 DEV_BACKEND_MODE:               bool = False
 DEV_BACKEND_DETERMINISTIC_SKEY       = bytes([0xCD] * 32)
 
+@dataclasses.dataclass
 class ErrorSink:
     '''
     Helper class to pass to functions that want to return error messages without
@@ -32,10 +34,9 @@ class ErrorSink:
 
     See the parsing code in server.py for an example of where this is useful.
     '''
-    msg_list: list[str] = []
-    def __init__(self):
-        self.msg_list.clear()
+    msg_list: list[str] = dataclasses.field(default_factory=list)
 
+@dataclasses.dataclass
 class SQLTransaction:
     conn:   sqlite3.Connection
     cursor: sqlite3.Cursor | None = None
@@ -55,9 +56,10 @@ class SQLTransaction:
         self.conn.commit() if exc_type is None else self.conn.rollback()
         return False
 
+@dataclasses.dataclass
 class TableStrings:
     name:     str = ''
-    contents: list[list[str]] = []
+    contents: list[list[str]] = dataclasses.field(default_factory=list)
 
 def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink):
     provider = PaymentProvider.Nil

@@ -284,7 +284,7 @@ API
                                  revocation). This value is 0 if a payment
                                  has not been archived yet (e.g.: has not been
                                  activated and elapsed, nor refunded).
-        creation_unix_ts_s:      8 byte unix timestamp indicating when the
+        redeemed_unix_ts_s:      8 byte unix timestamp indicating when the
                                  payment was registered. This timestamp is
                                  rounded up to the next day boundary from the
                                  actual registration date.
@@ -310,14 +310,14 @@ API
             {
               "activation_unix_ts_s": 1755734400,
               "archive_unix_ts_s": 0,
-              "creation_unix_ts_s": 1755734400,
+              "redeemed_unix_ts_s": 1755734400,
               "payment_token_hash": "d7fc28f52efe9487fbc5c9aa27d006c2e119c94f6a1787963a0c64775afd8363",
               "subscription_duration_s": 2592000
             },
             {
               "activation_unix_ts_s": 0,
               "archive_unix_ts_s": 0,
-              "creation_unix_ts_s": 1755734400,
+              "redeemed_unix_ts_s": 1755734400,
               "payment_token_hash": "425b428ac2857a7fa4f045f8c6055536e679253e22c0b4c003bb6b970792b697",
               "subscription_duration_s": 2592000
             }
@@ -339,13 +339,15 @@ import nacl.public
 import collections.abc
 import hashlib
 import json
+import dataclasses
 
 import base
 import backend
 from vendor import onion_req
 
+@dataclasses.dataclass
 class GetJSONFromFlaskRequest:
-    json:    dict[str, typing.Any] = {}
+    json:    dict[str, typing.Any] = dataclasses.field(default_factory=dict)
     err_msg: str                   = ''
 
 # Keys stored in the flask app config dictionary that can be retrieved within
@@ -454,11 +456,11 @@ def add_pro_payment():
 
     # Submit the payment to the DB
     with open_db_from_flask_request_context(flask.current_app) as db:
-        creation_unix_ts_s: int = base.round_unix_ts_to_next_day(int(time.time()))
+        redeemed_unix_ts_s: int = base.round_unix_ts_to_next_day(int(time.time()))
         proof                   = backend.add_pro_payment(sql_conn           = db.sql_conn,
                                                           version            = version,
                                                           signing_key        = db.runtime.backend_key,
-                                                          creation_unix_ts_s = creation_unix_ts_s,
+                                                          redeemed_unix_ts_s = redeemed_unix_ts_s,
                                                           master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
                                                           rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
                                                           payment_tx         = payment_tx,
@@ -642,7 +644,7 @@ def get_pro_payments():
                 status                         = backend.PaymentStatus(row[1])
                 subscription_duration_s: int   = row[2]
                 payment_provider               = base.PaymentProvider(row[3])
-                creation_unix_ts_s:      int   = row[4]
+                redeemed_unix_ts_s:      int   = row[4]
                 activation_unix_ts_s:    int   = row[5]  if row[5]  else 0
                 expired_unix_ts_s:       int   = row[6]  if row[6]  else 0
                 refunded_unix_ts_s:      int   = row[7]  if row[7]  else 0
@@ -656,7 +658,7 @@ def get_pro_payments():
                         'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
-                        'creation_unix_ts_s':      creation_unix_ts_s,
+                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
                         'activation_unix_ts_s':    activation_unix_ts_s,
                         'expired_unix_ts_s':       expired_unix_ts_s,
                         'refunded_unix_ts_s':      refunded_unix_ts_s,
@@ -667,7 +669,7 @@ def get_pro_payments():
                         'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
-                        'creation_unix_ts_s':      creation_unix_ts_s,
+                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
                         'activation_unix_ts_s':    activation_unix_ts_s,
                         'expired_unix_ts_s':       expired_unix_ts_s,
                         'refunded_unix_ts_s':      refunded_unix_ts_s,

@@ -38,7 +38,7 @@ def test_backend_same_user_stacks_subscription():
     backend_key:        nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
     master_key:         nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
     rotating_key:       nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
-    creation_unix_ts_s: int                     = base.round_unix_ts_to_next_day(int(time.time()))
+    redeemed_unix_ts_s: int                     = base.round_unix_ts_to_next_day(int(time.time()))
     class Scenario:
         google_payment_token:    str                          = ''
         subscription_duration_s: int                          = 0
@@ -61,15 +61,20 @@ def test_backend_same_user_stacks_subscription():
         payment_tx                      = backend.PaymentProviderTransaction()
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
-        backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
-                                        payment_tx=payment_tx,
-                                        subscription_duration_s=it.subscription_duration_s,
-                                        err=err)
+        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
+                                       payment_tx=payment_tx,
+                                       subscription_duration_s=it.subscription_duration_s,
+                                       err=err)
         assert len(err.msg_list) == 0
 
-        unredeemed_payment_list: list[backend.UnredeemedPaymentRow] = backend.get_unredeemed_payments_list(db.sql_conn)
+        unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(db.sql_conn)
         assert len(unredeemed_payment_list)                       == 1
+        assert unredeemed_payment_list[0].status                  == backend.PaymentStatus.Unredeemed
         assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
+        assert unredeemed_payment_list[0].redeemed_unix_ts_s      == None
+        assert unredeemed_payment_list[0].activated_unix_ts_s     == None
+        assert unredeemed_payment_list[0].expired_unix_ts_s       == None
+        assert unredeemed_payment_list[0].refunded_unix_ts_s      == None
         assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
 
@@ -87,7 +92,7 @@ def test_backend_same_user_stacks_subscription():
         it.proof = backend.add_pro_payment(version            = version,
                                            sql_conn           = db.sql_conn,
                                            signing_key        = backend_key,
-                                           creation_unix_ts_s = creation_unix_ts_s,
+                                           redeemed_unix_ts_s = redeemed_unix_ts_s,
                                            master_pkey        = master_key.verify_key,
                                            rotating_pkey      = rotating_key.verify_key,
                                            payment_tx         = add_pro_payment_tx,
@@ -106,15 +111,15 @@ def test_backend_same_user_stacks_subscription():
     assert len(user_list)                          == 1
     assert user_list[0].master_pkey                == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                  == runtime.gen_index - 1
-    assert user_list[0].expiry_unix_ts_s           == creation_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
+    assert user_list[0].expiry_unix_ts_s           == redeemed_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
 
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
-    assert payment_list[0].creation_unix_ts_s              == creation_unix_ts_s
-    assert payment_list[0].activated_unix_ts_s             == creation_unix_ts_s
+    assert payment_list[0].redeemed_unix_ts_s              == redeemed_unix_ts_s
+    assert payment_list[0].activated_unix_ts_s             == redeemed_unix_ts_s
     assert payment_list[0].expired_unix_ts_s               is None
     assert payment_list[0].refunded_unix_ts_s              is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
@@ -125,7 +130,7 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
-    assert payment_list[1].creation_unix_ts_s              == creation_unix_ts_s
+    assert payment_list[1].redeemed_unix_ts_s              == redeemed_unix_ts_s
     assert payment_list[1].activated_unix_ts_s             == None
     assert payment_list[1].expired_unix_ts_s               is None
     assert payment_list[1].refunded_unix_ts_s              is None
@@ -137,7 +142,7 @@ def test_backend_same_user_stacks_subscription():
     revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.sql_conn)
     assert len(revocation_list)                            == 1
     assert revocation_list[0].gen_index                    == 0
-    assert revocation_list[0].expiry_unix_ts_s             == creation_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
+    assert revocation_list[0].expiry_unix_ts_s             == redeemed_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
 
     assert isinstance(payment_list[0].activated_unix_ts_s, int)
 
@@ -182,7 +187,7 @@ def test_server_add_payment_flow():
     payment_tx                      = backend.PaymentProviderTransaction()
     payment_tx.provider             = base.PaymentProvider.GooglePlayStore
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
+    backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                     payment_tx=payment_tx,
                                     subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                     err=err)
@@ -326,7 +331,7 @@ def test_server_add_payment_flow():
         new_payment_tx                      = backend.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
-        backend.add_unredeemed_payment2(sql_conn=db.sql_conn,
+        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                         payment_tx=new_payment_tx,
                                         subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                         err=err)

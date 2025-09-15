@@ -337,7 +337,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                 if len(err.msg_list) == 0:
                     assert isinstance(subscription_duration_s, int)
                     payment_tx = payment_tx_from_apple_jws_transaction(tx)
-                    backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                    backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                     payment_tx              = payment_tx,
                                                     subscription_duration_s = subscription_duration_s,
                                                     err                     = err)
@@ -404,11 +404,11 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         backend.refund_apple_payment(sql_conn=sql_conn,
                                                      apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                      apple_original_tx_id=tx.originalTransactionId,
-                                                     refunded_unix_ts_s=unix_ts_s)
+                                                     refund_unix_ts_s=unix_ts_s)
 
                         # NOTE: Submit/upgrade the payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
-                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                        backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
                                                         err                     = err)
@@ -461,16 +461,18 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     if not body.subtype:
                         # NOTE: User is redeeming an offer to start(?) a sub. Submit the payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
-                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                        backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
                                                         err                     = err)
+
                     elif body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
                         # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
                         # notification which handles this for us at the end of the billing cycle
                         # when they renew.
                         pass
+
                     elif body.subtype == AppleSubtype.UPGRADE:
                         # NOTE: User is upgrading to a better subscription. Upgrade happens
                         # immediately, current plan is ended. The only link we have to the current
@@ -481,13 +483,14 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         # relevant for the same subscription and product pairing. If you're upgrading
                         # we're moving to a different product .. so the original transaction ID
                         # might not match us to the previous subscription for this user, I think.
-                        backend.refund_newest_apple_payment_for_original_tx_id(sql_conn             = sql_conn,
-                                                                               apple_original_tx_id = tx.originalTransactionId,
-                                                                               refund_unix_ts_s     = unix_ts_s)
+                        backend.refund_apple_payment(sql_conn                   = sql_conn,
+                                                     apple_web_line_order_tx_id = tx.webOrderLineItemId,
+                                                     apple_original_tx_id       = tx.originalTransactionId,
+                                                     refund_unix_ts_s           = unix_ts_s)
 
                         # TODO: Submit the "new" payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
-                        backend.add_unredeemed_payment2(sql_conn                = sql_conn,
+                        backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
                                                         subscription_duration_s = subscription_duration_s,
                                                         err                     = err)
@@ -532,11 +535,12 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                 assert isinstance(tx.type,                  AppleType)
 
                 # NOTE: Extract components
+                # TODO: Is the transaction ID unique for this refund or the same as the one it wants to refund??
                 if len(err.msg_list) == 0:
                     backend.refund_apple_payment(sql_conn=sql_conn,
                                                  apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                  apple_original_tx_id=tx.originalTransactionId,
-                                                 refunded_unix_ts_s=unix_ts_s)
+                                                 refund_unix_ts_s=unix_ts_s)
 
     elif body.notificationType == AppleNotificationV2.REFUND_REVERSED:
         # A notification type that indicates the App Store reversed a previously granted refund due
