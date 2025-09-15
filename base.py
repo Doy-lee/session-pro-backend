@@ -4,7 +4,7 @@ project and should have no dependency on any project files, only, native Python
 packages. Typically useful to share functionality from the testing suite and the
 project but not limited to.
 '''
-
+import json
 import traceback
 import sqlite3
 import datetime
@@ -228,3 +228,49 @@ def format_seconds(duration_s: int):
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
 
+# NOTE: Restricted type-set, JSON obviously supports much more than this, but
+# our use-case only needs a small subset of it as of current so KISS.
+JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
+def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str:
+    result = ''
+    if key in d:
+        if isinstance(d[key], str):
+            result = typing.cast(str, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a string: "{d[key]}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+    return result
+
+def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
+    result = 0
+    if key in d:
+        if isinstance(d[key], int):
+            result = typing.cast(int, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a integer: "{d[key]}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+    return result
+
+def json_dict_require_array(d: dict[str, JSONValue], key: str, err: ErrorSink) -> list[JSONValue]:
+    result: list[JSONValue] = []
+    if key in d:
+        if isinstance(d[key], list):
+            result = typing.cast(list[JSONValue], d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not an array: "{d[key]}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+    return result
+
+def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> dict[str, JSONValue]:
+    result: dict[str, JSONValue] = {}
+    if key in d:
+        if isinstance(d[key], dict):
+            result = typing.cast(dict[str, JSONValue], d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not an array: "{d[key]}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+    return result
