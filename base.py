@@ -72,23 +72,6 @@ def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorS
     if len(err.msg_list) == 0 and provider == PaymentProvider.Nil:
         err.msg_list.append('Nil payment provider is invalid, must be set to a provider')
 
-# NOTE: Restricted type-set, JSON obviously supports much more than this, but
-# our use-case only needs a small subset of it as of current so KISS.
-JSONValue = typing.TypeVar('JSONValue', int, str, list[dict[str, int | str]])
-
-def json_dict_require(d: dict[str, JSONValue], key: str, default_val: JSONValue, err_msg: str, err: ErrorSink) -> JSONValue:
-    if not key in d:
-        err.msg_list.append(f'{err_msg}: \'{key}\'')
-
-    # NOTE: Keep isinstance check for untrusted JSON input, as d[key] could be any
-    # type (untrusted input potentially)
-    if not isinstance(d[key], type(default_val)): # pyright: ignore[reportUnnecessaryIsInstance]
-        err.msg_list.append(f'{err_msg}: \'{key}\' is not a valid \'{type(default_val).__name__}\'')
-        return default_val
-
-    result: JSONValue = d[key]
-    return result
-
 def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
     result = b''
     if len(hex) != hex_len:
@@ -229,6 +212,7 @@ def format_seconds(duration_s: int):
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
 JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
+
 def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str:
     result = ''
     if key in d:

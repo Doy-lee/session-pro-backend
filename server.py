@@ -51,10 +51,10 @@ API
                               registered is coming from with the following mapping:
                                 1 => Google Play Store
                                 2 => Apple iOS App Store
-        apple_tx_id:          When provider is set to Apple iOS App Store, set
-                              this field to the transaction ID string.
-        google_payment_token: When provider is set to the Google Play Store, set
-                              this field to the purchase token string.
+        apple_tx_id:          When provider is set to Apple iOS App Store, set this field to the
+                              transaction ID string.
+        google_payment_token: When provider is set to the Google Play Store, set this field to the
+                              purchase token string.
       master_sig:    64 byte signature over the hash of the contents of the request proving that the
                      user knows the secret component to the `master_pkey` and hence the caller is
                      authorised to pair a new `rotating_pkey` to this payment
@@ -272,6 +272,12 @@ API
                                    5 => Refunded
                                      User has successfully refunded the payment and Session Pro
                                      entitlement is no longer available
+        subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
+                                 seconds.
+        payment_provider:        1 byte integer representing the platform that the payment to be
+                                 registered is coming from with the following mapping:
+                                   1 => Google Play Store
+                                   2 => Apple iOS App Store
         activated_unix_ts_s:     8 byte unix timestamp indicating if the payment is has been
                                  activated to enable entitlement to Session Pro before. 0 if the
                                  payment has never been activated (e.g.: This account has another
@@ -279,15 +285,21 @@ API
                                  the payment was refunded before it could be activated e.t.c).
         expired_unix_ts_s:       8 byte unix timestamp indicating when the payment was expired. 0 if
                                  it never expired.
-        refunded_unix_ts_s:      8 byte unix timestamp indicating when the payment was expired. 0 if
-                                 it never expired.
         redeemed_unix_ts_s:      8 byte unix timestamp indicating when the payment was registered.
                                  This timestamp is rounded up to the next day boundary from the
                                  actual registration date.
-        subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
-                                 seconds.
-        payment_token_hash:      32 byte hash of the payment token that is associated with this
-                                 payment.
+        refunded_unix_ts_s:      8 byte unix timestamp indicating when the payment was expired. 0 if
+                                 it never expired.
+        google_payment_token:    When payment provider is Google Play Store, a string which is set
+                                 to the platform-specific purchase token for the subscription.
+        apple_original_tx_id:    When payment provider is Apple iOS App Store, a string which is set
+                                 to the platform-specific original transaction ID for the
+                                 subscription.
+        apple_tx_id:             When payment provider is Apple iOS App Store, a string which is set
+                                 to the platform-specific transaction ID for the subscription.
+        apple_web_line_order_id: When payment provider is Apple iOS App Store, a string which is set
+                                 to the platform-specific trasnaction web line order ID for the
+                                 subscription.
 
     Examples
       Request
@@ -304,22 +316,20 @@ API
         "result": {
           "items": [
             {
-              "activation_unix_ts_s": 1755734400,
-              "archive_unix_ts_s": 0,
+              "status": 3,
+              "subscription_duration_s": 2592000,
+              "payment_provider": 2
+              "activated_unix_ts_s": 1755734400,
+              "expired_unix_ts_s": 0,
               "redeemed_unix_ts_s": 1755734400,
-              "payment_token_hash": "d7fc28f52efe9487fbc5c9aa27d006c2e119c94f6a1787963a0c64775afd8363",
-              "subscription_duration_s": 2592000
-            },
-            {
-              "activation_unix_ts_s": 0,
-              "archive_unix_ts_s": 0,
-              "redeemed_unix_ts_s": 1755734400,
-              "payment_token_hash": "425b428ac2857a7fa4f045f8c6055536e679253e22c0b4c003bb6b970792b697",
-              "subscription_duration_s": 2592000
+              "refunded_unix_ts_s": 0,
+              "apple_original_tx_id": "123456789011121",
+              "apple_tx_id": "123456789011121",
+              "apple_web_line_order_id": "120000201234567",
             }
           ],
           "pages": 1,
-          "payments": 2,
+          "payments": 1,
           "version": 0
         },
         "status": 0
@@ -343,8 +353,8 @@ from vendor import onion_req
 
 @dataclasses.dataclass
 class GetJSONFromFlaskRequest:
-    json:    dict[str, typing.Any] = dataclasses.field(default_factory=dict)
-    err_msg: str                   = ''
+    json:    dict[str, base.JSONValue] = dataclasses.field(default_factory=dict)
+    err_msg: str                       = ''
 
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
@@ -418,12 +428,12 @@ def add_pro_payment():
 
     # Extract values from JSON
     err                   = base.ErrorSink()
-    version:          int = base.json_dict_require(d=get.json, key='version',          default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:      str = base.json_dict_require(d=get.json, key='master_pkey',      default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey:    str = base.json_dict_require(d=get.json, key='rotating_pkey',    default_val='', err_msg="Missing rotating public key from body", err=err)
-    master_sig:       str = base.json_dict_require(d=get.json, key='master_sig',       default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:     str = base.json_dict_require(d=get.json, key='rotating_sig',     default_val='', err_msg="Missing rotating signature from body",  err=err)
-    payment_provider: int = base.json_dict_require(d=get.json, key='payment_provider', default_val=0,  err_msg="Missing payment provider from body",    err=err)
+    version:          int = base.json_dict_require_int(d=get.json, key='version',          err=err)
+    master_pkey:      str = base.json_dict_require_str(d=get.json, key='master_pkey',      err=err)
+    rotating_pkey:    str = base.json_dict_require_str(d=get.json, key='rotating_pkey',    err=err)
+    master_sig:       str = base.json_dict_require_str(d=get.json, key='master_sig',       err=err)
+    rotating_sig:     str = base.json_dict_require_str(d=get.json, key='rotating_sig',     err=err)
+    payment_provider: int = base.json_dict_require_int(d=get.json, key='payment_provider', err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -438,9 +448,9 @@ def add_pro_payment():
     payment_tx          = backend.AddProPaymentUserTransaction()
     payment_tx.provider = base.PaymentProvider(payment_provider)
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        payment_tx.google_payment_token = base.json_dict_require(d=get.json, key='google_payment_token', default_val='', err_msg="Missing google payment token from body", err=err)
+        payment_tx.google_payment_token = base.json_dict_require_str(d=get.json, key='google_payment_token', err=err)
     elif payment_provider == base.PaymentProvider.iOSAppStore:
-        payment_tx.apple_tx_id = base.json_dict_require(d=get.json, key='apple_tx_id', default_val='', err_msg="Missing google payment token from body", err=err)
+        payment_tx.apple_tx_id = base.json_dict_require_str(d=get.json, key='apple_tx_id', err=err)
 
     # Parse other components
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
@@ -487,12 +497,12 @@ def get_pro_proof() -> flask.Response:
 
     # Extract values from JSON
     err                = base.ErrorSink()
-    version:       int = base.json_dict_require(d=get.json, key='version',       default_val=0,  err_msg="Missing version from body",             err=err)
-    master_pkey:   str = base.json_dict_require(d=get.json, key='master_pkey',   default_val='', err_msg="Missing master public key from body",   err=err)
-    rotating_pkey: str = base.json_dict_require(d=get.json, key='rotating_pkey', default_val='', err_msg="Missing rotating public key from body", err=err)
-    unix_ts_s:     int = base.json_dict_require(d=get.json, key='unix_ts_s',     default_val=0,  err_msg="Missing unix timestamp from body",      err=err)
-    master_sig:    str = base.json_dict_require(d=get.json, key='master_sig',    default_val='', err_msg="Missing master signature from body",    err=err)
-    rotating_sig:  str = base.json_dict_require(d=get.json, key='rotating_sig',  default_val='', err_msg="Missing rotating signature from body",  err=err)
+    version:       int = base.json_dict_require_int(d=get.json, key='version',       err=err)
+    master_pkey:   str = base.json_dict_require_str(d=get.json, key='master_pkey',   err=err)
+    rotating_pkey: str = base.json_dict_require_str(d=get.json, key='rotating_pkey', err=err)
+    unix_ts_s:     int = base.json_dict_require_int(d=get.json, key='unix_ts_s',     err=err)
+    master_sig:    str = base.json_dict_require_str(d=get.json, key='master_sig',    err=err)
+    rotating_sig:  str = base.json_dict_require_str(d=get.json, key='rotating_sig',  err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -547,8 +557,8 @@ def get_pro_revocations():
 
     # Extract values from JSON
     err          = base.ErrorSink()
-    version: int = base.json_dict_require(d=get.json, key='version', default_val=0, err_msg="Missing version from body",          err=err)
-    ticket:  int = base.json_dict_require(d=get.json, key='ticket',  default_val=0, err_msg="Missing revocation ticket from body", err=err)
+    version: int = base.json_dict_require_int(d=get.json, key='version', err=err)
+    ticket:  int = base.json_dict_require_int(d=get.json, key='ticket',  err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -591,11 +601,11 @@ def get_pro_payments():
 
     # Extract values from JSON
     err              = base.ErrorSink()
-    version:     int = base.json_dict_require(d=get.json, key='version',     default_val=0,  err_msg="Missing version from body",           err=err)
-    master_pkey: str = base.json_dict_require(d=get.json, key='master_pkey', default_val='', err_msg="Missing master public key from body", err=err)
-    master_sig:  str = base.json_dict_require(d=get.json, key='master_sig',  default_val='', err_msg="Missing master signature from body",  err=err)
-    unix_ts_s:   int = base.json_dict_require(d=get.json, key='unix_ts_s',   default_val=0,  err_msg="Missing unix timestamp from body",    err=err)
-    page:        int = base.json_dict_require(d=get.json, key='page',        default_val=0,  err_msg="Missing page from body",              err=err)
+    version:     int = base.json_dict_require_int(d=get.json, key='version',     err=err)
+    master_pkey: str = base.json_dict_require_str(d=get.json, key='master_pkey', err=err)
+    master_sig:  str = base.json_dict_require_str(d=get.json, key='master_sig',  err=err)
+    unix_ts_s:   int = base.json_dict_require_int(d=get.json, key='unix_ts_s',   err=err)
+    page:        int = base.json_dict_require_int(d=get.json, key='page',        err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -636,12 +646,11 @@ def get_pro_payments():
             list_it: collections.abc.Iterator[backend.SQLTablePaymentRowTuple] = \
                     backend.get_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
             for row in list_it:
-                master_pkey:             bytes = row[0]
                 status                         = backend.PaymentStatus(row[1])
                 subscription_duration_s: int   = row[2]
                 payment_provider               = base.PaymentProvider(row[3])
                 redeemed_unix_ts_s:      int   = row[4]
-                activation_unix_ts_s:    int   = row[5]  if row[5]  else 0
+                activated_unix_ts_s:     int   = row[5]  if row[5]  else 0
                 expired_unix_ts_s:       int   = row[6]  if row[6]  else 0
                 refunded_unix_ts_s:      int   = row[7]  if row[7]  else 0
                 apple_original_tx_id:    str   = row[8]  if row[8]  else ''
@@ -662,9 +671,9 @@ def get_pro_payments():
                         'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
-                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
-                        'activation_unix_ts_s':    activation_unix_ts_s,
+                        'activated_unix_ts_s':     activated_unix_ts_s,
                         'expired_unix_ts_s':       expired_unix_ts_s,
+                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
                         'refunded_unix_ts_s':      refunded_unix_ts_s,
                         'google_payment_token':    google_payment_token,
                     })
@@ -673,9 +682,9 @@ def get_pro_payments():
                         'status':                  int(status.value),
                         'subscription_duration_s': subscription_duration_s,
                         'payment_provider':        int(payment_provider.value),
-                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
-                        'activation_unix_ts_s':    activation_unix_ts_s,
+                        'activated_unix_ts_s':     activated_unix_ts_s,
                         'expired_unix_ts_s':       expired_unix_ts_s,
+                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
                         'refunded_unix_ts_s':      refunded_unix_ts_s,
                         'apple_original_tx_id':    apple_original_tx_id,
                         'apple_tx_id':             apple_tx_id,

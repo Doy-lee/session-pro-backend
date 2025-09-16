@@ -236,11 +236,12 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        assert isinstance(result_json, dict)
+        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -303,11 +304,11 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -377,11 +378,11 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:            int = base.json_dict_require(d=result_json, key='version',          default_val=0,  err_msg='Missing field', err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require(d=result_json, key='gen_index_hash',   default_val='', err_msg='Missing field', err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require(d=result_json, key='rotating_pkey',    default_val='', err_msg='Missing field', err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require(d=result_json, key='expiry_unix_ts_s', default_val=0,  err_msg='Missing field', err=err)
-        result_sig_hex:            str = base.json_dict_require(d=result_json, key='sig',              default_val='', err_msg='Missing field', err=err)
+        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
         # Parse hex fields to bytes
@@ -426,9 +427,9 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version: int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-        result_ticket:  int                        = base.json_dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
+        result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
+        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items', err=err)
+        result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0
         assert result_ticket  == 1
@@ -470,9 +471,9 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version: int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-        result_items:   list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-        result_ticket:  int                        = base.json_dict_require(d=result_json, key='ticket',  default_val=0,  err_msg='Missing field', err=err)
+        result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
+        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items', err=err)
+        result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert result_ticket  == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -518,10 +519,10 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:  int                        = base.json_dict_require(d=result_json, key='version',  default_val=0,  err_msg='Missing field', err=err)
-        result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',    default_val=[], err_msg='Missing field', err=err)
-        result_pages:    int                        = base.json_dict_require(d=result_json, key='pages',    default_val=0,  err_msg='Missing field', err=err)
-        result_payments: int                        = base.json_dict_require(d=result_json, key='payments', default_val=0,  err_msg='Missing field', err=err)
+        result_version:  int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+        result_items:    list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+        result_pages:    int                        = base.json_dict_require_int(d=result_json, key='pages',    err=err)
+        result_payments: int                        = base.json_dict_require_int(d=result_json, key='payments', err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
         assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
@@ -613,10 +614,10 @@ def test_server_add_payment_flow():
             result_json = response_json['result']
 
             # Extract the fields
-            result_version:  int                        = base.json_dict_require(d=result_json, key='version', default_val=0,  err_msg='Missing field', err=err)
-            result_items:    list[dict[str, int | str]] = base.json_dict_require(d=result_json, key='items',   default_val=[], err_msg='Missing field', err=err)
-            result_pages:    int                        = base.json_dict_require(d=result_json, key='pages',   default_val=0,  err_msg='Missing field', err=err)
-            result_payments: int                        = base.json_dict_require(d=result_json, key='payments',default_val=0,  err_msg='Missing field', err=err)
+            result_version:  int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+            result_items:    list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+            result_pages:    int                        = base.json_dict_require_int(d=result_json, key='pages',    err=err)
+            result_payments: int                        = base.json_dict_require_int(d=result_json, key='payments', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
             assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
