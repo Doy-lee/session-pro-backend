@@ -1,77 +1,75 @@
 '''
 Overview
-  This file is the HTTP layer which declares the functions that serve the routes
-  for interacting with the Session Pro Backend. These routes are registered onto
-  a Flask application which enable the endpoints for the server.
+  This file is the HTTP layer which declares the functions that serve the routes for interacting
+  with the Session Pro Backend. These routes are registered onto a Flask application which enable
+  the endpoints for the server.
 
-  The role of this layer is to intercept and sanitize the HTTP request,
-  extracting the JSON into valid, strongly typed (to Python's best ability)
-  types that can be passed into the backend.
+  The role of this layer is to intercept and sanitize the HTTP request, extracting the JSON into
+  valid, strongly typed (to Python's best ability) types that can be passed into the backend.
 
-  The backend is responsible for further validation of the request such as
-  signature verification and consistency against the state of the DB. If
-  successful the result is returned back to this layer and piped back to the
-  user in the HTTP response.
+  The backend is responsible for further validation of the request such as signature verification
+  and consistency against the state of the DB. If successful the result is returned back to this
+  layer and piped back to the user in the HTTP response.
 
 API
-  All response endpoints follow the basic structure for success and failure
-  respectively:
+  All response endpoints follow the basic structure for success and failure respectively:
 
   { "status": 0, "result": { <content...> }, "version": 0}                          // On success
   { "status": 1, "errors": [ "1st reason for error", "2nd reason for error", ... ]} // On failure
 
-  Which means that calling code should conditionally handle a root level
-  `result` or `msg` type payload based on the status. `0` for success and
-  non-`0` for failures.
+  Which means that calling code should conditionally handle a root level `result` or `msg` type
+  payload based on the status. `0` for success and non-`0` for failures.
 
   All routes accept v4 onion requests under the endpoint /oxen/lsrpc/v4
 
   /add_pro_payment
     Description
-      Register a new payment identified by a 32 byte hash of the payment token
-      received by the third-party store (e.g.: Google Play Store) to the Session
-      Pro backend. The hash of the token is defined as:
+      Register a new payment identified by the payment details specified in the 'payment_tx' (e.g.:
+      Google Play Store and the payment token) to the Session Pro backend.
 
-        hash = blake2b32(person='SeshProBackend__', payment_token)
+      The master public key `master_pkey` should be the deterministically derived Ed25519 public key
+      from the user's Session Account seed. The rotating public key `rotating_pkey` should be an
+      independent Ed25519 key that will be authorised to use the proof.
 
-      The master public key `master_pkey` should be the deterministically
-      derived Ed25519 public key from the user's Session Account seed. The
-      rotating public key `rotating_pkey` should be an independent Ed25519 key
-      that will be authorised to use the proof.
+      The embedded `master_sig` and `rotating_sig` signature must sign over a 32 byte hash of the
+      request components (in little endian) for example:
 
-      The embedded `master_sig` and `rotating_sig` signature must sign over a
-      32 byte hash of the request components (in little endian):
+        google_hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.google_payment_token)
+        apple_hash  = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.apple_tx_id)
 
-        hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_token_hash)
-
-      This request will fail if the Session Pro backend has not witnessed the
-      equivalent hashed payment token independently from the storefront that the
-      payment originally came from.
+      This request will fail if the Session Pro backend has not witnessed the equivalent payment
+      independently from the storefront that the payment originally came from.
 
     Request
       version:       1 byte, current version of the request which should be 0
-      master_pkey:   32 byte Ed25519 public key derived deterministic from the
-                     Session Account seed in hex
+      master_pkey:   32 byte Ed25519 public key derived deterministic from the Session Account seed
+                     in hex
       rotating_pkey: 32 byte Ed25519 public key to pair to the pro proof in hex
-      payment_token: 32 byte hash of the payment token to register that the
-                     caller receives by purchasing a Session Pro subscription
-      master_sig:    64 byte signature over the hash of the contents of the
-                     request proving that the user knows the secret component
-                     to the `master_pkey` and hence the caller is authorised to
-                     pair a new `rotating_pkey` to this payment
-      rotating_sig:  64 byte signature over the contents of the request proving
-                     that the user knows the secret component to the
-                     `rotating_pkey`
+      payment_tx:    Object containing fields about the purchase from the payment provider to
+                     register for a Session Pro subscription.
+        provider:             1 byte integer representing the platform that the payment to be
+                              registered is coming from with the following mapping:
+                                1 => Google Play Store
+                                2 => Apple iOS App Store
+        apple_tx_id:          When provider is set to Apple iOS App Store, set
+                              this field to the transaction ID string.
+        google_payment_token: When provider is set to the Google Play Store, set
+                              this field to the purchase token string.
+      master_sig:    64 byte signature over the hash of the contents of the request proving that the
+                     user knows the secret component to the `master_pkey` and hence the caller is
+                     authorised to pair a new `rotating_pkey` to this payment
+      rotating_sig:  64 byte signature over the contents of the request proving that the user knows
+                     the secret component to the `rotating_pkey`
 
     Response
       version:          1 byte version value from the request
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
-      gen_index_hash:   32 byte hash of the internal generation index that has
-                        been allocated to the user.
+      gen_index_hash:   32 byte hash of the internal generation index that has been allocated to the
+                        user.
       rotating_pkey:    32 byte Ed25519 public key authorised to use the proof
-      sig:              64 byte signature over the proof, signed by the Session
-                        Pro backend allowing third-parties to verify that the
-                        proof was generated by a authoritative backend.
+      sig:              64 byte signature over the proof, signed by the Session Pro backend allowing
+                        third-parties to verify that the proof was generated by a authoritative
+                        backend.
 
     Example
       Request
@@ -79,7 +77,10 @@ API
         "version": 0,
         "master_pkey": "077deae803d9b55c6b75e36729cb2034ad459d9ff85f821905b5eddb0d48cc60",
         "rotating_pkey": "3cf5193d27a91dd6f53ba30f032135688d8c5f168dee76c4d6206778c862597e",
-        "payment_token": "d0cce0ee860616d20cd0ddce86782607331530d628fa994c84689eb40b92be2c",
+        "payment_tx": {
+            "provider": 1,
+            "google_payment_token": "d0cce0ee860616d20cd0ddce86782607331530d628fa994c84689eb40b92be2c",
+        }
         "master_sig": "f56c5f685ce6ab7a3775ce581b9e634fbd6358dab085698ccb3ba125c19dda341f8c7a5497268f1fb39874df4e6e4d6552cf984a3d50976b2004f8723d505707",
         "rotating_sig": "fcbe180c96d6b563ae50db48418f7b292d952dcbcdad78a09e74274024a2d79d148d4c16fc52eda2994f78887d4ec95e38e38d2f10547cae03efd41c409a3e01"
       }
@@ -98,50 +99,45 @@ API
 
   /get_pro_proof
     Description
-      Pair a new `rotating_pkey` to a pre-existing Session Pro payment,
-      generating a new proof that can be attached to messages to enable
-      entitlement to Pro features on the Session Protocol. The `master_pkey`
-      public key must currently have an active subscription/payment associated
-      with it for this request to succeed.
+      Pair a new `rotating_pkey` to a pre-existing Session Pro payment, generating a new proof that
+      can be attached to messages to enable entitlement to Pro features on the Session Protocol. The
+      `master_pkey` public key must currently have an active subscription/payment associated with it
+      for this request to succeed.
 
-      The embedded `master_sig` and `rotating_sig` signature must sign over a
-      32 byte hash of the request components (in little endian):
+      The embedded `master_sig` and `rotating_sig` signature must sign over a 32 byte hash of the
+      request components (in little endian):
 
         hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || unix_ts_s)
 
-      Once the response has been received, the caller should store the proof
-      offline and embed it into their messages on the Session Protocol, signing
-      the message with their rotating secret key for other users to validate the
-      proof and receive entitlement to Session Pro features.
+      Once the response has been received, the caller should store the proof offline and embed it
+      into their messages on the Session Protocol, signing the message with their rotating secret
+      key for other users to validate the proof and receive entitlement to Session Pro features.
 
-      The generated proof is signed by the Session Pro Backend. The public keys
-      of the backend will be published to allow third parties to authorise the
-      validity of a proof's origin.
+      The generated proof is signed by the Session Pro Backend. The public keys of the backend will
+      be published to allow third parties to authorise the validity of a proof's origin.
 
     Request
       version:       1 byte, current version of the request which should be 0
-      master_pkey:   32 byte Ed25519 public key derived deterministic from the
-                     Session Account seed in hex
+      master_pkey:   32 byte Ed25519 public key derived deterministic from the Session Account seed
+                     in hex
       rotating_pkey: 32 byte Ed25519 public key to pair to the pro proof in hex
       unix_ts_s:     8 byte current unix timestamp in seconds
-      master_sig:    64 byte signature over the hash of the contents of the
-                     request proving that the user knows the secret component
-                     to the `master_pkey` and hence the caller is authorised to
-                     pair a new `rotating_pkey` to the payment associated with
-                     the `master_pkey`.
-      rotating_sig:  64 byte signature over the contents of the request proving
-                     that the user knows the secret component to the
-                     `rotating_pkey`.
+      master_sig:    64 byte signature over the hash of the contents of the request proving that the
+                     user knows the secret component to the `master_pkey` and hence the caller is
+                     authorised to pair a new `rotating_pkey` to the payment associated with the
+                     `master_pkey`.
+      rotating_sig:  64 byte signature over the contents of the request proving that the user knows
+                     the secret component to the `rotating_pkey`.
 
     Response
       version:          1 byte version value from the request
       expiry_unix_ts_s: 8 byte unix timestamp of when the proof will expire
-      gen_index_hash:   32 byte hash of the internal generation index that has
-                        been allocated to the user.
+      gen_index_hash:   32 byte hash of the internal generation index that has been allocated to the
+                        user.
       rotating_pkey:    32 byte Ed25519 public key authorised to use the proof
-      sig:              64 byte signature over the proof, signed by the Session
-                        Pro backend allowing third-parties to verify that the
-                        proof was generated by a authoritative backend.
+      sig:              64 byte signature over the proof, signed by the Session Pro backend allowing
+                        third-parties to verify that the proof was generated by a authoritative
+                        backend.
 
     Examples
       Request
@@ -168,57 +164,49 @@ API
 
   /get_pro_revocations
     Description
-      Retrieve the list of revoked Session Pro Proofs. Proofs are signed can be
-      validated offline in perpetuity until expiry. There are situations where
-      a current circulating and valid proof can be invalidated (for example a
-      user has refunded their subscription). The Session Pro backend maintains
-      the list of proofs that callers can retrieve to reject proofs that
-      circulating on the network.
+      Retrieve the list of revoked Session Pro Proofs. Proofs are signed can be validated offline in
+      perpetuity until expiry. There are situations where a current circulating and valid proof can
+      be invalidated (for example a user has refunded their subscription). The Session Pro backend
+      maintains the list of proofs that callers can retrieve to reject proofs that circulating on
+      the network.
 
-      This endpoint accepts a `ticket` which represents the current iteration of
-      the revocation list. The Session Pro backend increments the ticket
-      monotonically with each change to the revocation list. The caller submits
-      their latest known `ticket` (which initially will be 0) and in the
-      response the latest `ticket` known by the backend will be returned.
+      This endpoint accepts a `ticket` which represents the current iteration of the revocation
+      list. The Session Pro backend increments the ticket monotonically with each change to the
+      revocation list. The caller submits their latest known `ticket` (which initially will be 0)
+      and in the response the latest `ticket` known by the backend will be returned.
 
-      By having the caller cache the ticket and reuse it in subscequent
-      requests, the backend will only return the revocation list contents if the
-      user's `ticket` is different from the backend's ticket.
+      By having the caller cache the ticket and reuse it in subscequent requests, the backend will
+      only return the revocation list contents if the user's `ticket` is different from the
+      backend's ticket.
 
-      A revocation identifies a Session Pro proof using the `gen_index_hash` of
-      the proof. This `gen_index_hash` is shared across all proofs for a user
-      that were generated using the same payment, in other words there can be
-      more than one proof circulating with this `gen_index_hash`. Callers must
-      take care to reject all proofs they witness that match the
+      A revocation identifies a Session Pro proof using the `gen_index_hash` of the proof. This
+      `gen_index_hash` is shared across all proofs for a user that were generated using the same
+      payment, in other words there can be more than one proof circulating with this
+      `gen_index_hash`. Callers must take care to reject all proofs they witness that match the
       `gen_index_hash` irrespective of any other common information in the proof.
 
-      Note that expired proofs do not get revoked and will not show up in this
-      list. It's the caller's responsibility to reject proofs that have expired
-      by checking the expiry timestamp. Hence this endpoint is recommended to be
-      called every hour from the caller's startup time as revocations are only
-      created in exceptional circumstances.
+      Note that expired proofs do not get revoked and will not show up in this list. It's the
+      caller's responsibility to reject proofs that have expired by checking the expiry timestamp.
+      Hence this endpoint is recommended to be called every hour from the caller's startup time as
+      revocations are only created in exceptional circumstances.
 
     Request
       version: 1 byte, current version of the request which should be 0
-      ticket:  4 byte monotonic integer that represents the current iteration of
-               the revocation list held by the caller. Initially callers will
-               set this to 0 if they do not know the latest ticket. In
-               subsequent requests the latest known `ticket` should be passed in
-               so that the backend only returns the updated revocation list if
-               the contents of said list has changed.
+      ticket:  4 byte monotonic integer that represents the current iteration of the revocation list
+               held by the caller. Initially callers will set this to 0 if they do not know the
+               latest ticket. In subsequent requests the latest known `ticket` should be passed in
+               so that the backend only returns the updated revocation list if the contents of said
+               list has changed.
 
     Response
-      ticket:  4 byte integer of the latest ticket for the current revocation
-               list of the Session Pro backend. If this value is the same as the
-               request's `ticket` then the list will be empty as there are no
-               changes to the revocation list.
-      items:   Array of revocations, can be empty if there are no revocations or
-               the request ticket is the latest ticket managed by the backend.
-        expiry_unix_ts_s: 8 byte unix timestamp indicating when the Session Pro
-                           Proof identified by its `gen_index_hash` should be
-                           rejected until.
-        gen_index_hash: 32 byte hash of the Session Pro proof that has been
-                        revoked.
+      ticket:  4 byte integer of the latest ticket for the current revocation list of the Session
+               Pro backend. If this value is the same as the request's `ticket` then the list will
+               be empty as there are no changes to the revocation list.
+      items:   Array of revocations, can be empty if there are no revocations or the request ticket
+               is the latest ticket managed by the backend.
+        expiry_unix_ts_s: 8 byte unix timestamp indicating when the Session Pro Proof identified by
+                          its `gen_index_hash` should be rejected until.
+        gen_index_hash:   32 byte hash of the Session Pro proof that has been revoked.
 
     Examples
       Request
@@ -238,60 +226,68 @@ API
 
   /get_pro_payments
     Description
-      Retrieve the list of current and historical payments associated with the
-      Session Pro master public key. The returned list is in descending order
-      from the date that the payment was registered (e.g.: newest payment to
-      oldest).
+      Retrieve the list of current and historical payments associated with the Session Pro master
+      public key. The returned list is in descending order from the date that the payment was
+      registered (e.g.: newest payment to oldest).
 
-      This request is paginated, initially the caller should pass the 0th page.
-      The response will have the total number of pages at which the caller can
-      query more pages if there are any to retrieve more payments.
+      This request is paginated, initially the caller should pass the 0th page. The response will
+      have the total number of pages at which the caller can query more pages if there are any to
+      retrieve more payments.
 
-      The embedded `master_sig` signature must sign over the 32 byte hash of the
-      requests contents (in little endian):
+      The embedded `master_sig` signature must sign over the 32 byte hash of the requests contents
+      (in little endian):
 
         hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_s || page)
 
     Request
       version:     1 byte, current version of the request which should be 0
-      master_pkey: 32 byte Ed25519 public key derived deterministic from the
-                   Session Account seed in hex to get payments for
-      master_sig:  64 byte signature over the hash of the contents of the
-                   request proving that the user knows the secret component
-                   to the `master_pkey` and hence the caller is authorised to
-                   get payments for this key.
+      master_pkey: 32 byte Ed25519 public key derived deterministic from the Session Account seed in
+                   hex to get payments for
+      master_sig:  64 byte signature over the hash of the contents of the request proving that the
+                   user knows the secret component to the `master_pkey` and hence the caller is
+                   authorised to get payments for this key.
       unix_ts_s:   8 byte unix timestamp of the current time
-      page:        4 byte integer for which page of results to get payments for.
-                   Initially this should be set to 0, the response will indciate
-                   how many pages there are.
+      page:        4 byte integer for which page of results to get payments for. Initially this
+                   should be set to 0, the response will indciate how many pages there are.
 
     Response
-      pages:    4 byte integer indicating the total number of pages starting
-                from 0
-      payments: 4 byte integer indicating the total number of payments associated
-                with the `master_pkey`
-      items:    Array of payments associated with `master_pkey`. Payments are
-                returned in descending order by the payment date
-        activation_unix_ts_s:    8 byte unix timestamp indicating if the payment
-                                 is has been activated to enable entitlement to
-                                 Session Pro before. 0 if the payment has never
-                                 been activated (e.g.: This account has another
-                                 subscription that is active already and being
-                                 consumed first, or, the payment was refunded
-                                 before it could be activated e.t.c).
-        archive_unix_ts_s:       8 byte unix timestamp indicating when the
-                                 payment was archived (either due to refunds or
-                                 revocation). This value is 0 if a payment
-                                 has not been archived yet (e.g.: has not been
-                                 activated and elapsed, nor refunded).
-        redeemed_unix_ts_s:      8 byte unix timestamp indicating when the
-                                 payment was registered. This timestamp is
-                                 rounded up to the next day boundary from the
+      pages:    4 byte integer indicating the total number of pages starting from 0
+      payments: 4 byte integer indicating the total number of payments associated with the
+                `master_pkey`
+      items:    Array of payments associated with `master_pkey`. Payments are returned in descending
+                order by the payment date
+        status:                  1 byte integer describing the status of the consumption of the
+                                 payment for Session Pro with the following mapping:
+                                   2 => Redeemed
+                                     Payment was recognised by the backend and is in queue to be
+                                     activated for Session Pro entitlement. Most users payments
+                                     immediately transition from redeemed to activated as they
+                                     should generally only have 1 active payment at a time.
+                                   3 => Activated
+                                     Payment was activated and the subscription duration is actively
+                                     being consumed to provide a user Session Pro entitlement.
+                                   4 => Expired
+                                     Session Pro entitlement has expired and is no longer being
+                                     provided for this payment
+                                   5 => Refunded
+                                     User has successfully refunded the payment and Session Pro
+                                     entitlement is no longer available
+        activated_unix_ts_s:     8 byte unix timestamp indicating if the payment is has been
+                                 activated to enable entitlement to Session Pro before. 0 if the
+                                 payment has never been activated (e.g.: This account has another
+                                 subscription that is active already and being consumed first, or,
+                                 the payment was refunded before it could be activated e.t.c).
+        expired_unix_ts_s:       8 byte unix timestamp indicating when the payment was expired. 0 if
+                                 it never expired.
+        refunded_unix_ts_s:      8 byte unix timestamp indicating when the payment was expired. 0 if
+                                 it never expired.
+        redeemed_unix_ts_s:      8 byte unix timestamp indicating when the payment was registered.
+                                 This timestamp is rounded up to the next day boundary from the
                                  actual registration date.
-        subscription_duration_s: 4 byte integer indicating the length of the
-                                 subscription payment in seconds.
-        payment_token_hash:      32 byte hash of the payment token that is
-                                 associated with this payment.
+        subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
+                                 seconds.
+        payment_token_hash:      32 byte hash of the payment token that is associated with this
+                                 payment.
 
     Examples
       Request
@@ -652,6 +648,14 @@ def get_pro_payments():
                 apple_tx_id:             str   = row[9]  if row[9]  else ''
                 apple_web_line_order_id: str   = row[10] if row[10] else ''
                 google_payment_token:    str   = row[11] if row[11] else ''
+
+                # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
+                # confidential until the user actually registers the token themselves which they
+                # should witness from the payment provider independently from us so there should be
+                # no need to reveal this to the user until they've confirmed their own receipt of
+                # it.
+                if status == backend.PaymentStatus.Unredeemed:
+                    continue
 
                 if payment_provider == base.PaymentProvider.GooglePlayStore:
                     items.append({

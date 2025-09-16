@@ -1,8 +1,7 @@
 '''
-The base layer contains common utilities that is useful to other files in the
-project and should have no dependency on any project files, only, native Python
-packages. Typically useful to share functionality from the testing suite and the
-project but not limited to.
+The base layer contains common utilities that is useful to other files in the project and should
+have no dependency on any project files, only, native Python packages. Typically useful to share
+functionality from the testing suite and the project but not limited to.
 '''
 import json
 import traceback
@@ -24,13 +23,12 @@ DEV_BACKEND_DETERMINISTIC_SKEY       = bytes([0xCD] * 32)
 @dataclasses.dataclass
 class ErrorSink:
     '''
-    Helper class to pass to functions that want to return error messages without
-    unwinding the stack by using throwing exceptions.
+    Helper class to pass to functions that want to return error messages without unwinding the stack
+    by using throwing exceptions.
 
-    The typical pattern in that this construct is used is calling a sequence of
-    functions that can error but have no dependency on each other. Errors are
-    accumulated into the sink and checked at the end where it reports
-    the error from the sink and returns a failure if there is one.
+    The typical pattern in that this construct is used is calling a sequence of functions that can
+    error but have no dependency on each other. Errors are accumulated into the sink and checked at
+    the end where it reports the error from the sink and returns a failure if there is one.
 
     See the parsing code in server.py for an example of where this is useful.
     '''

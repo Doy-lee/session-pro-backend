@@ -1,13 +1,13 @@
 '''
 Testing module for the Session Pro Backend, testing internal and public APIs.
 
-The backend tests call the DB APIs directly to test the outcome on the tables in
-the SQLite database.
+The backend tests call the DB APIs directly to test the outcome on the tables in the SQLite
+database.
 
 The server tests spins up a local Flask instance as per
-(https://flask.palletsprojects.com/en/stable/testing/#sending-requests-with-the-test-client)
-and sends a request using the test client and we vet the request and response
-produced by hitting said endpoint.
+(https://flask.palletsprojects.com/en/stable/testing/#sending-requests-with-the-test-client) and
+sends a request using the test client and we vet the request and response produced by hitting said
+endpoint.
 
 TODO:
   - Test that modifying the salt breaks verification

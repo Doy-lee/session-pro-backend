@@ -160,50 +160,43 @@ class RevocationRow:
 
 @dataclasses.dataclass
 class RevocationItem:
-    '''A revocation object that has only the fields necessary for clients to
-    block Session Pro subscription proofs.'''
+    '''A revocation object that has only the fields necessary for clients to block Session Pro
+    subscription proofs.'''
     gen_index_hash:   bytes = b''
     expiry_unix_ts_s: int   = 0
 
 @dataclasses.dataclass
 class RuntimeRow:
-    '''The runtime table stores some metadata used for book-keeping and
-    operations of the DB tables
+    '''The runtime table stores some metadata used for book-keeping and operations of the DB tables
 
-    gen_index - Generation index, an index that is allocated to a user
-    everytime a payment is added or removed from that user. It's monotonically
-    increasing and shared across all users and their allocated index is what
-    gets signed when Session Pro subscription proofs are generated for
+    gen_index - Generation index, an index that is allocated to a user everytime a payment is added
+    or removed from that user. It's monotonically increasing and shared across all users and their
+    allocated index is what gets signed when Session Pro subscription proofs are generated for
     a particular user.
 
-    Multiple proofs can be generated for a given index until a new payment is
-    added or revoked for that user. A generation index can hence be revoked,
-    thereby revoking all the proofs attributable to the associated user that
-    were previously signed with the generation index to be revoked.
+    Multiple proofs can be generated for a given index until a new payment is added or revoked for
+    that user. A generation index can hence be revoked, thereby revoking all the proofs attributable
+    to the associated user that were previously signed with the generation index to be revoked.
 
-    gen_index_salt - The generation index gets signed after it has been hashed
-    with this particular salt. This prevents leakage of metadata from the
-    generation index which starts from 0 and counts upwards. The raw generation
-    index leaks the timeframe relative to the lifetime of the protocol that
-    a Session Pro subscription was activated.
+    gen_index_salt - The generation index gets signed after it has been hashed with this particular
+    salt. This prevents leakage of metadata from the generation index which starts from 0 and counts
+    upwards. The raw generation index leaks the timeframe relative to the lifetime of the protocol
+    that a Session Pro subscription was activated.
 
-    The salt gets bootstrapped on creation of the DB and is stored to persist
-    across sessions.
+    The salt gets bootstrapped on creation of the DB and is stored to persist across sessions.
 
     backend_key - Ed25519 key used to sign proofs.
 
-    The key gets bootstrapped on creation of the DB and is stored to persist
-    across sessions.
+    The key gets bootstrapped on creation of the DB and is stored to persist across sessions.
 
-    revocation_ticket - A monotonically increasing index that gets incremented
-    everytime the revocation table has a row added or deleted (i.e. a new ticket
-    is allocated when the table changes). This ticket's purpose is to be handed
-    out to clients when they request the revocation list. The client can then
-    use this ticket to short-circuit the retrieval of the revocation list by
-    comparing the current revocation list ticket with their cached ticket.
+    revocation_ticket - A monotonically increasing index that gets incremented everytime the
+    revocation table has a row added or deleted (i.e. a new ticket is allocated when the table
+    changes). This ticket's purpose is to be handed out to clients when they request the revocation
+    list. The client can then use this ticket to short-circuit the retrieval of the revocation list
+    by comparing the current revocation list ticket with their cached ticket.
 
-    If the tickets are the same, clients can conclude that there are no
-    revocation entries to sync from the database.
+    If the tickets are the same, clients can conclude that there are no revocation entries to sync
+    from the database.
     '''
     gen_index:         int                     = 0
     gen_index_salt:    bytes                   = b''
@@ -271,6 +264,7 @@ def make_add_pro_payment_hash(version:       int,
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
 
+    hasher.update(int(payment_tx.provider.value).to_bytes(length=1, byteorder='little'))
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         hasher.update(payment_tx.google_payment_token.encode('utf-8'))
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:

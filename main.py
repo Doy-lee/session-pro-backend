@@ -1,17 +1,15 @@
 '''
-Main entry point for the Session Pro Backend. This runs the necessary setup code
-like initialising the DB and responding startup arguments before handing over
-control-flow to Flask.
+Main entry point for the Session Pro Backend. This runs the necessary setup code like initialising
+the DB and responding startup arguments before handing over control-flow to Flask.
 
-This application has command line options that must be specified as environment
-variables because this application runs directly as a flask app (in a dev
-environment) and it also can be served over WSGI for a production usecase.
+This application has command line options that must be specified as environment variables because
+this application runs directly as a flask app (in a dev environment) and it also can be served over
+WSGI for a production usecase.
 
-We've designed the backend primarily for UWSGI which mounts the flask app with
-no possibility to forward command line arguments to the underlying application.
-Thus we cannot use argparse or flask's @click.options as there's no way to
-specify them in the uWSGI manifest hence the design decision to use environment
-variables.
+We've designed the backend primarily for UWSGI which mounts the flask app with no possibility to
+forward command line arguments to the underlying application. Thus we cannot use argparse or flask's
+@click.options as there's no way to specify them in the uWSGI manifest hence the design decision to
+use environment variables.
 '''
 
 import pathlib
