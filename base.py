@@ -10,6 +10,7 @@ import datetime
 import typing
 import enum
 import dataclasses
+from env import env
 
 class PaymentProvider(enum.Enum):
     Nil             = 0
@@ -226,6 +227,20 @@ def format_seconds(duration_s: int):
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
 
+def safe_dump_dict_keys_or_data(d: dict) -> str:
+    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
+        return json.dumps(d)
+    else:
+        return ', '.join(d.keys())
+
+def safe_get_dict_value_type(d: dict, key: str) -> str:
+    v = d.get(key)
+    t = type(v)
+    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
+        return f'({t}) {v}'
+    else:
+        return t
+
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
 JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
@@ -235,9 +250,10 @@ def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         if isinstance(d[key], str):
             result = typing.cast(str, d[key])
         else:
-            err.msg_list.append(f'Key "{key}" value was not a string: "{d[key]}"')
+            err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+        if __debug__:
+            err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
@@ -246,9 +262,9 @@ def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         if isinstance(d[key], int):
             result = typing.cast(int, d[key])
         else:
-            err.msg_list.append(f'Key "{key}" value was not a integer: "{d[key]}"')
+            err.msg_list.append(f'Key "{key}" value was not a integer: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_array(d: dict[str, JSONValue], key: str, err: ErrorSink) -> list[JSONValue]:
@@ -257,9 +273,9 @@ def json_dict_require_array(d: dict[str, JSONValue], key: str, err: ErrorSink) -
         if isinstance(d[key], list):
             result = typing.cast(list[JSONValue], d[key])
         else:
-            err.msg_list.append(f'Key "{key}" value was not an array: "{d[key]}"')
+            err.msg_list.append(f'Key "{key}" value was not an array: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> dict[str, JSONValue]:
@@ -268,7 +284,17 @@ def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         if isinstance(d[key], dict):
             result = typing.cast(dict[str, JSONValue], d[key])
         else:
-            err.msg_list.append(f'Key "{key}" value was not an object: "{d[key]}"')
+            err.msg_list.append(f'Key "{key}" value was not an object: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {json.dumps(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+    return result
+
+
+def json_dict_require_str_coerce_to_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
+    result_str = json_dict_require_str(d, key, err)
+    result = 0
+    try:
+        result = int(result_str)
+    except Exception as e:
+        err.msg_list.append(f'Unable to parse {key} type to an int: {e}')
     return result
