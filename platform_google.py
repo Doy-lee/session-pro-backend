@@ -7,8 +7,62 @@ from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
 
 import base
-from base import json_dict_require_str, json_dict_require_int
+from base import json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, safe_dump_dict_keys_or_data
 
+import env
+
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+
+SCOPES = ['https://www.googleapis.com/auth/androidpublisher']
+
+def create_service():
+    """Create and return the Android Publisher service object using environment credentials."""
+    # Get the service account file path from environment variable
+    credentials = service_account.Credentials.from_service_account_file(
+        env.GOOGLE_APPLICATION_CREDENTIALS, scopes=SCOPES)
+
+    service = build('androidpublisher', 'v3', credentials=credentials)
+    return service
+
+def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink):
+    """
+    Call the purchases.subscriptionsv2.get endpoint.
+
+    Args:
+        package_name (str): The package name of your app
+        token (str): The purchase token for the subscription
+        err (base.ErrorSink): The error sink
+
+    Returns:
+        dict: The subscription details
+    """
+    service = create_service()
+
+    try:
+        result = service.purchases().subscriptionsv2().get(
+            packageName=package_name,
+            token=token
+        ).execute()
+
+        if isinstance(result, dict):
+            if "subscribeWithGoogleInfo" in result:
+                del result["subscribeWithGoogleInfo"]
+
+            kind = json_dict_require_str(result, "kind", err)
+            if kind != "androidpublisher#subscriptionPurchaseV2":
+                err.msg_list.append(f'purchases.subscriptionsv2.get has incorrect kind: {kind}')
+        else:
+            err.msg_list.append('Failed to get subscription details, result not a dict')
+
+        if len(err.msg_list) > 0:
+            return None
+
+        return result
+
+    except Exception as e:
+        err.msg_list.append(f'Failed to get subscription details: {e}')
+        return None
 
 class SubscriptionNotificationType(IntEnum):
     """Subscription notification types as per Google Play documentation"""
@@ -72,6 +126,36 @@ class NotificationType(StrEnum):
     # If this field is present, then this notification is related to a test publish. These are sent only through the Google Play Developer Console. Note that this field is mutually exclusive with oneTimeProductNotification, subscriptionNotification, and voidedPurchaseNotification.
     TEST = "testNotification"
 
+class SubscriptionsV2SubscriptionStateType(StrEnum):
+    """Subscriptions V2 subscription state types"""
+    # Unspecified subscription state.
+    SUBSCRIPTION_STATE_UNSPECIFIED = "SUBSCRIPTION_STATE_UNSPECIFIED"
+    # Subscription was created but awaiting payment during signup. In this state, all items are awaiting payment.
+    SUBSCRIPTION_STATE_PENDING = "SUBSCRIPTION_STATE_PENDING"
+    # Subscription is active. - (1) If the subscription is an auto renewing plan, at least one item is autoRenewEnabled and not expired. - (2) If the subscription is a prepaid plan, at least one item is not expired.
+    SUBSCRIPTION_STATE_ACTIVE ="SUBSCRIPTION_STATE_ACTIVE"
+    # Subscription is paused. The state is only available when the subscription is an auto renewing plan. In this state, all items are in paused state.
+    SUBSCRIPTION_STATE_PAUSED = "SUBSCRIPTION_STATE_PAUSED"
+    # Subscription is in grace period. The state is only available when the subscription is an auto renewing plan. In this state, all items are in grace period.
+    SUBSCRIPTION_STATE_IN_GRACE_PERIOD = "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
+    # Subscription is on hold (suspended). The state is only available when the subscription is an auto renewing plan. In this state, all items are on hold.
+    SUBSCRIPTION_STATE_ON_HOLD ="SUBSCRIPTION_STATE_ON_HOLD"
+    # Subscription is canceled but not expired yet. The state is only available when the subscription is an auto renewing plan. All items have autoRenewEnabled set to false.
+    SUBSCRIPTION_STATE_CANCELED ="SUBSCRIPTION_STATE_CANCELED"
+    # Subscription is expired. All items have expiryTime in the past.
+    SUBSCRIPTION_STATE_EXPIRED ="SUBSCRIPTION_STATE_EXPIRED"
+    # Pending transaction for subscription is canceled. If this pending purchase was for an existing subscription, use linkedPurchaseToken to get the current state of that subscription.
+    SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED ="SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
+
+class SubscriptionsV2SubscriptionAcknowledgementStateType(StrEnum):
+    """Subscriptions V2 subscription Acknowledgement state types"""
+    # Unspecified acknowledgement state.
+    ACKNOWLEDGEMENT_STATE_UNSPECIFIED = "ACKNOWLEDGEMENT_STATE_UNSPECIFIED"
+    # The subscription is not acknowledged yet.
+    ACKNOWLEDGEMENT_STATE_PENDING = "ACKNOWLEDGEMENT_STATE_PENDING"
+    # The subscription is acknowledged.
+    ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
+
 def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bool:
     result = True
     if field is None:
@@ -86,7 +170,7 @@ def handle_subscription_refund(purchaseToken: str):
 def handle_notification(body:dict, err: base.ErrorSink):
         body_version = json_dict_require_str(body, "version", err)
         package_name = json_dict_require_str(body, "packageName", err)
-        event_time_millis_str = json_dict_require_str(body, "eventTimeMillis", err)
+        event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
         if len(err.msg_list) > 0:
             return
@@ -127,14 +211,8 @@ def handle_notification(body:dict, err: base.ErrorSink):
                         subscription = body[NotificationType.SUBSCRIPTION]
                         if isinstance(subscription, dict):
                             version = json_dict_require_str(subscription, "version",  err)
-                            subscription_notification_type_str = json_dict_require_str(subscription, "notificationType", err)
+                            subscription_notification_type = json_dict_require_int(subscription, "notificationType", err)
                             purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
-
-                            subscription_notification_type = None
-                            try:
-                                subscription_notification_type = int(subscription_notification_type_str)
-                            except Exception as e:
-                                err.msg_list.append(f'Unable to parse subscription notification type to an int: {subscription_notification_type_str} {e}')
 
                             if len(err.msg_list) > 0:
                                 return
@@ -147,6 +225,40 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                 case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
                                     raise NotImplementedError()
                                 case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
+                                    details = get_subscription_v2(package_name, purchase_token, err)
+
+                                    if len(err.msg_list) > 0 or details is None:
+                                        return
+
+                                    acknowledgement_state = json_dict_require_str(details, "acknowledgementState", err)
+                                    if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+                                        err.msg_list.append(f'Message is already acknowledged')
+
+                                    subscription_state = json_dict_require_str(details, "subscriptionState", err)
+                                    start_time_str = json_dict_require_str(details, "startTime", err)
+
+                                    linked_purchase_token = None
+                                    if 'linkedPurchaseToken' in details:
+                                        linked_purchase_token = json_dict_require_str(details, "linkedPurchaseToken", err)
+
+                                    # TODO: if linked_purchase_token exits we need to revoke the old subscription proof
+
+                                    test_purchase = None
+                                    if 'testPurchase' in details:
+                                        test_purchase = json_dict_require_str(details, "testPurchase", err)
+                                        print(test_purchase)
+
+                                    if len(err.msg_list) > 0:
+                                        return
+
+                                    # match subscription_state:
+                                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED:
+                                    #         subscription_state = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
+                                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
+
+
+
+
                                     raise NotImplementedError()
                                 case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
                                     raise NotImplementedError()
@@ -173,7 +285,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                 case SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
                                     raise NotImplementedError()
                                 case _:
-                                    err.msg_list.append(f'{NotificationType.SUBSCRIPTION} notificationType is invalid: {subscription_notification_type_str}')
+                                    err.msg_list.append(f'{NotificationType.SUBSCRIPTION} notificationType is invalid: {subscription_notification_type}')
 
                         else:
                             err.msg_list.append(f'{NotificationType.SUBSCRIPTION} data is not valid!')
@@ -184,20 +296,8 @@ def handle_notification(body:dict, err: base.ErrorSink):
                         if isinstance(voided_purchase, dict):
                             purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
                             order_id = json_dict_require_str(voided_purchase, "orderId", err)
-                            product_type_str = json_dict_require_str(voided_purchase, "productType", err)
-                            raw_refund_type_str = json_dict_require_str(voided_purchase, "refundType", err)
-
-                            product_type = None
-                            try:
-                                product_type = int(product_type_str)
-                            except Exception as e:
-                                err.msg_list.append(f'Unable to parse product type to an int: {product_type_str} {e}')
-
-                            raw_refund_type = None
-                            try:
-                                raw_refund_type = int(raw_refund_type_str)
-                            except Exception as e:
-                                err.msg_list.append(f'Unable to parse refund type to an int: {raw_refund_type_str} {e}')
+                            product_type = json_dict_require_str_coerce_to_int(voided_purchase, "productType", err)
+                            raw_refund_type = json_dict_require_str_coerce_to_int(voided_purchase, "refundType", err)
 
                             if len(err.msg_list) > 0:
                                 return
@@ -231,12 +331,12 @@ def handle_notification(body:dict, err: base.ErrorSink):
                         err.msg_list.append(f'{NotificationType.ONE_TIME_PRODUCT} is not supported!')
 
                     case NotificationType.TEST:
-                        print(f'{NotificationType.TEST} payload was: {json.dumps(body, indent=1)}')
+                        print(f'{NotificationType.TEST} payload was: {safe_dump_dict_keys_or_data(body)}')
 
                     case _:
                         err.msg_list.append(f'{notification_type} is not a valid notification type!')
         else:
-            err.msg_list.append(f'{package_name} does not match google_package_name from the config!')
+            err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
 
 # NOTE: Enforce the presence of platform_config.py and the variables required for Google
 # integration
@@ -282,7 +382,7 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
 
     if len(err.msg_list) > 0:
         err_msg = '\n'.join(err.msg_list)
-        print(f'ERROR: {err_msg}\nPayload was: {json.dumps(body, indent=1)}')
+        print(f'ERROR: {err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}')
     else:
         print('ACK')
         message.ack()

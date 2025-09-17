@@ -21,6 +21,7 @@ import datetime
 import signal
 import types
 import nacl.signing
+import env
 
 import base
 import backend
@@ -94,6 +95,19 @@ def entry_point() -> flask.Flask:
     db_path_is_uri: bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI', False)
     print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
     dev_backend:    bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',            False)
+
+    env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+
+    if not env.GOOGLE_APPLICATION_CREDENTIALS:
+        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
+
+    if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
+        raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
+
+    unsafe_logging = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
+    if unsafe_logging == '1':
+        env.SESH_PRO_BACKEND_UNSAFE_LOGGING = True
+        print("SESH_PRO_BACKEND_UNSAFE_LOGGING environment is set, this must not be used in production!")
 
     # Ensure the path is setup for writing the database
     try:
