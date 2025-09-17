@@ -96,13 +96,13 @@ def entry_point() -> flask.Flask:
     print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
     dev_backend:    bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',            False)
 
-    env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    # env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 
-    if not env.GOOGLE_APPLICATION_CREDENTIALS:
-        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
+    # if not env.GOOGLE_APPLICATION_CREDENTIALS:
+    #     raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
 
-    if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
-        raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
+    # if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
+    #     raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
 
     unsafe_logging = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
     if unsafe_logging == '1':

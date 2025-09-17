@@ -800,7 +800,8 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
                 WHERE payment_provider = ? AND google_payment_token = ?
             ''', (int(payment_tx.provider.value), payment_tx.google_payment_token))
 
-            if not tx.cursor.fetchone():
+            record = tx.cursor.fetchone()
+            if record:
                 fields      = ['subscription_duration_s', 'payment_provider', 'google_payment_token', 'status']
                 stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
@@ -826,7 +827,8 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
                     WHERE AND payment_provider = ? AND apple_original_tx_id = ? AND apple_web_line_order_tx_id = ?
             ''', (int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
 
-            if not tx.cursor.fetchone():
+            record = tx.cursor.fetchone()
+            if record:
                 fields:      list[str] = ['subscription_duration_s', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id']
                 stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
@@ -981,10 +983,10 @@ def build_proof(gen_index:        int,
     result.rotating_pkey         = rotating_pkey
     result.expiry_unix_ts_s      = expiry_unix_ts_s
 
-    hash_to_sign: bytes = build_proof_hash(version=result.version,
-                                           gen_index_hash=result.gen_index_hash,
-                                           rotating_pkey=result.rotating_pkey,
-                                           expiry_unix_ts_s=result.expiry_unix_ts_s)
+    hash_to_sign: bytes = build_proof_hash(version          = result.version,
+                                           gen_index_hash   = result.gen_index_hash,
+                                           rotating_pkey    = result.rotating_pkey,
+                                           expiry_unix_ts_s = result.expiry_unix_ts_s)
     result.sig = signing_key.sign(hash_to_sign).signature
     return result
 
@@ -1080,6 +1082,7 @@ def add_pro_payment(sql_conn:           sqlite3.Connection,
             internal_payment_tx.apple_web_line_order_tx_id = ''
             internal_payment_tx.apple_original_tx_id       = ''
 
+        print(f'Registering payment in DEV mode: {internal_payment_tx}')
         add_unredeemed_payment(sql_conn=sql_conn,
                                payment_tx=internal_payment_tx,
                                subscription_duration_s=base.SECONDS_IN_DAY * 30,

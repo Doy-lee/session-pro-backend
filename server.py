@@ -427,30 +427,32 @@ def add_pro_payment():
         return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
-    err                   = base.ErrorSink()
-    version:          int = base.json_dict_require_int(d=get.json, key='version',          err=err)
-    master_pkey:      str = base.json_dict_require_str(d=get.json, key='master_pkey',      err=err)
-    rotating_pkey:    str = base.json_dict_require_str(d=get.json, key='rotating_pkey',    err=err)
-    master_sig:       str = base.json_dict_require_str(d=get.json, key='master_sig',       err=err)
-    rotating_sig:     str = base.json_dict_require_str(d=get.json, key='rotating_sig',     err=err)
-    payment_provider: int = base.json_dict_require_int(d=get.json, key='payment_provider', err=err)
+    err                                         = base.ErrorSink()
+    version:          int                       = base.json_dict_require_int(d=get.json,   key='version',       err=err)
+    master_pkey:      str                       = base.json_dict_require_str(d=get.json,   key='master_pkey',   err=err)
+    rotating_pkey:    str                       = base.json_dict_require_str(d=get.json,   key='rotating_pkey', err=err)
+    master_sig:       str                       = base.json_dict_require_str(d=get.json,   key='master_sig',    err=err)
+    rotating_sig:     str                       = base.json_dict_require_str(d=get.json,   key='rotating_sig',  err=err)
+    payment_tx:       dict[str, base.JSONValue] = base.json_dict_require_obj(d=get.json,   key='payment_tx',    err=err)
+    payment_provider: int                       = base.json_dict_require_int(d=payment_tx, key='provider',      err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
+    base.verify_payment_provider(payment_provider=payment_provider, err=err)
 
     # Build payment TX
-    base.verify_payment_provider(payment_provider, err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
-    payment_tx          = backend.AddProPaymentUserTransaction()
-    payment_tx.provider = base.PaymentProvider(payment_provider)
-    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        payment_tx.google_payment_token = base.json_dict_require_str(d=get.json, key='google_payment_token', err=err)
-    elif payment_provider == base.PaymentProvider.iOSAppStore:
-        payment_tx.apple_tx_id = base.json_dict_require_str(d=get.json, key='apple_tx_id', err=err)
+
+    user_payment          = backend.AddProPaymentUserTransaction()
+    user_payment.provider = base.PaymentProvider(payment_provider)
+    if user_payment.provider == base.PaymentProvider.GooglePlayStore:
+        user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
+    elif user_payment.provider == base.PaymentProvider.iOSAppStore:
+        user_payment.apple_tx_id = base.json_dict_require_str(d=payment_tx, key='apple_tx_id', err=err)
 
     # Parse other components
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
@@ -469,7 +471,7 @@ def add_pro_payment():
                                                           redeemed_unix_ts_s = redeemed_unix_ts_s,
                                                           master_pkey        = nacl.signing.VerifyKey(master_pkey_bytes),
                                                           rotating_pkey      = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                          payment_tx         = payment_tx,
+                                                          payment_tx         = user_payment,
                                                           master_sig         = master_sig_bytes,
                                                           rotating_sig       = rotating_sig_bytes,
                                                           err                = err)
