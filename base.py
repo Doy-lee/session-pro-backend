@@ -10,7 +10,7 @@ import datetime
 import typing
 import enum
 import dataclasses
-from env import env
+import env
 
 class PaymentProvider(enum.Enum):
     Nil             = 0

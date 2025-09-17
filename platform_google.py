@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 import typing
 from enum import IntEnum, StrEnum
@@ -8,9 +7,9 @@ from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
 
 import base
-from base import json_dict_require_str, json_dict_require_str_coerce_to_int, safe_dump_dict_keys_or_data
+from base import json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, safe_dump_dict_keys_or_data
 
-from env import env
+import env
 
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
@@ -20,9 +19,6 @@ SCOPES = ['https://www.googleapis.com/auth/androidpublisher']
 def create_service():
     """Create and return the Android Publisher service object using environment credentials."""
     # Get the service account file path from environment variable
-    if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
-        raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
-
     credentials = service_account.Credentials.from_service_account_file(
         env.GOOGLE_APPLICATION_CREDENTIALS, scopes=SCOPES)
 
@@ -215,7 +211,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                         subscription = body[NotificationType.SUBSCRIPTION]
                         if isinstance(subscription, dict):
                             version = json_dict_require_str(subscription, "version",  err)
-                            subscription_notification_type = json_dict_require_str_coerce_to_int(subscription, "notificationType", err)
+                            subscription_notification_type = json_dict_require_int(subscription, "notificationType", err)
                             purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
 
                             if len(err.msg_list) > 0:
@@ -380,8 +376,6 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
             err.msg_list.append(f"Failed to parse JSON! {e}")
 
     if body is not None and isinstance(body, dict):
-        if env.SESH_PRO_BACKEND_UNSAFE_LOGGING_VERBOSE:
-            print(body)
         handle_notification(body, err)
     else:
         err.msg_list.append("Message data is not a valid JSON object")
