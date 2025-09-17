@@ -21,6 +21,7 @@ import datetime
 import signal
 import types
 import nacl.signing
+import env
 
 import base
 import backend
@@ -94,6 +95,8 @@ def entry_point() -> flask.Flask:
     db_path_is_uri: bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI', False)
     print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
     dev_backend:    bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',            False)
+
+    env.env = env.Env()
 
     # Ensure the path is setup for writing the database
     try:
