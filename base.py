@@ -36,6 +36,9 @@ class ErrorSink:
     '''
     msg_list: list[str] = dataclasses.field(default_factory=list)
 
+    def has(self) -> bool:
+        return len(self.msg_list) > 0
+
 @dataclasses.dataclass
 class SQLTransaction:
     conn:   sqlite3.Connection
