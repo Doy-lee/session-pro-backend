@@ -305,6 +305,8 @@ API
                                  it never expired.
         google_payment_token:    When payment provider is Google Play Store, a string which is set
                                  to the platform-specific purchase token for the subscription.
+        google_order_id:         When payment provider is Google Play Store, a string which is set
+                                 to the platform-specific order ID for the subscription.
         apple_original_tx_id:    When payment provider is Apple iOS App Store, a string which is set
                                  to the platform-specific original transaction ID for the
                                  subscription.
@@ -684,6 +686,7 @@ def get_pro_payments():
                 apple_tx_id:             str   = row[9]  if row[9]  else ''
                 apple_web_line_order_id: str   = row[10] if row[10] else ''
                 google_payment_token:    str   = row[11] if row[11] else ''
+                google_order_id:         str   = row[12] if row[12] else ''
 
                 # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                 # confidential until the user actually registers the token themselves which they
@@ -705,6 +708,7 @@ def get_pro_payments():
                             'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
                             'refunded_unix_ts_ms':     refunded_unix_ts_ms,
                             'google_payment_token':    google_payment_token,
+                            'google_order_id':         google_order_id,
                         })
                     elif payment_provider == base.PaymentProvider.iOSAppStore:
                         items.append({
