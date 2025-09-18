@@ -35,10 +35,10 @@ def test_backend_same_user_stacks_subscription():
     assert db.sql_conn
 
     # Setup scenarios, single user who stacks a subscription
-    backend_key:        nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
-    master_key:         nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
-    rotating_key:       nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
-    redeemed_unix_ts_s: int                     = base.round_unix_ts_to_next_day(int(time.time()))
+    backend_key:         nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
+    master_key:          nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
+    rotating_key:        nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
+    redeemed_unix_ts_ms: int                     = base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
     class Scenario:
         google_payment_token:    str                          = ''
         subscription_duration_s: int                          = 0
@@ -72,10 +72,10 @@ def test_backend_same_user_stacks_subscription():
         assert len(unredeemed_payment_list)                       == 1
         assert unredeemed_payment_list[0].status                  == backend.PaymentStatus.Unredeemed
         assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
-        assert unredeemed_payment_list[0].redeemed_unix_ts_s      == None
-        assert unredeemed_payment_list[0].activated_unix_ts_s     == None
-        assert unredeemed_payment_list[0].expired_unix_ts_s       == None
-        assert unredeemed_payment_list[0].refunded_unix_ts_s      == None
+        assert unredeemed_payment_list[0].redeemed_unix_ts_ms     == None
+        assert unredeemed_payment_list[0].activated_unix_ts_ms    == None
+        assert unredeemed_payment_list[0].expired_unix_ts_ms      == None
+        assert unredeemed_payment_list[0].refunded_unix_ts_ms     == None
         assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
 
@@ -93,7 +93,7 @@ def test_backend_same_user_stacks_subscription():
         it.proof = backend.add_pro_payment(version            = version,
                                            sql_conn           = db.sql_conn,
                                            signing_key        = backend_key,
-                                           redeemed_unix_ts_s = redeemed_unix_ts_s,
+                                           redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                            master_pkey        = master_key.verify_key,
                                            rotating_pkey      = rotating_key.verify_key,
                                            payment_tx         = add_pro_payment_tx,
@@ -112,17 +112,17 @@ def test_backend_same_user_stacks_subscription():
     assert len(user_list)                          == 1
     assert user_list[0].master_pkey                == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                  == runtime.gen_index - 1
-    assert user_list[0].expiry_unix_ts_s           == redeemed_unix_ts_s + scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY
+    assert user_list[0].expiry_unix_ts_ms          == redeemed_unix_ts_ms + ((scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY) *  1000)
 
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
-    assert payment_list[0].redeemed_unix_ts_s              == redeemed_unix_ts_s
-    assert payment_list[0].activated_unix_ts_s             == redeemed_unix_ts_s
-    assert payment_list[0].expired_unix_ts_s               is None
-    assert payment_list[0].refunded_unix_ts_s              is None
+    assert payment_list[0].redeemed_unix_ts_ms              == redeemed_unix_ts_ms
+    assert payment_list[0].activated_unix_ts_ms             == redeemed_unix_ts_ms
+    assert payment_list[0].expired_unix_ts_ms               is None
+    assert payment_list[0].refunded_unix_ts_ms              is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -131,10 +131,10 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
-    assert payment_list[1].redeemed_unix_ts_s              == redeemed_unix_ts_s
-    assert payment_list[1].activated_unix_ts_s             == None
-    assert payment_list[1].expired_unix_ts_s               is None
-    assert payment_list[1].refunded_unix_ts_s              is None
+    assert payment_list[1].redeemed_unix_ts_ms              == redeemed_unix_ts_ms
+    assert payment_list[1].activated_unix_ts_ms             == None
+    assert payment_list[1].expired_unix_ts_ms               is None
+    assert payment_list[1].refunded_unix_ts_ms              is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -143,13 +143,13 @@ def test_backend_same_user_stacks_subscription():
     revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.sql_conn)
     assert len(revocation_list)                            == 1
     assert revocation_list[0].gen_index                    == 0
-    assert revocation_list[0].expiry_unix_ts_s             == redeemed_unix_ts_s + scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY
+    assert revocation_list[0].expiry_unix_ts_ms             == redeemed_unix_ts_ms + ((scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY) * 1000)
 
-    assert isinstance(payment_list[0].activated_unix_ts_s, int)
+    assert isinstance(payment_list[0].activated_unix_ts_ms, int)
 
-    expire_unix_ts_s: int                  = base.round_unix_ts_to_next_day(payment_list[0].activated_unix_ts_s + payment_list[0].subscription_duration_s + 1)
-    expire_result:    backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
-                                                                                           unix_ts_s=expire_unix_ts_s)
+    expire_unix_ts_ms: int                  = base.round_unix_ts_ms_to_next_day(payment_list[0].activated_unix_ts_ms + ((payment_list[0].subscription_duration_s + 1) * 1000))
+    expire_result:     backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
+                                                                                           unix_ts_ms=expire_unix_ts_ms)
     assert expire_result.already_done_by_someone_else == False
     assert expire_result.success                      == True
     assert expire_result.payments                     == 1
@@ -196,17 +196,17 @@ def test_server_add_payment_flow():
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
     first_gen_index_hash:   bytes = b''
-    first_expiry_unix_ts_s: int = 0
+    first_expiry_unix_ts_ms: int = 0
     if 1: # Grab the pro status before anything has happened
         version:      int   = 0
-        unix_ts_s:    int   = int(time.time())
+        unix_ts_ms:   int   = int(time.time() * 1000)
         history:      bool  = True
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
 
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_s':   unix_ts_s,
+                      'unix_ts_ms':   unix_ts_ms,
                       'history':     history}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
@@ -287,7 +287,7 @@ def test_server_add_payment_flow():
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
@@ -304,26 +304,26 @@ def test_server_add_payment_flow():
         proof_hash: bytes = backend.build_proof_hash(result_version,
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
-                                                     result_expiry_unix_ts_s)
+                                                     result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         first_gen_index_hash   = result_gen_index_hash
-        first_expiry_unix_ts_s = result_expiry_unix_ts_s
+        first_expiry_unix_ts_ms = result_expiry_unix_ts_ms
 
     if 1: # Authorise a new rotated key for the pro subscription
         new_rotating_key    = nacl.signing.SigningKey.generate()
         version             = 0
-        unix_ts_s           = int(time.time())
+        unix_ts_ms          = int(time.time() * 1000)
         hash_to_sign: bytes = backend.make_get_pro_proof_hash(version=version,
                                                               master_pkey=master_key.verify_key,
                                                               rotating_pkey=new_rotating_key.verify_key,
-                                                              unix_ts_s=unix_ts_s)
+                                                              unix_ts_ms=unix_ts_ms)
 
         request_body = {
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
-            'unix_ts_s':     unix_ts_s,
+            'unix_ts_ms':     unix_ts_ms,
             'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
             'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
         }
@@ -354,7 +354,7 @@ def test_server_add_payment_flow():
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
@@ -371,7 +371,7 @@ def test_server_add_payment_flow():
         proof_hash = backend.build_proof_hash(result_version,
                                               result_gen_index_hash,
                                               result_rotating_pkey,
-                                              result_expiry_unix_ts_s)
+                                              result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     if 1: # Register another payment on the same user, this will revoke the old proof
@@ -431,7 +431,7 @@ def test_server_add_payment_flow():
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_s:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_s', err=err)
+        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
@@ -448,7 +448,7 @@ def test_server_add_payment_flow():
         proof_hash: bytes = backend.build_proof_hash(result_version,
                                                         result_gen_index_hash,
                                                         result_rotating_pkey,
-                                                        result_expiry_unix_ts_s)
+                                                        result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0
@@ -490,10 +490,10 @@ def test_server_add_payment_flow():
         assert len(result_items) == 1
         for it in result_items:
             it: dict[str, int | str]
-            assert 'expiry_unix_ts_s' in it and isinstance(it['expiry_unix_ts_s'], int)
+            assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
             assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
             assert it['gen_index_hash']   == first_gen_index_hash.hex()
-            assert it['expiry_unix_ts_s'] == first_expiry_unix_ts_s
+            assert it['expiry_unix_ts_ms'] == first_expiry_unix_ts_ms
 
     # Try grabbing the revocation again with the current ticket (we should get
     # an empty list because we passed in the most up to date ticket)
@@ -536,14 +536,14 @@ def test_server_add_payment_flow():
     # Get the pro status now w/ a bunch of payments
     if 1:
         version:      int   = 0
-        unix_ts_s:    int   = int(time.time())
+        unix_ts_ms:   int   = int(time.time() * 1000)
         history:      bool  = True
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
 
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_s':   unix_ts_s,
+                      'unix_ts_ms':   unix_ts_ms,
                       'history':     history}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
@@ -578,15 +578,15 @@ def test_server_add_payment_flow():
 
         # Retry the request but use a too old timestamp
         if 1:
-            unix_ts_s:    int   = int(time.time() + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S * 2))
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+            unix_ts_ms:   int   = int((time.time() * 1000) + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS * 2))
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_s':   unix_ts_s,
+                                                                    'unix_ts_ms':   unix_ts_ms,
                                                                     'history':     history})
 
             # POST and get response
@@ -605,16 +605,16 @@ def test_server_add_payment_flow():
 
         # Retry the request but create a hash with the rotating key
         if 1:
-            unix_ts_s:    int   = int(time.time())
-            history:      bool  = True
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+            unix_ts_ms:    int   = int(time.time() * 1000)
+            history:       bool  = True
+            hash_to_sign:  bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_s':   unix_ts_s,
+                                                                    'unix_ts_ms':   unix_ts_ms,
                                                                     'history':     history})
 
             # POST and get response
@@ -633,16 +633,16 @@ def test_server_add_payment_flow():
 
         # Retry the request but with no history
         if 1:
-            unix_ts_s:    int   = int(time.time())
+            unix_ts_ms:    int  = int(time.time() * 1000)
             history:      bool  = False
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_s':   unix_ts_s,
+                                                                    'unix_ts_ms':   unix_ts_ms,
                                                                     'history':     history})
 
             # POST and get response

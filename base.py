@@ -17,9 +17,10 @@ class PaymentProvider(enum.Enum):
     GooglePlayStore = 1
     iOSAppStore     = 2
 
-SECONDS_IN_DAY:                 int  = 60 * 60 * 24
-DEV_BACKEND_MODE:               bool = False
-DEV_BACKEND_DETERMINISTIC_SKEY       = bytes([0xCD] * 32)
+SECONDS_IN_DAY:      int       = 60 * 60 * 24
+MILLISECONDS_IN_DAY: int       = 60 * 60 * 24 * 1000
+DEV_BACKEND_MODE:    bool      = False
+DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 
 @dataclasses.dataclass
 class ErrorSink:
@@ -153,9 +154,9 @@ def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
                             content.append(str(value))
                         elif isinstance(value, bytes):
                             content.append(value.hex())
-                        elif col.endswith('unix_ts_s'):
+                        elif col.endswith('unix_ts_ms'):
                             timestamp = int(value)
-                            date_str  = datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+                            date_str  = datetime.datetime.fromtimestamp(timestamp/1000).strftime('%Y-%m-%d')
                             content.append(f'{timestamp} ({date_str})')
                         elif col.endswith('_s'):
                             seconds = int(value)
@@ -180,8 +181,8 @@ def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
         print(f'Table: {it.name}')
         print_unicode_table(it.contents)
 
-def round_unix_ts_to_next_day(unix_ts_s: int) -> int:
-    result: int = (unix_ts_s + (SECONDS_IN_DAY - 1)) // SECONDS_IN_DAY * SECONDS_IN_DAY
+def round_unix_ts_ms_to_next_day(unix_ts_ms: int) -> int:
+    result: int = (unix_ts_ms + (MILLISECONDS_IN_DAY - 1)) // MILLISECONDS_IN_DAY * MILLISECONDS_IN_DAY
     return result
 
 def format_bytes(size: int):

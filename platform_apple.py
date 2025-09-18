@@ -246,8 +246,8 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
     #   https://developer.apple.com/forums/thread/719657?answerId=735817022#735817022
     #   https://developer.apple.com/forums/thread/735297?answerId=761269022#761269022
 
-    err            = base.ErrorSink()
-    unix_ts_s: int = int(time.time())
+    err             = base.ErrorSink()
+    unix_ts_ms: int = int(time.time() * 1000)
     if body.notificationType == AppleNotificationV2.SUBSCRIBED       or \
        body.notificationType == AppleNotificationV2.DID_RENEW        or \
        body.notificationType == AppleNotificationV2.ONE_TIME_CHARGE:
@@ -404,7 +404,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         backend.refund_apple_payment(sql_conn=sql_conn,
                                                      apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                      apple_original_tx_id=tx.originalTransactionId,
-                                                     refund_unix_ts_s=unix_ts_s)
+                                                     refund_unix_ts_ms=unix_ts_ms)
 
                         # NOTE: Submit/upgrade the payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
@@ -486,7 +486,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                         backend.refund_apple_payment(sql_conn                   = sql_conn,
                                                      apple_web_line_order_tx_id = tx.webOrderLineItemId,
                                                      apple_original_tx_id       = tx.originalTransactionId,
-                                                     refund_unix_ts_s           = unix_ts_s)
+                                                     refund_unix_ts_ms          = unix_ts_ms)
 
                         # TODO: Submit the "new" payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
@@ -540,7 +540,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     backend.refund_apple_payment(sql_conn=sql_conn,
                                                  apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                  apple_original_tx_id=tx.originalTransactionId,
-                                                 refund_unix_ts_s=unix_ts_s)
+                                                 refund_unix_ts_ms=unix_ts_ms)
 
     elif body.notificationType == AppleNotificationV2.REFUND_REVERSED:
         # A notification type that indicates the App Store reversed a previously granted refund due
