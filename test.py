@@ -58,9 +58,10 @@ def test_backend_same_user_stacks_subscription():
         # Add the "unredeemed" version of the payment, e.g. mock the notification from
         # IOS App Store/Google Play Store
         assert it.payment_provider == base.PaymentProvider.GooglePlayStore, "Currently only google is mocked"
-        payment_tx                      = backend.PaymentProviderTransaction()
-        payment_tx.provider             = it.payment_provider
-        payment_tx.google_payment_token = it.google_payment_token
+        payment_tx                                = backend.PaymentProviderTransaction()
+        payment_tx.provider                       = it.payment_provider
+        payment_tx.google_payment_token           = it.google_payment_token
+        payment_tx.google_notification_unix_ts_ms = int(time.time() * 1000)
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                        payment_tx=payment_tx,
                                        subscription_duration_s=it.subscription_duration_s,
@@ -182,11 +183,12 @@ def test_server_add_payment_flow():
                                                    server_x25519_pkey=server_x25519_skey.public_key)
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
-    master_key                      = nacl.signing.SigningKey.generate()
-    rotating_key                    = nacl.signing.SigningKey.generate()
-    payment_tx                      = backend.PaymentProviderTransaction()
-    payment_tx.provider             = base.PaymentProvider.GooglePlayStore
-    payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
+    master_key                                = nacl.signing.SigningKey.generate()
+    rotating_key                              = nacl.signing.SigningKey.generate()
+    payment_tx                                = backend.PaymentProviderTransaction()
+    payment_tx.provider                       = base.PaymentProvider.GooglePlayStore
+    payment_tx.google_payment_token           = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
+    payment_tx.google_notification_unix_ts_ms = int(time.time() * 1000)
     backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                     payment_tx=payment_tx,
                                     subscription_duration_s=30 * base.SECONDS_IN_DAY,
@@ -373,10 +375,11 @@ def test_server_add_payment_flow():
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     if 1: # Register another payment on the same user, this will revoke the old proof
-        version: int                        = 0
-        new_payment_tx                      = backend.PaymentProviderTransaction()
-        new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
-        new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
+        version: int                                  = 0
+        new_payment_tx                                = backend.PaymentProviderTransaction()
+        new_payment_tx.provider                       = base.PaymentProvider.GooglePlayStore
+        new_payment_tx.google_payment_token           = os.urandom(len(payment_tx.google_payment_token)).hex()
+        new_payment_tx.google_notification_unix_ts_ms = int(time.time() * 1000)
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                         payment_tx=new_payment_tx,
                                         subscription_duration_s=30 * base.SECONDS_IN_DAY,

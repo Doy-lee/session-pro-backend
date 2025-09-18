@@ -74,13 +74,24 @@ SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
   # remaining subscription durations forward, this correctly accounts for that user's
   # remaining entitlement by knowing the starting timestamp to sum the subscription
   # durations to.
-  SQLField('activated_unix_ts_s',        'INTEGER'),
-  SQLField('expired_unix_ts_s',          'INTEGER'),
-  SQLField('refunded_unix_ts_s',         'INTEGER'),
-  SQLField('apple_original_tx_id',       'BLOB'),
-  SQLField('apple_tx_id',                'BLOB'),
-  SQLField('apple_web_line_order_tx_id', 'BLOB'),
-  SQLField('google_payment_token',       'BLOB'),
+  SQLField('activated_unix_ts_s',            'INTEGER'),
+  SQLField('expired_unix_ts_s',              'INTEGER'),
+  SQLField('refunded_unix_ts_s',             'INTEGER'),
+  SQLField('apple_original_tx_id',           'BLOB'),
+  SQLField('apple_tx_id',                    'BLOB'),
+  SQLField('apple_web_line_order_tx_id',     'BLOB'),
+
+  # Purchase token associated with a user that is shared across all payments for a given
+  # subscription. Google recommends this be the primary key for the user's subscription entitlement.
+  # So we cannot dedupe payments by this token because in subsequent billing cycles, the same token
+  # is returned.
+  #
+  # In order to support subsequent payments we also take in the timestamp in milliseconds that the
+  # event was associated with. Before adding this payment to the DB it's the caller's responsibility
+  # to have independently re-verified the token using Google APIs provided to assert the token was
+  # valid.
+  SQLField('google_payment_token',           'BLOB'),
+  SQLField('google_notification_unix_ts_ms', 'INTEGER'),
 ]
 
 SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes,      # master_pkey
@@ -94,29 +105,24 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes,      # master
                                                             str | None, # apple_original_tx_id
                                                             str | None, # apple_tx_id
                                                             str | None, # apple_web_line_order_tx_id
-                                                            str | None] # google_payment_token
-
-SQLTableUnredeemedPaymentRowTuple: typing.TypeAlias = tuple[int,        # id
-                                                            int,        # subscription_duration_s
-                                                            int,        # payment_provider
-                                                            str | None, # apple original_tx_id
-                                                            str | None, # apple tx_id
-                                                            str | None, # apple web_line_order_tx_id
-                                                            str | None] # google_payment_token
+                                                            str | None, # google_payment_token
+                                                            int | None] # google_notification_unix_ts_ms
 
 @dataclasses.dataclass
 class PaymentProviderTransaction:
-    provider:                   base.PaymentProvider = base.PaymentProvider.Nil
-    apple_original_tx_id:       str = ''
-    apple_tx_id:                str = ''
-    apple_web_line_order_tx_id: str = ''
-    google_payment_token:       str = ''
+    provider:                       base.PaymentProvider = base.PaymentProvider.Nil
+    apple_original_tx_id:           str = ''
+    apple_tx_id:                    str = ''
+    apple_web_line_order_tx_id:     str = ''
+    google_payment_token:           str = ''
+    google_notification_unix_ts_ms: int = 0
 
 @dataclasses.dataclass
 class AddProPaymentUserTransaction:
     provider:             base.PaymentProvider = base.PaymentProvider.Nil
     apple_tx_id:          str                  = ''
     google_payment_token: str                  = ''
+    # TODO: Do we also need to make the user pass in the google_notification_unix_ts_ms themselves?
 
 @dataclasses.dataclass
 class AppleTransaction:
@@ -126,25 +132,27 @@ class AppleTransaction:
 
 @dataclasses.dataclass
 class UnredeemedPaymentRow:
-    id:                         int                  = 0
-    subscription_duration_s:    int                  = 0
-    payment_provider:           base.PaymentProvider = base.PaymentProvider.Nil
-    apple:                      AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
-    google_payment_token:       str                  = ''
+    id:                             int                  = 0
+    subscription_duration_s:        int                  = 0
+    payment_provider:               base.PaymentProvider = base.PaymentProvider.Nil
+    apple:                          AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
+    google_payment_token:           str                  = ''
+    google_notification_unix_ts_ms: int                  = 0
 
 @dataclasses.dataclass
 class PaymentRow:
-    id:                      int                  = 0
-    master_pkey:             bytes                = ZERO_BYTES32
-    status:                  PaymentStatus        = PaymentStatus.Nil
-    subscription_duration_s: int                  = 0
-    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
-    redeemed_unix_ts_s:      int | None           = None
-    activated_unix_ts_s:     int | None           = None
-    expired_unix_ts_s:       int | None           = None
-    refunded_unix_ts_s:      int | None           = None
-    apple:                   AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
-    google_payment_token:    str                  = ''
+    id:                             int                  = 0
+    master_pkey:                    bytes                = ZERO_BYTES32
+    status:                         PaymentStatus        = PaymentStatus.Nil
+    subscription_duration_s:        int                  = 0
+    payment_provider:               base.PaymentProvider = base.PaymentProvider.Nil
+    redeemed_unix_ts_s:             int | None           = None
+    activated_unix_ts_s:            int | None           = None
+    expired_unix_ts_s:              int | None           = None
+    refunded_unix_ts_s:             int | None           = None
+    apple:                          AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
+    google_payment_token:           str                  = ''
+    google_notification_unix_ts_ms: int                  = 0
 
 @dataclasses.dataclass
 class UserRow:
@@ -282,20 +290,21 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRo
 
         rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
         for row in rows:
-            item                            = PaymentRow()
-            item.id                         = row[0]
-            item.master_pkey                = row[1]
-            item.status                     = PaymentStatus(row[2])
-            item.subscription_duration_s    = row[3]
-            item.payment_provider           = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_s         = row[5]
-            item.activated_unix_ts_s        = row[6]
-            item.expired_unix_ts_s          = row[7]
-            item.refunded_unix_ts_s         = row[8]
-            item.apple.original_tx_id       = row[9]  if row[9]  else ''
-            item.apple.tx_id                = row[10] if row[10] else ''
-            item.apple.web_line_order_tx_id = row[11] if row[11] else ''
-            item.google_payment_token       = row[12] if row[12] else ''
+            item                                = PaymentRow()
+            item.id                             = row[0]
+            item.master_pkey                    = row[1]
+            item.status                         = PaymentStatus(row[2])
+            item.subscription_duration_s        = row[3]
+            item.payment_provider               = base.PaymentProvider(row[4])
+            item.redeemed_unix_ts_s             = row[5]
+            item.activated_unix_ts_s            = row[6]
+            item.expired_unix_ts_s              = row[7]
+            item.refunded_unix_ts_s             = row[8]
+            item.apple.original_tx_id           = row[9]  if row[9]  else ''
+            item.apple.tx_id                    = row[10] if row[10] else ''
+            item.apple.web_line_order_tx_id     = row[11] if row[11] else ''
+            item.google_payment_token           = row[12] if row[12] else ''
+            item.google_notification_unix_ts_ms = row[13] if row[13] else 0
             result.append(item)
     return result;
 
@@ -306,20 +315,21 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
         _    = tx.cursor.execute('SELECT * FROM payments')
         rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
         for row in rows:
-            item                            = PaymentRow()
-            item.id                         = row[0]
-            item.master_pkey                = row[1]
-            item.status                     = PaymentStatus(row[2])
-            item.subscription_duration_s    = row[3]
-            item.payment_provider           = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_s         = row[5]
-            item.activated_unix_ts_s        = row[6]
-            item.expired_unix_ts_s          = row[7]
-            item.refunded_unix_ts_s         = row[8]
-            item.apple.original_tx_id       = row[9]  if row[9]  else ''
-            item.apple.tx_id                = row[10] if row[10] else ''
-            item.apple.web_line_order_tx_id = row[11] if row[11] else ''
-            item.google_payment_token       = row[12] if row[12] else ''
+            item                                = PaymentRow()
+            item.id                             = row[0]
+            item.master_pkey                    = row[1]
+            item.status                         = PaymentStatus(row[2])
+            item.subscription_duration_s        = row[3]
+            item.payment_provider               = base.PaymentProvider(row[4])
+            item.redeemed_unix_ts_s             = row[5]
+            item.activated_unix_ts_s            = row[6]
+            item.expired_unix_ts_s              = row[7]
+            item.refunded_unix_ts_s             = row[8]
+            item.apple.original_tx_id           = row[9]  if row[9]  else ''
+            item.apple.tx_id                    = row[10] if row[10] else ''
+            item.apple.web_line_order_tx_id     = row[11] if row[11] else ''
+            item.google_payment_token           = row[12] if row[12] else ''
+            item.google_notification_unix_ts_ms = row[13] if row[13] else 0
             result.append(item)
     return result;
 
@@ -772,8 +782,20 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
                            subscription_duration_s: int,
                            err:                     base.ErrorSink):
     base.verify_payment_provider(payment_tx.provider, err)
-    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        verify_google_payment_token_hash(payment_tx.google_payment_token, err)
+    match payment_tx.provider:
+        case base.PaymentProvider.GooglePlayStore:
+            verify_google_payment_token_hash(payment_tx.google_payment_token, err)
+            if payment_tx.google_notification_unix_ts_ms == 0:
+                err.msg_list.append(f'Google notification unix timestamp was 0')
+            if len(payment_tx.google_payment_token) == 0:
+                err.msg_list.append(f'Google payment token was not set')
+        case base.PaymentProvider.iOSAppStore:
+            if len(payment_tx.apple_tx_id) == 0:
+                err.msg_list.append(f'Apple TX ID was not set')
+            if len(payment_tx.apple_original_tx_id) == 0:
+                err.msg_list.append(f'Apple original TX ID was not set')
+        case base.PaymentProvider.Nil:
+            err.msg_list.append(f'Payment provider was set invalidly to nil')
 
     if len(err.msg_list) > 0:
         return
@@ -781,13 +803,16 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist somewhere
-            # else.
+            # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
+            # payments table
+
             _ = tx.cursor.execute(f'''
                 SELECT 1
                 FROM payments
-                WHERE payment_provider = ? AND google_payment_token = ?
-            ''', (int(payment_tx.provider.value), payment_tx.google_payment_token))
+                WHERE payment_provider = ? AND google_payment_token = ? AND google_notification_unix_ts_ms = ?
+            ''', (int(payment_tx.provider.value),
+                  payment_tx.google_payment_token,
+                  payment_tx.google_notification_unix_ts_ms))
 
             record = tx.cursor.fetchone()
             if not record:
