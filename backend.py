@@ -13,7 +13,6 @@ import base
 
 ZERO_BYTES32                 = bytes(32)
 BLAKE2B_DIGEST_SIZE          = 32
-ALL_PAYMENTS_PAGINATION_SIZE = 1000
 
 class PaymentStatus(enum.Enum):
     Nil        = 0
@@ -324,25 +323,15 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
             result.append(item)
     return result;
 
-def get_payments_count(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> int:
-    result: int = 0
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _ = tx.cursor.execute('''
-            SELECT COUNT(*) FROM (SELECT id FROM payments WHERE master_pkey = ?)
-        ''', (bytes(master_pkey),))
-        result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
-    return result;
-
-def get_payments_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, offset: int) -> collections.abc.Iterator[SQLTablePaymentRowTuple]:
+def get_payments_iterator(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> collections.abc.Iterator[SQLTablePaymentRowTuple]:
     assert tx.cursor is not None
     select_fields = string_from_sql_fields(fields=SQL_TABLE_PAYMENTS_FIELD, schema=False)
     _ = tx.cursor.execute(f'''
-        SELECT {select_fields}
-        FROM   payments
-        WHERE  master_pkey = ?
-        LIMIT  {ALL_PAYMENTS_PAGINATION_SIZE} OFFSET ?
-    ''', (bytes(master_pkey), offset))
+        SELECT   {select_fields}
+        FROM     payments
+        WHERE    master_pkey = ?
+        ORDER BY redeemed_unix_ts_s DESC
+    ''', (bytes(master_pkey),))
     result = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
     return result;
 
@@ -801,7 +790,7 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
             ''', (int(payment_tx.provider.value), payment_tx.google_payment_token))
 
             record = tx.cursor.fetchone()
-            if record:
+            if not record:
                 fields      = ['subscription_duration_s', 'payment_provider', 'google_payment_token', 'status']
                 stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
@@ -828,7 +817,7 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
             ''', (int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
 
             record = tx.cursor.fetchone()
-            if record:
+            if not record:
                 fields:      list[str] = ['subscription_duration_s', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id']
                 stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'

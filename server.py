@@ -224,7 +224,7 @@ API
         "status": 0
       }
 
-  /get_pro_payments
+  /get_pro_status
     Description
       Retrieve the list of current and historical payments associated with the Session Pro master
       public key. The returned list is in descending order from the date that the payment was
@@ -239,39 +239,52 @@ API
 
         hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_s || page)
 
+      TODO: In future we plan to prune payment history after some legally required threshold such as
+      a year.
+
     Request
       version:     1 byte, current version of the request which should be 0
       master_pkey: 32 byte Ed25519 public key derived deterministic from the Session Account seed in
-                   hex to get payments for
+                   hex to get pro status for
       master_sig:  64 byte signature over the hash of the contents of the request proving that the
                    user knows the secret component to the `master_pkey` and hence the caller is
-                   authorised to get payments for this key.
-      unix_ts_s:   8 byte unix timestamp of the current time
-      page:        4 byte integer for which page of results to get payments for. Initially this
-                   should be set to 0, the response will indciate how many pages there are.
+                   authorised to get pro status for this key.
+      unix_ts_s:   8 byte unix timestamp of the current time.
+      history:     1 byte bool that when set to true enables retrieval of payment history which is
+                   populated into the `items` of the response.
 
     Response
-      pages:    4 byte integer indicating the total number of pages starting from 0
-      payments: 4 byte integer indicating the total number of payments associated with the
-                `master_pkey`
+      status:   1 byte integer describing the current Session Pro entitlement of the associated key
+                with the following mapping:
+                  0 => Never Been Pro
+                       User has never purchased/redeemed a Session Pro payment for the associated
+                       master public key. Accordingly, the items array will be empty.
+                  1 => Active
+                       User has a Session Pro payment that is actively being consumed for
+                       entitlement to Session Pro features.
+                  2 => Expired
+                       User had Session Pro payment(s) that were fully consumed previously and
+                       currently don't have an active payment and hence entitlement to Session Pro
+                       features.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                  1 byte integer describing the status of the consumption of the
                                  payment for Session Pro with the following mapping:
                                    2 => Redeemed
-                                     Payment was recognised by the backend and is in queue to be
-                                     activated for Session Pro entitlement. Most users payments
-                                     immediately transition from redeemed to activated as they
-                                     should generally only have 1 active payment at a time.
+                                        Payment was recognised by the backend and is in queue to be
+                                        activated for Session Pro entitlement. Most users payments
+                                        immediately transition from redeemed to activated as they
+                                        should generally only have 1 active payment at a time.
                                    3 => Activated
-                                     Payment was activated and the subscription duration is actively
-                                     being consumed to provide a user Session Pro entitlement.
+                                        Payment was activated and the subscription duration is
+                                        actively being consumed to provide a user Session Pro
+                                        entitlement.
                                    4 => Expired
-                                     Session Pro entitlement has expired and is no longer being
-                                     provided for this payment
+                                        Session Pro entitlement has expired and is no longer being
+                                        provided for this payment
                                    5 => Refunded
-                                     User has successfully refunded the payment and Session Pro
-                                     entitlement is no longer available
+                                        User has successfully refunded the payment and Session Pro
+                                        entitlement is no longer available
         subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
                                  seconds.
         payment_provider:        1 byte integer representing the platform that the payment to be
@@ -346,6 +359,7 @@ import collections.abc
 import hashlib
 import json
 import dataclasses
+import enum
 
 import base
 import backend
@@ -356,6 +370,11 @@ class GetJSONFromFlaskRequest:
     json:    dict[str, base.JSONValue] = dataclasses.field(default_factory=dict)
     err_msg: str                       = ''
 
+class UserProStatus(enum.Enum):
+    NeverBeenPro = 0
+    Active       = 1
+    Expired      = 2
+
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
 CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
@@ -365,7 +384,7 @@ CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 ROUTE_ADD_PRO_PAYMENT     = '/add_pro_payment'
 ROUTE_GET_PRO_PROOF       = '/get_pro_proof'
 ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
-ROUTE_GET_PRO_PAYMENTS    = '/get_pro_payments'
+ROUTE_GET_PRO_STATUS      = '/get_pro_status'
 
 RESPONSE_SUCCESS          = 0
 
@@ -400,12 +419,12 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
 
     return result
 
-def make_get_all_payments_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_s: int, page: int) -> bytes:
+def make_get_all_payments_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_s: int, history: bool) -> bytes:
     hasher: hashlib.blake2b = backend.make_blake2b_hasher()
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(unix_ts_s.to_bytes(length=8, byteorder='little'))
-    hasher.update(page.to_bytes(length=4, byteorder='little'))
+    hasher.update(history.to_bytes(length=1, byteorder='little'))
     result: bytes = hasher.digest()
     return result
 
@@ -594,7 +613,7 @@ def get_pro_revocations():
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result
 
-@flask_blueprint.route(ROUTE_GET_PRO_PAYMENTS, methods=['POST'])
+@flask_blueprint.route(ROUTE_GET_PRO_STATUS, methods=['POST'])
 def get_pro_payments():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -602,20 +621,20 @@ def get_pro_payments():
         return make_error_response(status=1, errors=[get.err_msg])
 
     # Extract values from JSON
-    err              = base.ErrorSink()
-    version:     int = base.json_dict_require_int(d=get.json, key='version',     err=err)
-    master_pkey: str = base.json_dict_require_str(d=get.json, key='master_pkey', err=err)
-    master_sig:  str = base.json_dict_require_str(d=get.json, key='master_sig',  err=err)
-    unix_ts_s:   int = base.json_dict_require_int(d=get.json, key='unix_ts_s',   err=err)
-    page:        int = base.json_dict_require_int(d=get.json, key='page',        err=err)
+    err               = base.ErrorSink()
+    version:     int  = base.json_dict_require_int(d=get.json,  key='version',     err=err)
+    master_pkey: str  = base.json_dict_require_str(d=get.json,  key='master_pkey', err=err)
+    master_sig:  str  = base.json_dict_require_str(d=get.json,  key='master_sig',  err=err)
+    unix_ts_s:   int  = base.json_dict_require_int(d=get.json,  key='unix_ts_s',   err=err)
+    history:     bool = base.json_dict_require_bool(d=get.json, key='history',     err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-    master_pkey_bytes = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
-    master_sig_bytes  = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+    master_pkey_bytes = base.hex_to_bytes(hex=master_pkey, label='Master public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    master_sig_bytes  = base.hex_to_bytes(hex=master_sig,  label='Master key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
 
     # Validate timestamp
     # TODO: We _could_ track the last GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S seconds worth of
@@ -630,24 +649,30 @@ def get_pro_payments():
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
-    hash_to_verify: bytes = make_get_all_payments_hash(version=version, master_pkey=master_pkey_nacl, unix_ts_s=unix_ts_s, page=page)
+    hash_to_verify: bytes = make_get_all_payments_hash(version=version, master_pkey=master_pkey_nacl, unix_ts_s=unix_ts_s, history=history)
     try:
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception as e:
         err.msg_list.append('Signature failed to be verified')
         return make_error_response(status=1, errors=err.msg_list)
 
-    total_payments: int                        = 0
-    total_pages:    int                        = 0
-    items:          list[dict[str, str | int]] = []
+    items:           list[dict[str, str | int]] = []
+    user_pro_status: UserProStatus              = UserProStatus.NeverBeenPro
     with open_db_from_flask_request_context(flask.current_app) as db:
-        total_payments = backend.get_payments_count(db.sql_conn, master_pkey=master_pkey_nacl)
-        total_pages    = int(total_payments / backend.ALL_PAYMENTS_PAGINATION_SIZE)
-        offset         = page * backend.ALL_PAYMENTS_PAGINATION_SIZE
         with base.SQLTransaction(db.sql_conn) as tx:
             list_it: collections.abc.Iterator[backend.SQLTablePaymentRowTuple] = \
-                    backend.get_payments_iterator(tx=tx, master_pkey=master_pkey_nacl, offset=offset)
+                    backend.get_payments_iterator(tx=tx, master_pkey=master_pkey_nacl)
+
+            has_payments = False
             for row in list_it:
+                # NOTE: If the user has at-least one payment, we mark them as being expired
+                # initially and every payment we come across, if they have an active payment (of
+                # which there should only be 1 activated payment at a time) in their current
+                # history, we report them as active.
+                if not has_payments:
+                    user_pro_status = UserProStatus.Expired
+                    has_payments    = True
+
                 status                         = backend.PaymentStatus(row[1])
                 subscription_duration_s: int   = row[2]
                 payment_provider               = base.PaymentProvider(row[3])
@@ -668,30 +693,46 @@ def get_pro_payments():
                 if status == backend.PaymentStatus.Unredeemed:
                     continue
 
-                if payment_provider == base.PaymentProvider.GooglePlayStore:
-                    items.append({
-                        'status':                  int(status.value),
-                        'subscription_duration_s': subscription_duration_s,
-                        'payment_provider':        int(payment_provider.value),
-                        'activated_unix_ts_s':     activated_unix_ts_s,
-                        'expired_unix_ts_s':       expired_unix_ts_s,
-                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
-                        'refunded_unix_ts_s':      refunded_unix_ts_s,
-                        'google_payment_token':    google_payment_token,
-                    })
-                elif payment_provider == base.PaymentProvider.iOSAppStore:
-                    items.append({
-                        'status':                  int(status.value),
-                        'subscription_duration_s': subscription_duration_s,
-                        'payment_provider':        int(payment_provider.value),
-                        'activated_unix_ts_s':     activated_unix_ts_s,
-                        'expired_unix_ts_s':       expired_unix_ts_s,
-                        'redeemed_unix_ts_s':      redeemed_unix_ts_s,
-                        'refunded_unix_ts_s':      refunded_unix_ts_s,
-                        'apple_original_tx_id':    apple_original_tx_id,
-                        'apple_tx_id':             apple_tx_id,
-                        'apple_web_line_order_id': apple_web_line_order_id,
-                    })
+                # NOTE: Collect the payment if history was requested
+                if history:
+                    if payment_provider == base.PaymentProvider.GooglePlayStore:
+                        items.append({
+                            'status':                  int(status.value),
+                            'subscription_duration_s': subscription_duration_s,
+                            'payment_provider':        int(payment_provider.value),
+                            'activated_unix_ts_s':     activated_unix_ts_s,
+                            'expired_unix_ts_s':       expired_unix_ts_s,
+                            'redeemed_unix_ts_s':      redeemed_unix_ts_s,
+                            'refunded_unix_ts_s':      refunded_unix_ts_s,
+                            'google_payment_token':    google_payment_token,
+                        })
+                    elif payment_provider == base.PaymentProvider.iOSAppStore:
+                        items.append({
+                            'status':                  int(status.value),
+                            'subscription_duration_s': subscription_duration_s,
+                            'payment_provider':        int(payment_provider.value),
+                            'activated_unix_ts_s':     activated_unix_ts_s,
+                            'expired_unix_ts_s':       expired_unix_ts_s,
+                            'redeemed_unix_ts_s':      redeemed_unix_ts_s,
+                            'refunded_unix_ts_s':      refunded_unix_ts_s,
+                            'apple_original_tx_id':    apple_original_tx_id,
+                            'apple_tx_id':             apple_tx_id,
+                            'apple_web_line_order_id': apple_web_line_order_id,
+                        })
 
-    result = make_success_response(dict_result={'version': 0, 'pages': total_pages, 'payments': total_payments, 'items': items})
+                # NOTE: Determine pro status if it is a relevant
+                if status == backend.PaymentStatus.Activated:
+                    user_pro_status = UserProStatus.Active
+
+                # NOTE: If we determine that the user is active and the user didn't request for
+                # history, we can early terminate the loop as we've found what we wanted (their pro
+                # status).
+                if not history and user_pro_status == UserProStatus.Active:
+                    break
+
+    result = make_success_response(dict_result={
+        'version': 0,
+        'status':  int(user_pro_status.value),
+        'items':   items
+    })
     return result

@@ -246,7 +246,18 @@ def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         if isinstance(d[key], int):
             result = typing.cast(int, d[key])
         else:
-            err.msg_list.append(f'Key "{key}" value was not a integer: "{safe_get_dict_value_type(d, key)}"')
+            err.msg_list.append(f'Key "{key}" value was not an integer: "{safe_get_dict_value_type(d, key)}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+    return result
+
+def json_dict_require_bool(d: dict[str, JSONValue], key: str, err: ErrorSink) -> bool:
+    result = False
+    if key in d:
+        if isinstance(d[key], bool):
+            result = typing.cast(bool, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a bool: "{safe_get_dict_value_type(d, key)}"')
     else:
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
@@ -272,7 +283,6 @@ def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
     else:
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
-
 
 def json_dict_require_str_coerce_to_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
     result_str = json_dict_require_str(d, key, err)

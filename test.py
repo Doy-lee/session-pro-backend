@@ -195,6 +195,48 @@ def test_server_add_payment_flow():
 
     first_gen_index_hash:   bytes = b''
     first_expiry_unix_ts_s: int = 0
+    if 1: # Grab the pro status before anything has happened
+        version:      int   = 0
+        unix_ts_s:    int   = int(time.time())
+        history:      bool  = True
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
+
+        request_body={'version':     version,
+                      'master_pkey': bytes(master_key.verify_key).hex(),
+                      'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                      'unix_ts_s':   unix_ts_s,
+                      'history':     history}
+
+        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                  request_body=request_body)
+
+        # POST and get response
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON from the response
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+        # Parse status from response
+        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+
+        # Parse result object is at root
+        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        result_json = response_json['result']
+
+        # Extract the fields
+        result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+        result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
+        assert len(err.msg_list) == 0,                                       '{err.msg_list}'
+        assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 0,                                       f'Reponse was: {json.dumps(response_json, indent=2)}'
+
     if 1: # Simulate client request to register a payment
         version: int                            = 0
         add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
@@ -205,6 +247,7 @@ def test_server_add_payment_flow():
                                                                         master_pkey=master_key.verify_key,
                                                                         rotating_pkey=rotating_key.verify_key,
                                                                         payment_tx=add_pro_payment_tx)
+
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                shared_key=shared_key,
                                                endpoint=server.ROUTE_ADD_PRO_PAYMENT,
@@ -214,8 +257,10 @@ def test_server_add_payment_flow():
                                                    'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
                                                    'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
                                                    'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-                                                   'payment_provider':     add_pro_payment_tx.provider.value,
-                                                   'google_payment_token': add_pro_payment_tx.google_payment_token,
+                                                   'payment_tx': {
+                                                       'provider':             add_pro_payment_tx.provider.value,
+                                                       'google_payment_token': add_pro_payment_tx.google_payment_token,
+                                                   }
                                                })
 
         # POST and get response
@@ -351,8 +396,10 @@ def test_server_add_payment_flow():
             'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
             'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
             'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-            'payment_provider':     new_add_pro_payment_tx.provider.value,
-            'google_payment_token': new_add_pro_payment_tx.google_payment_token,
+            'payment_tx': {
+                'provider':             new_add_pro_payment_tx.provider.value,
+                'google_payment_token': new_add_pro_payment_tx.google_payment_token,
+            }
         }
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
@@ -483,22 +530,22 @@ def test_server_add_payment_flow():
         # will return an empty list
         assert len(result_items) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
-    # Try grabbing the payments list
+    # Get the pro status now w/ a bunch of payments
     if 1:
         version:      int   = 0
         unix_ts_s:    int   = int(time.time())
-        page:         int   = 0
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
+        history:      bool  = True
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
 
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                       'unix_ts_s':   unix_ts_s,
-                      'page':        page}
+                      'history':     history}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_PAYMENTS,
+                                                  endpoint=server.ROUTE_GET_PRO_STATUS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -519,27 +566,25 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version:  int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-        result_items:    list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
-        result_pages:    int                        = base.json_dict_require_int(d=result_json, key='pages',    err=err)
-        result_payments: int                        = base.json_dict_require_int(d=result_json, key='payments', err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert len(result_items)  == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+        result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
+        assert len(err.msg_list) == 0,                                 '{err.msg_list}'
+        assert result_status     == server.UserProStatus.Active.value, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 2,                                 f'Reponse was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but use a too old timestamp
         if 1:
             unix_ts_s:    int   = int(time.time() + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S * 2))
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                                                                     'unix_ts_s':   unix_ts_s,
-                                                                    'page':        page})
+                                                                    'history':     history})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -558,15 +603,16 @@ def test_server_add_payment_flow():
         # Retry the request but create a hash with the rotating key
         if 1:
             unix_ts_s:    int   = int(time.time())
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_s=unix_ts_s, page=page)
+            history:      bool  = True
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_s=unix_ts_s, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                                                                     'unix_ts_s':   unix_ts_s,
-                                                                    'page':        page})
+                                                                    'history':     history})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -582,19 +628,19 @@ def test_server_add_payment_flow():
             assert len(response_json['errors']) > 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
             assert 'result' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
-        # Retry the request but with a large page number
+        # Retry the request but with no history
         if 1:
             unix_ts_s:    int   = int(time.time())
-            page:         int   = 100
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, page=page)
+            history:      bool  = False
+            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_s=unix_ts_s, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_PAYMENTS,
+                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                                                                     'unix_ts_s':   unix_ts_s,
-                                                                    'page':        page})
+                                                                    'history':     history})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -604,24 +650,12 @@ def test_server_add_payment_flow():
             # Parse the JSON from the response
             response_json = json.loads(onion_response.body)
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-            # Parse status from response
-            assert response_json['status'] == 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
-
-            # Parse result object is at root
-            assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
             result_json = response_json['result']
 
-            # Extract the fields
-            result_version:  int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-            result_items:    list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
-            result_pages:    int                        = base.json_dict_require_int(d=result_json, key='pages',    err=err)
-            result_payments: int                        = base.json_dict_require_int(d=result_json, key='payments', err=err)
+            # Parse status from response
+            result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
-            assert result_pages      == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert result_payments   == 2, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(result_items)  == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert len(result_items) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
