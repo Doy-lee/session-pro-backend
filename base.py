@@ -323,3 +323,12 @@ def json_dict_optional_str(d: dict[str, JSONValue], key: str, err: ErrorSink) ->
         else:
             err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     return result
+
+def json_dict_optional_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> dict[str, JSONValue] | None:
+    result: dict[str, JSONValue] | None = None
+    if key in d:
+        if isinstance(d[key], dict):
+            result = typing.cast(dict[str, JSONValue], d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not an object: "{safe_get_dict_value_type(d, key)}"')
+    return result

@@ -5,13 +5,12 @@ import typing
 
 from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
-from google.protobuf.internal.well_known_types import Timestamp
 
 import base
 from base import json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
-    json_dict_optional_str
+    json_dict_optional_str, json_dict_optional_obj
 
 import env
 
@@ -43,7 +42,7 @@ def create_service():
     service = build('androidpublisher', 'v3', credentials=credentials)
     return service
 
-def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> SubscriptionV2Data:
+def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
     """
     Call the purchases.subscriptionsv2.get endpoint.
 
@@ -64,10 +63,6 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
         ).execute()
 
         if isinstance(response, dict):
-            has_paused_state_context = "PausedStateContext" in response
-            has_canceled_state_context = "canceledStateContext" in response
-            has_test_purchase = "testPurchase" in response
-
             # Delete known PII just in case something logs somewhere
             if "subscribeWithGoogleInfo" in response:
                 del response["subscribeWithGoogleInfo"]
@@ -76,104 +71,81 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
             if kind != "androidpublisher#subscriptionPurchaseV2":
                 err.msg_list.append(f'purchases.subscriptionsv2.get has incorrect kind: {kind}')
 
-            if err.has():
-                return result
-
             line_items_arr = json_dict_require_array(response, "lineItems", err)
-
-            line_items = []
             if len(line_items_arr) == 0:
                 err.msg_list.append(f'purchases.subscriptionsv2.get has no lineItems')
-            else:
-                for line_item in line_items_arr:
-                    if not isinstance(line_item, dict):
-                        err.msg_list.append(f'purchases.subscriptionsv2.get line_item not a dict: {safe_dump_arbitrary_value_or_type(line_item)}')
 
-                    product_id = json_dict_require_str(line_item, "productId", err)
-                    expiry_time = json_dict_require_google_timestamp(line_item, "expiryTime", err)
+            line_items = []
+            for line_item in line_items_arr:
+                if not isinstance(line_item, dict):
+                    err.msg_list.append(f'purchases.subscriptionsv2.get line_item not a dict: {safe_dump_arbitrary_value_or_type(line_item)}')
 
-                    if err.has():
-                        continue
+                product_id = json_dict_require_str(line_item, "productId", err)
+                expiry_time = json_dict_require_google_timestamp(line_item, "expiryTime", err)
+                offer_details_obj = json_dict_require_obj(line_item, "offerDetails", err)
 
-                    offer_details_obj = json_dict_require_obj(line_item, "offerDetails", err)
+                offer_details_offer_tags = json_dict_require_array(offer_details_obj, "offerTags", err)
+                offer_details_base_plan_id = json_dict_require_str(offer_details_obj, "basePlanId", err)
+                offer_details_offer_id = json_dict_optional_str(offer_details_obj, "offerId", err)
 
-                    if err.has():
-                        continue
+                offer_details = SubscriptionV2DataOfferDetails(
+                    offer_tags=offer_details_offer_tags,
+                    base_plan_id=offer_details_base_plan_id,
+                    offer_id=offer_details_offer_id,
+                ) if not err.has() else None
 
-                    offer_details_offer_tags = json_dict_require_array(offer_details_obj, "offerTags", err)
-                    offer_details_base_plan_id = json_dict_require_str(offer_details_obj, "basePlanId", err)
-                    offer_details_offer_id = json_dict_optional_str(offer_details_obj, "offerId", err)
+                # Can either be auto-renewing or prepaid
+                is_auto_renewing_plan = "autoRenewingPlan" in line_item
+                is_prepaid_plan = "prepaidPlan" in line_item
 
-                    if err.has():
-                        continue
+                # Only one of these should be true, but all three can be false
+                is_deferred_replacement = "deferredItemReplacement" in line_item
+                is_deferred_removal = "deferredItemRemoval" in line_item
+                is_signup_promo = "signupPromotion" in line_item
 
-                    offer_details = SubscriptionV2DataOfferDetails(
-                        offer_tags=offer_details_offer_tags,
-                        base_plan_id=offer_details_base_plan_id,
-                        offer_id=offer_details_offer_id,
-                    )
+                latest_successful_order_id = json_dict_optional_str(line_item, "latestSuccessfulOrderId", err)
 
-                    # Can either be auto-renewing or prepaid
-                    is_auto_renewing_plan = "autoRenewingPlan" in line_item
-                    is_prepaid_plan = "prepaidPlan" in line_item
+                if is_prepaid_plan and is_auto_renewing_plan:
+                    err.msg_list.append(f'purchases.subscriptions.get line item has both auto_renewing_plan and prepaid_plan keys! This should never happen!')
 
-                    # Only one of these should be true, but all three can be false
-                    is_deferred_replacement = "deferredItemReplacement" in line_item
-                    is_deferred_removal = "deferredItemRemoval" in line_item
-                    is_signup_promo = "signupPromotion" in line_item
+                if is_deferred_replacement + is_deferred_removal + is_signup_promo > 1:
+                    err.msg_list.append(f'purchases.subscriptions.get line item has more than one of "deferred_item_replacement" ({is_deferred_replacement}), "deferred_item_removal" ({is_deferred_removal}), or "signup_promotion" ({is_signup_promo}) set! This should never happen!')
 
-                    latest_successful_order_id = json_dict_optional_str(line_item, "latestSuccessfulOrderId", err)
+                if err.has():
+                    continue
 
-                    if is_prepaid_plan and is_auto_renewing_plan:
-                        err.msg_list.append(f'purchases.subscriptions.get line item has both auto_renewing_plan and prepaid_plan keys! This should never happen!')
+                auto_renewing_plan = None
+                prepaid_plan = None
+                deferred_item_replacement = None
+                deferred_item_removal = None
+                signup_promotion = None
 
-                    if sum([is_deferred_replacement, is_deferred_removal, is_signup_promo]) > 1:
-                        err.msg_list.append(f'purchases.subscriptions.get line item has more than one of "deferred_item_replacement" ({is_deferred_replacement}), "deferred_item_removal" ({is_deferred_removal}), or "signup_promotion" ({is_signup_promo}) set! This should never happen!')
+                if is_auto_renewing_plan:
+                    auto_renewing_plan_obj = json_dict_require_obj(line_item, "autoRenewingPlan", err)
 
-                    if err.has():
-                        continue
+                    auto_renew_enabled = json_dict_optional_bool(auto_renewing_plan_obj, "autoRenewEnabled", False, err)
 
-                    auto_renewing_plan = None
-                    prepaid_plan = None
-                    deferred_item_replacement = None
-                    deferred_item_removal = None
-                    signup_promotion = None
+                    recurring_price = json_dict_require_google_money(auto_renewing_plan_obj, "recurringPrice", err)
 
-                    if is_auto_renewing_plan:
-                        auto_renewing_plan_obj = json_dict_require_obj(line_item, "autoRenewingPlan", err)
+                    has_installment_details = "installmentDetails" in auto_renewing_plan_obj
+                    has_price_step_up_consent_details = "priceStepUpConsentDetails" in auto_renewing_plan_obj
 
-                        auto_renew_enabled = json_dict_optional_bool(auto_renewing_plan_obj, "autoRenewEnabled", False, err)
+                    price_change_details = None
+                    price_change_details_obj = json_dict_optional_obj(auto_renewing_plan_obj, "priceChangeDetails", err)
+                    if price_change_details_obj is not None:
+                        new_price = json_dict_require_google_money(price_change_details_obj, "newPrice", err)
 
-                        recurring_price = json_dict_require_google_money(auto_renewing_plan_obj, "recurringPrice", err)
+                        price_change_mode = json_dict_require_str_coerce_to_enum(price_change_details_obj, "priceChangeMode", SubscriptionV2SubscriptionItemPriceChangeDetailsModeType, err)
+                        price_change_state = json_dict_require_str_coerce_to_enum(price_change_details_obj, "priceChangeState", SubscriptionV2SubscriptionItemPriceChangeDetailsStateType, err)
+                        expected_new_price_charge_time = json_dict_require_google_timestamp(price_change_details_obj, "expectedNewPriceChargeTime", err)
 
-                        has_price_change_details = "priceChangeDetails" in auto_renewing_plan_obj
-                        has_installment_details = "installmentDetails" in auto_renewing_plan_obj
-                        has_price_step_up_consent_details = "priceStepUpConsentDetails" in auto_renewing_plan_obj
+                        if price_change_mode == SubscriptionV2SubscriptionItemPriceChangeDetailsModeType.PRICE_CHANGE_MODE_UNSPECIFIED:
+                            err.msg_list.append(f'Invalid price change mode for line item price details: {price_change_mode}')
 
-                        price_change_details = None
-                        if has_price_change_details:
-                            price_change_details_obj = json_dict_require_obj(auto_renewing_plan_obj, "priceChangeDetails", err)
+                        if price_change_state == SubscriptionV2SubscriptionItemPriceChangeDetailsStateType.PRICE_CHANGE_STATE_UNSPECIFIED:
+                            err.msg_list.append(f'Invalid price change state for line item price details: {price_change_state}')
 
-                            if err.has():
-                                continue
-
-                            new_price = json_dict_require_google_money(price_change_details_obj, "newPrice", err)
-
-                            price_change_mode = json_dict_require_str_coerce_to_enum(price_change_details_obj, "priceChangeMode", SubscriptionV2SubscriptionItemPriceChangeDetailsModeType, err)
-
-                            if price_change_mode == SubscriptionV2SubscriptionItemPriceChangeDetailsModeType.PRICE_CHANGE_MODE_UNSPECIFIED:
-                                err.msg_list.append(f'Invalid price change mode for line item price details: {price_change_mode}')
-
-                            price_change_state = json_dict_require_str_coerce_to_enum(price_change_details_obj, "priceChangeState", SubscriptionV2SubscriptionItemPriceChangeDetailsStateType, err)
-
-                            if price_change_state == SubscriptionV2SubscriptionItemPriceChangeDetailsStateType.PRICE_CHANGE_STATE_UNSPECIFIED:
-                                err.msg_list.append(f'Invalid price change state for line item price details: {price_change_state}')
-
-                            expected_new_price_charge_time = json_dict_require_google_timestamp(price_change_details_obj, "expectedNewPriceChargeTime", err)
-
-                            if err.has():
-                                continue
-
+                        if not err.has():
                             price_change_details = SubscriptionV2SubscriptionItemPriceChangeDetails(
                                 new_price=new_price,
                                 price_change_mode=price_change_mode,
@@ -181,37 +153,30 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                                 expected_new_price_charge_time=expected_new_price_charge_time,
                             )
 
-                        installment_details = None
-                        if has_installment_details:
-                            installment_details_obj = json_dict_require_obj(auto_renewing_plan_obj, "installmentDetails", err)
+                    installment_details = None
+                    installment_details_obj = json_dict_optional_obj(auto_renewing_plan_obj, "installmentDetails", err)
+                    if installment_details_obj is not None:
 
-                            if err.has():
-                                continue
+                        initial_committed_payments_count = json_dict_require_int(installment_details_obj, "initialCommittedPaymentsCount", err)
+                        subsequent_committed_payments_count = json_dict_require_int(installment_details_obj, "subsequentCommittedPaymentsCount", err)
+                        remaining_committed_payments_count = json_dict_require_int(installment_details_obj, "remainingCommittedPaymentsCount", err)
 
-                            initial_committed_payments_count = json_dict_require_int(installment_details_obj, "initialCommittedPaymentsCount", err)
-                            subsequent_committed_payments_count = json_dict_require_int(installment_details_obj, "subsequentCommittedPaymentsCount", err)
-                            remaining_committed_payments_count = json_dict_require_int(installment_details_obj, "remainingCommittedPaymentsCount", err)
+                        pending_cancellation = None
+                        pending_cancellation_obj = json_dict_optional_obj(installment_details_obj, "pendingCancellation", err)
+                        if pending_cancellation_obj is not None:
+                            pending_cancellation_state = json_dict_require_str_coerce_to_enum(pending_cancellation_obj, "state", SubscriptionV2SubscriptionPriceConsentStateType, err)
 
-                            pending_cancellation = None
-                            if "pendingCancellation" in installment_details_obj:
-                                pending_cancellation_obj = json_dict_require_obj(installment_details_obj, "pendingCancellation", err)
-                                pending_cancellation_state = json_dict_require_str_coerce_to_enum(pending_cancellation_obj, "state", SubscriptionV2SubscriptionPriceConsentStateType, err)
+                            consent_deadline_time = json_dict_require_google_timestamp(installment_details_obj, "consentDeadlineTime", err)
+                            new_price = json_dict_require_google_money(installment_details_obj, "newPrice", err)
 
-                                consent_deadline_time = json_dict_require_google_timestamp(installment_details_obj, "consentDeadlineTime", err)
-                                new_price = json_dict_require_google_money(installment_details_obj, "newPrice", err)
-
-                                if err.has():
-                                    continue
-
+                            if not err.has():
                                 pending_cancellation = SubscriptionV2SubscriptionItemInstallmentPlanPendingCancellation(
                                     state=pending_cancellation_state,
                                     consent_deadline_time=consent_deadline_time,
                                     new_price=new_price,
                                 )
 
-                            if err.has():
-                                continue
-
+                        if not err.has():
                             installment_details = SubscriptionV2SubscriptionItemInstallmentPlan(
                                 initial_committed_payments_count=initial_committed_payments_count,
                                 subsequent_committed_payments_count=subsequent_committed_payments_count,
@@ -219,13 +184,11 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                                 pending_cancellation=pending_cancellation,
                             )
 
-                        price_step_up_consent_details = None
-                        if has_price_step_up_consent_details:
-                            price_step_up_consent_details = json_dict_require_str_coerce_to_enum(auto_renewing_plan_obj, "priceStepUpConsentDetails", SubscriptionV2SubscriptionPriceConsentStateType, err)
+                    price_step_up_consent_details = None
+                    if has_price_step_up_consent_details:
+                        price_step_up_consent_details = json_dict_require_str_coerce_to_enum(auto_renewing_plan_obj, "priceStepUpConsentDetails", SubscriptionV2SubscriptionPriceConsentStateType, err)
 
-                        if err.has():
-                            continue
-
+                    if not err.has():
                         auto_renewing_plan = SubscriptionV2DataAutoRenewingPlan(
                             auto_renew_enabled= auto_renew_enabled,
                             recurring_price=recurring_price,
@@ -234,15 +197,13 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                             price_step_up_consent_details=price_step_up_consent_details,
                         )
 
-                    elif is_prepaid_plan:
-                        handle_not_implemented('prepaidPlan', err)
+                elif is_prepaid_plan:
+                    handle_not_implemented('prepaidPlan', err)
 
-                    else:
-                        err.msg_list.append(f'No plan type in subscription')
+                else:
+                    err.msg_list.append(f'No plan type in subscription')
 
-                    if err.has():
-                        continue
-
+                if not err.has():
                     # We could probably enforce unique line item types, but this might be overkill. "The items in the same purchase should be either all with AutoRenewingPlan or all with PrepaidPlan."
                     line_items.append(
                         SubscriptionV2DataLineItem(
@@ -259,66 +220,53 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                     )
 
             start_time = json_dict_require_google_timestamp(response, "startTime", err)
-
             subscription_state = json_dict_require_str_coerce_to_enum(response, "subscriptionState", SubscriptionsV2SubscriptionStateType, err)
-
             linked_purchase_token = json_dict_optional_str(response, "linkedPurchaseToken", err)
 
             paused_state_context = None
-            if has_paused_state_context:
-                paused_state_context_obj = json_dict_require_obj(response, "pausedStateContext", err)
-                if not err.has():
-                    auto_resume_time = json_dict_require_google_timestamp(paused_state_context_obj, "autoResumeTime", err)
+            paused_state_context_obj = json_dict_optional_obj(response, "pausedStateContext", err)
+            if paused_state_context_obj is not None:
+                auto_resume_time = json_dict_require_google_timestamp(paused_state_context_obj, "autoResumeTime", err)
 
-                    if not err.has():
-                        paused_state_context = SubscriptionsV2SubscriptionPausedStateContext(auto_resume_time=auto_resume_time)
+                if not err.has():
+                    paused_state_context = SubscriptionsV2SubscriptionPausedStateContext(auto_resume_time=auto_resume_time)
 
             canceled_state_context = None
-            if has_canceled_state_context:
-                canceled_state_context_obj = json_dict_require_obj(response, "canceledStateContext", err)
+            canceled_state_context_obj = json_dict_optional_obj(response, "canceledStateContext", err)
+            if canceled_state_context_obj is not None:
+                user_initiated_cancellation = None
+                user_initiated_cancellation_obj = json_dict_optional_obj(canceled_state_context_obj, "userInitiatedCancellation", err)
+                is_user_initiated_cancellation = user_initiated_cancellation_obj is not None
+                if is_user_initiated_cancellation:
+                    cancel_survey_result_obj = json_dict_require_obj(user_initiated_cancellation_obj, "cancelSurveyResult", err)
+
+                    reason = json_dict_require_str_coerce_to_enum(cancel_survey_result_obj, "reason", SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, err)
+                    reason_user_input = json_dict_require_str(cancel_survey_result_obj, "reasonUserInput", err) if "reasonUserInput" in cancel_survey_result_obj else None
+
+                    cancel_survey_result = SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse(
+                        reason=reason,
+                        reason_user_input=reason_user_input
+                    ) if not err.has() else None
+
+                    cancel_time = json_dict_require_google_timestamp(user_initiated_cancellation_obj, "cancelTime", err)
+
+                    if not err.has():
+                        user_initiated_cancellation = SubscriptionsV2SubscriptionCanceledStateContextUser(
+                            cancel_survey_result=cancel_survey_result,
+                            cancel_time=cancel_time,
+                        )
+
+                is_system_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "systemInitiatedCancellation", err)
+                is_developer_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "developerInitiatedCancellation", err)
+                is_replacement_cancellation = json_dict_optional_google_empty_object_bool(response, "replacementCancellation", err)
+
+                existing_keys = is_user_initiated_cancellation + is_system_initiated_cancellation + is_developer_initiated_cancellation + is_replacement_cancellation
+                if existing_keys == 0:
+                    err.msg_list.append(f'No cancellation state for plan')
+                elif existing_keys > 1:
+                    err.msg_list.append(f'Multiple cancellation state for plan. This is not possible!')
+
                 if not err.has():
-                    user_initiated_cancellation = None
-                    system_initiated_cancellation = None
-                    developer_initiated_cancellation = None
-                    replacement_cancellation = None
-
-                    is_user_initiated_cancellation = "userInitiatedCancellation" in canceled_state_context_obj
-
-                    if is_user_initiated_cancellation:
-                        user_initiated_cancellation_obj = json_dict_require_obj(canceled_state_context_obj, "userInitiatedCancellation", err)
-
-                        if not err.has():
-                            cancel_survey_result_obj = json_dict_require_obj(user_initiated_cancellation_obj, "cancelSurveyResult", err)
-
-                            cancel_survey_result = None
-                            if not err.has():
-                                reason = json_dict_require_str_coerce_to_enum(cancel_survey_result_obj, "reason", SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, err)
-                                reason_user_input = json_dict_require_str(cancel_survey_result_obj, "reasonUserInput", err) if "reasonUserInput" in cancel_survey_result_obj else None
-
-                                if not err.has():
-                                     cancel_survey_result = SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse(
-                                        reason=reason,
-                                        reason_user_input=reason_user_input
-                                    )
-
-                            cancel_time = json_dict_require_google_timestamp(user_initiated_cancellation_obj, "cancelTime", err)
-
-                            if not err.has():
-                                user_initiated_cancellation = SubscriptionsV2SubscriptionCanceledStateContextUser(
-                                    cancel_survey_result=cancel_survey_result,
-                                    cancel_time=cancel_time,
-                                )
-
-                    is_system_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "systemInitiatedCancellation", err)
-                    is_developer_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "developerInitiatedCancellation", err)
-                    is_replacement_cancellation = json_dict_optional_google_empty_object_bool(response, "replacementCancellation", err)
-
-                    existing_keys = sum([is_user_initiated_cancellation, is_system_initiated_cancellation, is_developer_initiated_cancellation, is_replacement_cancellation])
-                    if existing_keys == 0:
-                        err.msg_list.append(f'No cancellation state for plan')
-                    elif existing_keys > 1:
-                        err.msg_list.append(f'Multiple cancellation state for plan. This is not possible!')
-
                     canceled_state_context = SubscriptionsV2SubscriptionCanceledStateContext(
                         user_initiated_cancellation=user_initiated_cancellation,
                         system_initiated_cancellation=is_system_initiated_cancellation,
@@ -329,7 +277,7 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
 
             is_test_purchase = json_dict_optional_google_empty_object_bool(response, "testPurchase", err)
 
-            acknowledgement_state = json_dict_require_str_coerce_to_enum(response, "acknowledgementState", SubscriptionsV2SubscriptionAcknowledgementStateType,err)
+            acknowledgement_state = json_dict_require_str_coerce_to_enum(response, "acknowledgementState", SubscriptionsV2SubscriptionAcknowledgementStateType, err)
 
             if not err.has() and acknowledgement_state is not None:
                 result = SubscriptionV2Data(
@@ -346,29 +294,16 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
         else:
             err.msg_list.append('Failed to get subscription details, result not a dict')
 
-        if len(err.msg_list) > 0:
-            return result
-
-        return result
-
     except Exception as e:
         err.msg_list.append(f'Failed to get subscription details: {e}')
-        raise e
-        return result
 
-def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bool:
-    result = True
-    if field is None:
-        result = False
-        if err:
-            err.msg_list.append(msg)
+    assert result is None if err.has() else isinstance(result, SubscriptionV2Data)
     return result
+
 
 def handle_not_implemented(name: str, err: base.ErrorSink):
     err.msg_list.append(f"'{name}' is not implemented!")
 
-def handle_subscription_refund(purchase_token: str, err: base.ErrorSink):
-    handle_not_implemented("handle_subscription_refund", err)
 
 def handle_notification(body:dict, err: base.ErrorSink):
         body_version = json_dict_require_str(body, "version", err)
@@ -430,7 +365,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                 case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
                                     details = get_subscription_v2(package_name, purchase_token, err)
 
-                                    if len(err.msg_list) > 0 or details is None:
+                                    if err.has() or details is None:
                                         return
 
                                     acknowledgement_state = details.acknowledgement_state
@@ -438,10 +373,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                         err.msg_list.append(f'Message is already acknowledged')
 
                                     subscription_state = details.subscription_state
-
-                                    # '2025-09-17T05:02:29.546Z'
                                     start_time = details.start_time
-
                                     linked_purchase_token = None
                                     if details.linked_purchase_token is not None:
                                         linked_purchase_token = details.linked_purchase_token
@@ -518,7 +450,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                     case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
                                         match refund_type:
                                             case RefundType.REFUND_TYPE_FULL_REFUND:
-                                                handle_subscription_refund(purchase_token, err)
+                                                handle_not_implemented("handle_subscription_refund", err)
                                             case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
                                                 # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesnt relate to subscriptions
                                                 err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} refundType REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND ({RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND}) is unsupported!')
