@@ -1,11 +1,11 @@
 import dataclasses
+import typing
 from enum import IntEnum, StrEnum
 from typing import Optional
 
 from google.protobuf.internal.well_known_types import Timestamp
 
 import base
-
 
 class GoogleTimestamp(Timestamp):
     rfc3339: str
@@ -162,12 +162,12 @@ class SubscriptionsV2SubscriptionCanceledStateContext:
     """
     # Subscription was canceled by user.
     user_initiated_cancellation: Optional[SubscriptionsV2SubscriptionCanceledStateContextUser]
-    # Subscription was canceled by the system, for example because of a billing problem. (empty object) TODO: validate this
-    system_initiated_cancellation: Optional[dict]
-    # Subscription was canceled by the developer. (empty object) TODO: validate this
-    developer_initiated_cancellation: Optional[dict]
-    # Subscription was replaced by a new subscription. (empty object) TODO: validate this
-    replacement_cancellation: Optional[dict]
+    # Subscription was canceled by the system, for example because of a billing problem. (empty object bool)
+    system_initiated_cancellation: bool
+    # Subscription was canceled by the developer. (empty object bool)
+    developer_initiated_cancellation: bool
+    # Subscription was replaced by a new subscription. (empty object bool)
+    replacement_cancellation: bool
 
 
 @dataclasses.dataclass
@@ -286,8 +286,8 @@ class SubscriptionV2DataSignupPromotion:
     """
     Only one of these two fields can exist at the same time.
     """
-    # A one-time code was applied. (empty object) TODO: this needs to be tested
-    one_time_code: Optional[dict]
+    # A one-time code was applied. (empty object bool)
+    one_time_code: bool
     # A vanity code was applied.
     vanity_code: Optional[SubscriptionV2DataSignupPromotionVanityCode]
 
@@ -379,8 +379,8 @@ class SubscriptionV2Data:
     # Additional context around canceled subscriptions. Only present if the subscription currently has subscriptionState SUBSCRIPTION_STATE_CANCELED or SUBSCRIPTION_STATE_EXPIRED.
     canceled_state_context: Optional[SubscriptionsV2SubscriptionCanceledStateContext]
 
-    # Only present if this subscription purchase is a test purchase. (empty object)
-    test_purchase: Optional[dict]
+    # Only present if this subscription purchase is a test purchase. (empty object bool)
+    test_purchase: bool
 
     # The acknowledgement state of the subscription.
     acknowledgement_state: SubscriptionsV2SubscriptionAcknowledgementStateType
@@ -405,3 +405,17 @@ def json_dict_require_google_timestamp(d: dict[str, base.JSONValue], key: str, e
     timestamp_str = base.json_dict_require_str(d, key, err)
 
     return GoogleTimestamp(timestamp_str, err)
+
+def json_dict_optional_google_empty_object_bool(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink) -> bool:
+    result = False
+    if key in d:
+        v = None
+        if isinstance(d[key], dict):
+            v = typing.cast(dict[str, base.JSONValue], d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not an object: "{base.safe_get_dict_value_type(d, key)}"')
+        if v is not None and len(v.keys()) == 0:
+            result = True
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a google empty object: "{base.safe_get_dict_value_type(d, key)}"')
+    return result

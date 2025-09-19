@@ -29,7 +29,8 @@ from platform_google_types import NotificationType, SubscriptionNotificationType
     SubscriptionsV2SubscriptionPausedStateContext, \
     SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, \
     SubscriptionsV2SubscriptionCanceledStateContextUser, \
-    SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse, SubscriptionsV2SubscriptionCanceledStateContext
+    SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse, SubscriptionsV2SubscriptionCanceledStateContext, \
+    json_dict_optional_google_empty_object_bool
 
 SCOPES = ['https://www.googleapis.com/auth/androidpublisher']
 
@@ -282,62 +283,51 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                     replacement_cancellation = None
 
                     is_user_initiated_cancellation = "userInitiatedCancellation" in canceled_state_context_obj
-                    is_system_initiated_cancellation = "systemInitiatedCancellation" in canceled_state_context_obj
-                    is_developer_initiated_cancellation = "developerInitiatedCancellation" in canceled_state_context_obj
-                    is_replacement_cancellation = "replacementCancellation" in canceled_state_context_obj
+
+                    if is_user_initiated_cancellation:
+                        user_initiated_cancellation_obj = json_dict_require_obj(canceled_state_context_obj, "userInitiatedCancellation", err)
+
+                        if not err.has():
+                            cancel_survey_result_obj = json_dict_require_obj(user_initiated_cancellation_obj, "cancelSurveyResult", err)
+
+                            cancel_survey_result = None
+                            if not err.has():
+                                reason = json_dict_require_str_coerce_to_enum(cancel_survey_result_obj, "reason", SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, err)
+                                reason_user_input = json_dict_require_str(cancel_survey_result_obj, "reasonUserInput", err) if "reasonUserInput" in cancel_survey_result_obj else None
+
+                                if not err.has():
+                                     cancel_survey_result = SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse(
+                                        reason=reason,
+                                        reason_user_input=reason_user_input
+                                    )
+
+                            cancel_time = json_dict_require_google_timestamp(user_initiated_cancellation_obj, "cancelTime", err)
+
+                            if not err.has():
+                                user_initiated_cancellation = SubscriptionsV2SubscriptionCanceledStateContextUser(
+                                    cancel_survey_result=cancel_survey_result,
+                                    cancel_time=cancel_time,
+                                )
+
+                    is_system_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "systemInitiatedCancellation", err)
+                    is_developer_initiated_cancellation = json_dict_optional_google_empty_object_bool(canceled_state_context_obj, "developerInitiatedCancellation", err)
+                    is_replacement_cancellation = json_dict_optional_google_empty_object_bool(response, "replacementCancellation", err)
 
                     existing_keys = sum([is_user_initiated_cancellation, is_system_initiated_cancellation, is_developer_initiated_cancellation, is_replacement_cancellation])
                     if existing_keys == 0:
                         err.msg_list.append(f'No cancellation state for plan')
                     elif existing_keys > 1:
                         err.msg_list.append(f'Multiple cancellation state for plan. This is not possible!')
-                    else:
-                        if is_user_initiated_cancellation:
-                            user_initiated_cancellation_obj = json_dict_require_obj(canceled_state_context_obj, "userInitiatedCancellation", err)
 
-                            if not err.has():
-                                cancel_survey_result_obj = json_dict_require_obj(user_initiated_cancellation_obj, "cancelSurveyResult", err)
-
-                                cancel_survey_result = None
-                                if not err.has():
-                                    reason = json_dict_require_str_coerce_to_enum(cancel_survey_result_obj, "reason", SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, err)
-                                    reason_user_input = json_dict_require_str(cancel_survey_result_obj, "reasonUserInput", err) if "reasonUserInput" in cancel_survey_result_obj else None
-
-                                    if not err.has():
-                                         cancel_survey_result = SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse(
-                                            reason=reason,
-                                            reason_user_input=reason_user_input
-                                        )
-
-                                cancel_time = json_dict_require_google_timestamp(user_initiated_cancellation_obj, "cancelTime", err)
-
-                                if not err.has():
-                                    user_initiated_cancellation = SubscriptionsV2SubscriptionCanceledStateContextUser(
-                                        cancel_survey_result=cancel_survey_result,
-                                        cancel_time=cancel_time,
-                                    )
-                        elif is_system_initiated_cancellation:
-                            system_initiated_cancellation_obj = json_dict_require_obj(canceled_state_context_obj, "systemInitiatedCancellation", err)
-                            if not err.has():
-                                system_initiated_cancellation = system_initiated_cancellation_obj
-                        elif is_developer_initiated_cancellation:
-                            developer_initiated_cancellation_obj = json_dict_require_obj(canceled_state_context_obj, "developerInitiatedCancellation", err)
-                            if not err.has():
-                                developer_initiated_cancellation = developer_initiated_cancellation_obj
-                        elif is_replacement_cancellation:
-                            replacement_cancellation_obj = json_dict_require_obj(response, "replacementCancellation", err)
-                            if not err.has():
-                                replacement_cancellation = replacement_cancellation_obj
-
-                        canceled_state_context = SubscriptionsV2SubscriptionCanceledStateContext(
-                            user_initiated_cancellation=user_initiated_cancellation,
-                            system_initiated_cancellation=system_initiated_cancellation,
-                            developer_initiated_cancellation=developer_initiated_cancellation,
-                            replacement_cancellation=replacement_cancellation
-                        )
+                    canceled_state_context = SubscriptionsV2SubscriptionCanceledStateContext(
+                        user_initiated_cancellation=user_initiated_cancellation,
+                        system_initiated_cancellation=is_system_initiated_cancellation,
+                        developer_initiated_cancellation=is_developer_initiated_cancellation,
+                        replacement_cancellation=is_replacement_cancellation
+                    )
 
 
-            test_purchase = json_dict_require_obj(response, "testPurchase", err) if has_test_purchase else None
+            is_test_purchase = json_dict_optional_google_empty_object_bool(response, "testPurchase", err)
 
             acknowledgement_state = json_dict_require_str_coerce_to_enum(response, "acknowledgementState", SubscriptionsV2SubscriptionAcknowledgementStateType,err)
 
@@ -350,7 +340,7 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
                     linked_purchase_token=linked_purchase_token,
                     paused_state_context=paused_state_context,
                     canceled_state_context=canceled_state_context,
-                    test_purchase=test_purchase,
+                    test_purchase=is_test_purchase,
                     acknowledgement_state=acknowledgement_state,
                 )
         else:
