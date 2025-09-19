@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 import typing
@@ -75,10 +76,15 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
             if len(line_items_arr) == 0:
                 err.msg_list.append(f'purchases.subscriptionsv2.get has no lineItems')
 
+            if err.has():
+                return result
+
             line_items = []
-            for line_item in line_items_arr:
+            for i in range(len(line_items_arr)):
+                line_item = line_items_arr[i]
                 if not isinstance(line_item, dict):
-                    err.msg_list.append(f'purchases.subscriptionsv2.get line_item not a dict: {safe_dump_arbitrary_value_or_type(line_item)}')
+                    err.msg_list.append(f'purchases.subscriptionsv2.get line_item at index {i} not a dict: {safe_dump_arbitrary_value_or_type(line_item)}')
+                    continue
 
                 product_id = json_dict_require_str(line_item, "productId", err)
                 expiry_time = json_dict_require_google_timestamp(line_item, "expiryTime", err)
@@ -352,7 +358,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                             subscription_notification_type = json_dict_require_int(subscription, "notificationType", err)
                             purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
 
-                            if len(err.msg_list) > 0:
+                            if err.has():
                                 return
 
                             match subscription_notification_type:
@@ -366,6 +372,8 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                     details = get_subscription_v2(package_name, purchase_token, err)
 
                                     if err.has() or details is None:
+                                        err_str = '\n'.join(err.msg_list)
+                                        logging.error(f'Parsing purchase token {purchase_token} failed\n{err_str}')
                                         return
 
                                     acknowledgement_state = details.acknowledgement_state
