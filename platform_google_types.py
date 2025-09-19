@@ -129,7 +129,6 @@ class SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason(St
     # Other reasons.
     CANCEL_SURVEY_REASON_OTHERS = "CANCEL_SURVEY_REASON_OTHERS"
 
-
 @dataclasses.dataclass
 class SubscriptionsV2SubscriptionPausedStateContext:
     """Information specific to a subscription in paused state."""
@@ -174,7 +173,7 @@ class SubscriptionsV2SubscriptionCanceledStateContext:
 @dataclasses.dataclass
 class GoogleMoney:
     # The three-letter currency code defined in ISO 4217
-    country_code: str
+    currency_code: str
     # The whole units of the amount. For example if currencyCode is "USD", then 1 unit is one US dollar.
     units: str
     # Number of nano (10^-9) units of the amount. The value must be between -999,999,999 and +999,999,999 inclusive. If units is positive, nanos must be positive or zero. If units is zero, nanos can be positive, zero, or negative. If units is negative, nanos must be negative or zero. For example $-1.75 is represented as units=-1 and nanos=-750,000,000.
@@ -396,11 +395,11 @@ class SubscriptionV2Data:
 def json_dict_require_google_money(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
     price_obj = base.json_dict_require_obj(d, key, err)
 
-    country_code = base.json_dict_require_str(price_obj, "countryCode", err)
+    currency_code = base.json_dict_require_str(price_obj, "currencyCode", err)
     units = base.json_dict_require_str(price_obj, "units", err)
     nanos = base.json_dict_require_int(price_obj, "nanos", err)
 
-    return GoogleMoney(country_code=country_code, units=units, nanos=nanos)
+    return GoogleMoney(currency_code=currency_code, units=units, nanos=nanos)
 
 def json_dict_require_google_timestamp(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
     timestamp_str = base.json_dict_require_str(d, key, err)
