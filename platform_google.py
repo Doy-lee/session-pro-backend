@@ -372,8 +372,7 @@ def handle_notification(body:dict, err: base.ErrorSink):
                                     details = get_subscription_v2(package_name, purchase_token, err)
 
                                     if err.has() or details is None:
-                                        err_str = '\n'.join(err.msg_list)
-                                        logging.error(f'Parsing purchase token {purchase_token} failed\n{err_str}')
+                                        err.msg_list.append(f'Parsing purchase token {purchase_token} failed')
                                         return
 
                                     acknowledgement_state = details.acknowledgement_state
@@ -522,9 +521,9 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
     else:
         err.msg_list.append("Message data is not a valid JSON object")
 
-    if len(err.msg_list) > 0:
+    if err.has():
         err_msg = '\n'.join(err.msg_list)
-        print(f'ERROR: {err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}')
+        logging.error(f'ERROR: {err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}')
     else:
         print('ACK')
         message.ack()
