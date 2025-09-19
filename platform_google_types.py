@@ -73,17 +73,6 @@ class RefundType(IntEnum):
     # The purchase has been partially voided by a quantity-based partial refund, applicable only to multi-quantity purchases. A purchase can be partially voided multiple times.
     REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND = 2
 
-class NotificationType(StrEnum):
-    """Notification types for RTDN notifications. These are the keys."""
-    # If this field is present, then this notification is related to a subscription, and this field contains additional information related to the subscription. Note that this field is mutually exclusive with oneTimeProductNotification, voidedPurchaseNotification, and testNotification.
-    SUBSCRIPTION = "subscriptionNotification"
-    # If this field is present, then this notification is related to a one-time purchase, and this field contains additional information related to the purchase. Note that this field is mutually exclusive with subscriptionNotification, voidedPurchaseNotification, and testNotification.
-    ONE_TIME_PRODUCT = "oneTimeProductNotification"
-    # If this field is present, then this notification is related to a voided purchase, and this field contains additional information related to the voided purchase. Note that this field is mutually exclusive with oneTimeProductNotification, subscriptionNotification, and testNotification.
-    VOIDED_PURCHASE = "voidedPurchaseNotification"
-    # If this field is present, then this notification is related to a test publish. These are sent only through the Google Play Developer Console. Note that this field is mutually exclusive with oneTimeProductNotification, subscriptionNotification, and voidedPurchaseNotification.
-    TEST = "testNotification"
-
 class SubscriptionsV2SubscriptionStateType(StrEnum):
     """Subscriptions V2 subscription state types"""
     # Unspecified subscription state.

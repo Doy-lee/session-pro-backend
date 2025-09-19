@@ -306,6 +306,25 @@ def json_dict_require_str_coerce_to_enum(d: dict[str, JSONValue], key: str, my_e
         err.msg_list.append(f'Unable to parse {key} type to an enum')
     return result
 
+def json_dict_require_int_coerce_to_enum(d: dict[str, JSONValue], key: str, my_enum: typing.Type[enum.IntEnum], err: ErrorSink):
+    result = None
+    result_int = None
+    if key in d:
+        if isinstance(d[key], int):
+            result_int = typing.cast(int, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not an integer: "{safe_get_dict_value_type(d, key)}"')
+    else:
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+
+    if result_int is not None:
+        result = my_enum._value2member_map_.get(result_int)
+
+    if result is None:
+        err.msg_list.append(f'Unable to parse {key} type to an enum')
+
+    return result
+
 def json_dict_optional_bool(d: dict[str, JSONValue], key: str, default: bool, err: ErrorSink) -> bool:
     result = default
     if key in d:

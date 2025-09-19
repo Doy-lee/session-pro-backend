@@ -11,7 +11,7 @@ import base
 from base import json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
-    json_dict_optional_str, json_dict_optional_obj
+    json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum
 
 import env
 
@@ -19,7 +19,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 from main import os_get_boolean_env
-from platform_google_types import NotificationType, SubscriptionNotificationType, \
+from platform_google_types import SubscriptionNotificationType, \
     SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, GoogleTimestamp, \
     SubscriptionV2DataOfferDetails, GoogleMoney, SubscriptionV2SubscriptionItemPriceChangeDetails, \
     SubscriptionV2SubscriptionItemPriceChangeDetailsModeType, SubscriptionV2SubscriptionItemPriceChangeDetailsStateType, \
@@ -316,168 +316,136 @@ def handle_notification(body:dict, err: base.ErrorSink):
         package_name = json_dict_require_str(body, "packageName", err)
         event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
-        if len(err.msg_list) > 0:
+        if package_name != platform_config.google_package_name:
+            err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
+
+        if err.has():
             return
 
-        if package_name == platform_config.google_package_name:
-            notification_type: NotificationType | None = None
-            keys = body.keys()
-            for key in keys:
-                if key == "subscriptionNotification":
-                    if notification_type is None:
-                        notification_type = NotificationType.SUBSCRIPTION
-                    else:
-                        err.msg_list.append(f'body contains multiple notification types: {keys}')
+        subscription = json_dict_optional_obj(body, "subscriptionNotification", err)
+        one_time_product = json_dict_optional_obj(body, "oneTimeProductNotification", err)
+        voided_purchase = json_dict_optional_obj(body, "voidedPurchaseNotification", err)
+        test_obj = json_dict_optional_obj(body, "testNotification", err)
 
-                elif key == "oneTimeProductNotification":
-                    if notification_type is None:
-                        notification_type = NotificationType.ONE_TIME_PRODUCT
-                    else:
-                        err.msg_list.append(f'body contains multiple notification types: {keys}')
+        is_subscription_notification = subscription is not None
+        is_one_time_product_notification = one_time_product is not None
+        is_voided_notification = voided_purchase is not None
+        is_test_notification = test_obj is not None
 
-                elif key == "voidedPurchaseNotification":
-                    if notification_type is None:
-                        notification_type = NotificationType.VOIDED_PURCHASE
-                    else:
-                        err.msg_list.append(f'body contains multiple notification types: {keys}')
+        unique_notif_keys = is_subscription_notification + is_one_time_product_notification + is_voided_notification + is_test_notification
 
-                elif key == "testNotification":
-                    if notification_type is None:
-                        notification_type = NotificationType.TEST
-                    else:
-                        err.msg_list.append(f'body contains multiple notification types: {keys}')
+        if unique_notif_keys == 0:
+            err.msg_list.append(f'No subscription notification for {package_name}')
+        elif unique_notif_keys > 1:
+            err.msg_list.append(f'Multiple subscription notification for {package_name} {safe_dump_dict_keys_or_data(body)}')
 
-            if notification_type is None:
-                err.msg_list.append(f'body contains no notification type: {keys}')
-            else:
-                match notification_type:
-                    case NotificationType.SUBSCRIPTION:
-                        subscription = body[NotificationType.SUBSCRIPTION]
-                        if isinstance(subscription, dict):
-                            version = json_dict_require_str(subscription, "version",  err)
-                            subscription_notification_type = json_dict_require_int(subscription, "notificationType", err)
-                            purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
+        if err.has():
+            return
 
-                            if err.has():
-                                return
+        if is_subscription_notification:
+            version = json_dict_require_str(subscription, "version",  err)
+            subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
+            purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
 
-                            match subscription_notification_type:
-                                case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED:
-                                    handle_not_implemented("SUBSCRIPTION_RECOVERED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
-                                    handle_not_implemented("SUBSCRIPTION_RENEWED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
-                                    handle_not_implemented("SUBSCRIPTION_CANCELED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
-                                    details = get_subscription_v2(package_name, purchase_token, err)
+            if err.has():
+                return
 
-                                    if err.has() or details is None:
-                                        err.msg_list.append(f'Parsing purchase token {purchase_token} failed')
-                                        return
+            assert subscription_notification_type is not None
 
-                                    acknowledgement_state = details.acknowledgement_state
-                                    if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
-                                        err.msg_list.append(f'Message is already acknowledged')
+            match subscription_notification_type:
+                case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED:
+                    handle_not_implemented("SUBSCRIPTION_RECOVERED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
+                    handle_not_implemented("SUBSCRIPTION_RENEWED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
+                    handle_not_implemented("SUBSCRIPTION_CANCELED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
+                    details = get_subscription_v2(package_name, purchase_token, err)
 
-                                    subscription_state = details.subscription_state
-                                    start_time = details.start_time
-                                    linked_purchase_token = None
-                                    if details.linked_purchase_token is not None:
-                                        linked_purchase_token = details.linked_purchase_token
+                    if err.has():
+                        err.msg_list.append(f'Parsing purchase token {purchase_token} failed')
+                        return
 
-                                    # TODO: if linked_purchase_token exits we need to revoke the old subscription proof
+                    assert details is not None
 
-                                    test_purchase = None
-                                    if details.test_purchase is not None:
-                                        print(details.test_purchase)
+                    acknowledgement_state = details.acknowledgement_state
+                    if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+                        err.msg_list.append(f'Message is already acknowledged')
 
-                                    if len(err.msg_list) > 0:
-                                        return
+                    # TODO: if linked_purchase_token exits we need to revoke the old subscription proof
 
-                                    # match subscription_state:
-                                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED:
-                                    #         subscription_state = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
-                                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
+                    if details.test_purchase is not None:
+                        print(details.test_purchase)
+
+                    if err.has():
+                        return
+
+                    # match subscription_state:
+                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED:
+                    #         subscription_state = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
+                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
 
 
-                                    handle_not_implemented("SUBSCRIPTION_PURCHASED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
-                                    handle_not_implemented("SUBSCRIPTION_ON_HOLD", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
-                                    handle_not_implemented("SUBSCRIPTION_IN_GRACE_PERIOD", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
-                                    handle_not_implemented("SUBSCRIPTION_RESTARTED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
-                                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_CONFIRMED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
-                                    err.msg_list.append(f'{NotificationType.SUBSCRIPTION} notificationType SUBSCRIPTION_DEFERRED ({SubscriptionNotificationType.SUBSCRIPTION_DEFERRED}) is unsupported!')
-                                case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
-                                    handle_not_implemented("SUBSCRIPTION_PAUSED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
-                                    handle_not_implemented("SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
-                                    handle_not_implemented("SUBSCRIPTION_REVOKED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
-                                    handle_not_implemented("SUBSCRIPTION_EXPIRED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
-                                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_UPDATED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PENDING_PURCHASE_CANCELED:
-                                    handle_not_implemented("SUBSCRIPTION_PENDING_PURCHASE_CANCELED", err)
-                                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
-                                    handle_not_implemented("SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED", err)
-                                case _:
-                                    err.msg_list.append(f'{NotificationType.SUBSCRIPTION} notificationType is invalid: {subscription_notification_type}')
+                    handle_not_implemented("SUBSCRIPTION_PURCHASED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
+                    handle_not_implemented("SUBSCRIPTION_ON_HOLD", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
+                    handle_not_implemented("SUBSCRIPTION_IN_GRACE_PERIOD", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
+                    handle_not_implemented("SUBSCRIPTION_RESTARTED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
+                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_CONFIRMED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
+                    err.msg_list.append(f'subscription notificationType SUBSCRIPTION_DEFERRED ({subscription_notification_type}) is unsupported!')
+                case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
+                    handle_not_implemented("SUBSCRIPTION_PAUSED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
+                    handle_not_implemented("SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
+                    handle_not_implemented("SUBSCRIPTION_REVOKED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
+                    handle_not_implemented("SUBSCRIPTION_EXPIRED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
+                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_UPDATED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PENDING_PURCHASE_CANCELED:
+                    handle_not_implemented("SUBSCRIPTION_PENDING_PURCHASE_CANCELED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
+                    handle_not_implemented("SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED", err)
+                case _:
+                    err.msg_list.append(f'subscription notificationType is invalid: {subscription_notification_type}')
 
-                        else:
-                            err.msg_list.append(f'{NotificationType.SUBSCRIPTION} data is not valid!')
+        elif is_voided_notification:
+            purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
+            order_id = json_dict_require_str(voided_purchase, "orderId", err)
+            product_type = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
+            refund_type = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
 
-                    case NotificationType.VOIDED_PURCHASE:
-                        voided_purchase = body[NotificationType.VOIDED_PURCHASE]
+            if err.has():
+                return
 
-                        if isinstance(voided_purchase, dict):
-                            purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
-                            order_id = json_dict_require_str(voided_purchase, "orderId", err)
-                            product_type = json_dict_require_int(voided_purchase, "productType", err)
-                            raw_refund_type = json_dict_require_int(voided_purchase, "refundType", err)
+            assert refund_type is not None and product_type is not None
 
-                            if len(err.msg_list) > 0:
-                                return
+            match product_type:
+                case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
+                    match refund_type:
+                        case RefundType.REFUND_TYPE_FULL_REFUND:
+                            handle_not_implemented("handle_subscription_refund", err)
+                        case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
+                            # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesnt relate to subscriptions
+                            err.msg_list.append(f'voided purchase refundType REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND ({refund_type}) is unsupported!')
+                        case _:
+                            err.msg_list.append(f'voided purchase refundType is not valid: {refund_type}')
+                case ProductType.PRODUCT_TYPE_ONE_TIME:
+                    err.msg_list.append(f'voided purchase productType PRODUCT_TYPE_ONE_TIME ({product_type}) is unsupported!')
+                case _:
+                    err.msg_list.append(f'voided purchase productType is not valid: {product_type}')
 
-                            refund_type: RefundType | None = None
-                            match raw_refund_type:
-                                case RefundType.REFUND_TYPE_FULL_REFUND:
-                                    refund_type = RefundType.REFUND_TYPE_FULL_REFUND
-                                case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
-                                    refund_type = RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND
+        elif is_one_time_product_notification:
+            err.msg_list.append(f'one time product is not supported!')
 
-                            if refund_type is None:
-                                err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} refundType is None!')
-                            else:
-                                match product_type:
-                                    case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
-                                        match refund_type:
-                                            case RefundType.REFUND_TYPE_FULL_REFUND:
-                                                handle_not_implemented("handle_subscription_refund", err)
-                                            case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
-                                                # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesnt relate to subscriptions
-                                                err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} refundType REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND ({RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND}) is unsupported!')
-                                            case _:
-                                                err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} refundType is not valid!')
-                                    case ProductType.PRODUCT_TYPE_ONE_TIME:
-                                        err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} productType PRODUCT_TYPE_ONE_TIME ({ProductType.PRODUCT_TYPE_ONE_TIME}) is unsupported!')
-                                    case _:
-                                        err.msg_list.append(f'{NotificationType.VOIDED_PURCHASE} productType is not valid!')
+        elif is_test_notification:
+            print(f'test payload was: {safe_dump_dict_keys_or_data(body)}')
 
-                    case NotificationType.ONE_TIME_PRODUCT:
-                        err.msg_list.append(f'{NotificationType.ONE_TIME_PRODUCT} is not supported!')
-
-                    case NotificationType.TEST:
-                        print(f'{NotificationType.TEST} payload was: {safe_dump_dict_keys_or_data(body)}')
-
-                    case _:
-                        err.msg_list.append(f'{notification_type} is not a valid notification type!')
-        else:
-            err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
 
 # NOTE: Enforce the presence of platform_config.py and the variables required for Google
 # integration
@@ -501,10 +469,11 @@ except ImportError:
     sys.exit(1)
 
 def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
-    err            = base.ErrorSink()
+    err = base.ErrorSink()
 
     data = None
     try:
+        # calling data on message calls a method, this shouldn't be able to fail, but we should still handle the case
         data = message.data
     except Exception as e:
         err.msg_list.append(f'Unable to decode message: {e}')
@@ -517,7 +486,10 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
             err.msg_list.append(f"Failed to parse JSON! {e}")
 
     if body is not None and isinstance(body, dict):
-        handle_notification(body, err)
+        try:
+            handle_notification(body, err)
+        except Exception as e:
+            err.msg_list.append(f"Failed to handle notification: {e}")
     else:
         err.msg_list.append("Message data is not a valid JSON object")
 
@@ -529,8 +501,7 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
         message.ack()
 
 def entry_point():
-
-
+    # TODO: these env parsers are needed here if used as an entry point, they need to be removed if/when this changes
     env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 
     if not env.GOOGLE_APPLICATION_CREDENTIALS:
