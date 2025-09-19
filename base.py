@@ -220,13 +220,16 @@ def safe_dump_dict_keys_or_data(d: dict) -> str:
     else:
         return ', '.join(d.keys())
 
-def safe_get_dict_value_type(d: dict, key: str) -> str:
-    v = d.get(key)
+def safe_dump_arbitrary_value_or_type(v) -> str:
     t = type(v)
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return f'({t}) {v}'
     else:
         return t
+
+def safe_get_dict_value_type(d: dict, key: str) -> str:
+    v = d.get(key)
+    return safe_dump_arbitrary_value_or_type(v)
 
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
@@ -240,8 +243,7 @@ def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         else:
             err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     else:
-        if __debug__:
-            err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
@@ -295,4 +297,29 @@ def json_dict_require_str_coerce_to_int(d: dict[str, JSONValue], key: str, err: 
         result = int(result_str)
     except Exception as e:
         err.msg_list.append(f'Unable to parse {key} type to an int: {e}')
+    return result
+
+def json_dict_require_str_coerce_to_enum(d: dict[str, JSONValue], key: str, my_enum: typing.Type[enum.StrEnum], err: ErrorSink):
+    result_str = json_dict_require_str(d, key, err)
+    result = my_enum._value2member_map_.get(result_str)
+    if result is None:
+        err.msg_list.append(f'Unable to parse {key} type to an enum')
+    return result
+
+def json_dict_optional_bool(d: dict[str, JSONValue], key: str, default: bool, err: ErrorSink) -> bool:
+    result = default
+    if key in d:
+        if isinstance(d[key], bool):
+            result = typing.cast(bool, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a bool: "{safe_get_dict_value_type(d, key)}"')
+    return result
+
+def json_dict_optional_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str | None:
+    result = None
+    if key in d:
+        if isinstance(d[key], str):
+            result = typing.cast(str, d[key])
+        else:
+            err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     return result
