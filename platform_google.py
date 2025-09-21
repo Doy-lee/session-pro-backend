@@ -133,7 +133,6 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
 
                     recurring_price = json_dict_require_google_money(auto_renewing_plan_obj, "recurringPrice", err)
 
-                    has_installment_details = "installmentDetails" in auto_renewing_plan_obj
                     has_price_step_up_consent_details = "priceStepUpConsentDetails" in auto_renewing_plan_obj
 
                     price_change_details = None

@@ -80,19 +80,19 @@ class SubscriptionsV2SubscriptionStateType(StrEnum):
     # Subscription was created but awaiting payment during signup. In this state, all items are awaiting payment.
     SUBSCRIPTION_STATE_PENDING = "SUBSCRIPTION_STATE_PENDING"
     # Subscription is active. - (1) If the subscription is an auto renewing plan, at least one item is autoRenewEnabled and not expired. - (2) If the subscription is a prepaid plan, at least one item is not expired.
-    SUBSCRIPTION_STATE_ACTIVE ="SUBSCRIPTION_STATE_ACTIVE"
+    SUBSCRIPTION_STATE_ACTIVE = "SUBSCRIPTION_STATE_ACTIVE"
     # Subscription is paused. The state is only available when the subscription is an auto renewing plan. In this state, all items are in paused state.
     SUBSCRIPTION_STATE_PAUSED = "SUBSCRIPTION_STATE_PAUSED"
     # Subscription is in grace period. The state is only available when the subscription is an auto renewing plan. In this state, all items are in grace period.
     SUBSCRIPTION_STATE_IN_GRACE_PERIOD = "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
     # Subscription is on hold (suspended). The state is only available when the subscription is an auto renewing plan. In this state, all items are on hold.
-    SUBSCRIPTION_STATE_ON_HOLD ="SUBSCRIPTION_STATE_ON_HOLD"
+    SUBSCRIPTION_STATE_ON_HOLD = "SUBSCRIPTION_STATE_ON_HOLD"
     # Subscription is canceled but not expired yet. The state is only available when the subscription is an auto renewing plan. All items have autoRenewEnabled set to false.
-    SUBSCRIPTION_STATE_CANCELED ="SUBSCRIPTION_STATE_CANCELED"
+    SUBSCRIPTION_STATE_CANCELED = "SUBSCRIPTION_STATE_CANCELED"
     # Subscription is expired. All items have expiryTime in the past.
-    SUBSCRIPTION_STATE_EXPIRED ="SUBSCRIPTION_STATE_EXPIRED"
+    SUBSCRIPTION_STATE_EXPIRED = "SUBSCRIPTION_STATE_EXPIRED"
     # Pending transaction for subscription is canceled. If this pending purchase was for an existing subscription, use linkedPurchaseToken to get the current state of that subscription.
-    SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED ="SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
+    SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED = "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
 
 class SubscriptionsV2SubscriptionAcknowledgementStateType(StrEnum):
     """Subscriptions V2 subscription Acknowledgement state types"""
@@ -210,7 +210,7 @@ class SubscriptionV2SubscriptionPriceConsentStateType(StrEnum):
     # The user has consented, and the new price is waiting to take effect.
     CONFIRMED = "CONFIRMED"
     # The user has consented, and the new price has taken effect.
-    COMPLETED ="COMPLETED"
+    COMPLETED = "COMPLETED"
 
 
 @dataclasses.dataclass
