@@ -1084,14 +1084,18 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         runtime_row: RuntimeRow = get_runtime(sql_conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+
         # Convert the user payment transaction into the backend native representation. Note that
         # this is testing code for the unit tests so for example for Apple we just provide stub data
         # for transaction data.
+        #
+        # For the order id, we duplicate the purchase token to mock that
         internal_payment_tx          = PaymentProviderTransaction()
         internal_payment_tx.provider = payment_tx.provider
 
         if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             internal_payment_tx.google_payment_token = payment_tx.google_payment_token
+            internal_payment_tx.google_order_id      = payment_tx.google_payment_token
         elif internal_payment_tx.provider == base.PaymentProvider.iOSAppStore:
             internal_payment_tx.apple_tx_id                = payment_tx.apple_tx_id
             internal_payment_tx.apple_web_line_order_tx_id = ''
