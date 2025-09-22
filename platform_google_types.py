@@ -108,7 +108,7 @@ class SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason(St
     # Unspecified cancel survey reason.
     CANCEL_SURVEY_REASON_UNSPECIFIED = "CANCEL_SURVEY_REASON_UNSPECIFIED"
     # Not enough usage of the subscription.
-    CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE = "CANCEL_SURVEY_REASON_NOT_ENOUGH"
+    CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE = "CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE"
     # Technical issues while using the app.
     CANCEL_SURVEY_REASON_TECHNICAL_ISSUES = "CANCEL_SURVEY_REASON_TECHNICAL_ISSUES"
     # Cost related issues.
