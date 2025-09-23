@@ -266,6 +266,16 @@ API
                        User had Session Pro payment(s) that were fully consumed previously and
                        currently don't have an active payment and hence entitlement to Session Pro
                        features.
+      latest_expiry_unix_ts_ms: 8 byte unix timestamp indicating when the entitlement of Session
+                                Pro is due to expire as defined by the payment with the latest
+                                expiry date associated with it.
+      latest_grace_unix_ts_ms:  8 byte unix timestamp indicating when the payment platform will
+                                attempt to auto-renew the Session Pro subscription. During the
+                                period between [latest_grace_unix_ts_ms, latest_expiry_unix_ts_ms]
+                                the user is still entitled to Session Pro and if the subscription
+                                is successfully renewed, the user will retain Session Pro across the
+                                billing cycle boundary and the latest grace period is updated.
+                                Set to 0 if auto-renewal for a subscription is disabled.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                  1 byte integer describing the status of the consumption of the
@@ -285,7 +295,10 @@ API
                                  registered is coming from with the following mapping:
                                    1 => Google Play Store
                                    2 => Apple iOS App Store
-        expiry_unix_ts_ms:       8 byte unix timestamp indicating when the payment is due to expire.
+        expiry_unix_ts_ms:       8 byte unix timestamp indicating when the entitlement of Session
+                                 Pro is due to expire.
+        grace_unix_ts_ms:        8 byte unix timestamp indicating when the auto-renewing for Session
+                                 Pro is to occur. Set to 0 if auto-renewing is disabled.
         redeemed_unix_ts_ms:     8 byte unix timestamp indicating when the payment was registered.
                                  This timestamp is rounded up to the next day boundary from the
                                  actual registration date.
@@ -647,13 +660,15 @@ def get_pro_payments():
 
     items:           list[dict[str, str | int]] = []
     user_pro_status: UserProStatus              = UserProStatus.NeverBeenPro
+    latest_expiry_unix_ts_ms                    = 0
+    latest_grace_unix_ts_ms                     = 0
     with open_db_from_flask_request_context(flask.current_app) as db:
         with base.SQLTransaction(db.sql_conn) as tx:
-            list_it: collections.abc.Iterator[backend.SQLTablePaymentRowTuple] = \
-                    backend.get_payments_iterator(tx=tx, master_pkey=master_pkey_nacl)
-
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
+            latest_grace_unix_ts_ms              = get_user.latest_grace_unix_ts_ms
+            latest_expiry_unix_ts_ms             = get_user.latest_expiry_unix_ts_ms
             has_payments = False
-            for row in list_it:
+            for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
                 # initially and every payment we come across, if they have a redeemed payment
                 # in their current history, we report them as active.
@@ -665,13 +680,14 @@ def get_pro_payments():
                 subscription_duration_s: int   = row[2]
                 payment_provider               = base.PaymentProvider(row[3])
                 redeemed_unix_ts_ms:     int   = row[4]
-                expiry_unix_ts_ms:       int   = row[5]  if row[5]  else 0
-                refunded_unix_ts_ms:     int   = row[6]  if row[6]  else 0
-                apple_original_tx_id:    str   = row[7]  if row[7]  else ''
-                apple_tx_id:             str   = row[8]  if row[8]  else ''
-                apple_web_line_order_id: str   = row[9]  if row[9]  else ''
-                google_payment_token:    str   = row[10] if row[10] else ''
-                google_order_id:         str   = row[11] if row[11] else ''
+                expiry_unix_ts_ms:       int   = row[5]
+                grace_unix_ts_ms:        int   = row[6]
+                refunded_unix_ts_ms:     int   = row[7]  if row[7]  else 0
+                apple_original_tx_id:    str   = row[8]  if row[8]  else ''
+                apple_tx_id:             str   = row[9]  if row[9]  else ''
+                apple_web_line_order_id: str   = row[10] if row[10] else ''
+                google_payment_token:    str   = row[11] if row[11] else ''
+                google_order_id:         str   = row[12] if row[12] else ''
 
                 # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                 # confidential until the user actually registers the token themselves which they
@@ -689,6 +705,7 @@ def get_pro_payments():
                             'subscription_duration_s': subscription_duration_s,
                             'payment_provider':        int(payment_provider.value),
                             'expiry_unix_ts_ms':       expiry_unix_ts_ms,
+                            'grace_unix_ts_ms':        grace_unix_ts_ms,
                             'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
                             'refunded_unix_ts_ms':     refunded_unix_ts_ms,
                             'google_payment_token':    google_payment_token,
@@ -700,6 +717,7 @@ def get_pro_payments():
                             'subscription_duration_s': subscription_duration_s,
                             'payment_provider':        int(payment_provider.value),
                             'expiry_unix_ts_ms':       expiry_unix_ts_ms,
+                            'grace_unix_ts_ms':        grace_unix_ts_ms,
                             'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
                             'refunded_unix_ts_ms':     refunded_unix_ts_ms,
                             'apple_original_tx_id':    apple_original_tx_id,
@@ -718,8 +736,10 @@ def get_pro_payments():
                     break
 
     result = make_success_response(dict_result={
-        'version': 0,
-        'status':  int(user_pro_status.value),
-        'items':   items
+        'version':                  0,
+        'status':                   int(user_pro_status.value),
+        'latest_grace_unix_ts_ms':  latest_grace_unix_ts_ms,
+        'latest_expiry_unix_ts_ms': latest_expiry_unix_ts_ms,
+        'items':                    items
     })
     return result

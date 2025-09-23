@@ -76,6 +76,7 @@ def test_backend_same_user_stacks_subscription():
                                        payment_tx=payment_tx,
                                        subscription_duration_s=it.subscription_duration_s,
                                        expiry_unix_ts_ms=it.expiry_unix_ts_ms,
+                                       grace_unix_ts_ms=0,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -201,6 +202,7 @@ def test_server_add_payment_flow():
                                    payment_tx=payment_tx,
                                    subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                    expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                   grace_unix_ts_ms=0,
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
@@ -391,6 +393,7 @@ def test_server_add_payment_flow():
                                        payment_tx=new_payment_tx,
                                        subscription_duration_s=30 * base.SECONDS_IN_DAY,
                                        expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                       grace_unix_ts_ms=0,
                                        err=err)
 
         new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()

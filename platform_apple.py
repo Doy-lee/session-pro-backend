@@ -338,9 +338,9 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     assert isinstance(subscription_duration_s, int)
                     payment_tx = payment_tx_from_apple_jws_transaction(tx)
                     backend.add_unredeemed_payment(sql_conn                = sql_conn,
-                                                    payment_tx              = payment_tx,
-                                                    subscription_duration_s = subscription_duration_s,
-                                                    err                     = err)
+                                                   payment_tx              = payment_tx,
+                                                   subscription_duration_s = subscription_duration_s,
+                                                   err                     = err)
 
     elif body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
         # A notification type that, along with its subtype, indicates that the customer made a
