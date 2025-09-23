@@ -801,12 +801,7 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
 
     return result
 
-def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
-                           payment_tx:              PaymentProviderTransaction,
-                           subscription_duration_s: int,
-                           expiry_unix_ts_ms:       int,
-                           grace_unix_ts_ms:        int,
-                           err:                     base.ErrorSink):
+def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base.ErrorSink):
     base.verify_payment_provider(payment_tx.provider, err)
     match payment_tx.provider:
         case base.PaymentProvider.GooglePlayStore:
@@ -823,6 +818,54 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
+def update_payment_unix_ts_ms(sql_conn:          sqlite3.Connection,
+                              payment_tx:        PaymentProviderTransaction,
+                              expiry_unix_ts_ms: int,
+                              grace_unix_ts_ms:  int,
+                              err:               base.ErrorSink) -> bool:
+    result = False
+    verify_payment_provider_tx(payment_tx, err)
+    if len(err.msg_list) > 0:
+        return result
+
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        match payment_tx.provider:
+            case base.PaymentProvider.Nil:
+                pass
+            case base.PaymentProvider.GooglePlayStore:
+                _ = tx.cursor.execute(f'''
+                    UPDATE payments
+                    SET    expiry_unix_ts_ms = ?, grace_unix_ts_ms = ?
+                    WHERE  google_payment_token = ? AND google_order_id = ?
+                ''', (expiry_unix_ts_ms,
+                      grace_unix_ts_ms,
+                      payment_tx.google_payment_token,
+                      payment_tx.google_order_id))
+            case base.PaymentProvider.iOSAppStore:
+                _ = tx.cursor.execute(f'''
+                    UPDATE payments
+                    SET    expiry_unix_ts_ms = ?, grace_unix_ts_ms = ?
+                    WHERE  apple_original_tx_id = ? ANFD apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                ''', (expiry_unix_ts_ms,
+                      grace_unix_ts_ms,
+                      payment_tx.apple_original_tx_id,
+                      payment_tx.apple_tx_id,
+                      payment_tx.apple_web_line_order_tx_id))
+        result = tx.cursor.rowcount > 0
+
+    if not result:
+        payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
+        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
+    return result
+
+def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
+                           payment_tx:              PaymentProviderTransaction,
+                           subscription_duration_s: int,
+                           expiry_unix_ts_ms:       int,
+                           grace_unix_ts_ms:        int,
+                           err:                     base.ErrorSink):
+    verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
         return
 
@@ -1270,3 +1313,4 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
     return result
+

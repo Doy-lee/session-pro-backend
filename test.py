@@ -49,18 +49,21 @@ def test_backend_same_user_stacks_subscription():
         proof:                   backend.ProSubscriptionProof = dataclasses.field(default_factory=backend.ProSubscriptionProof)
         payment_provider:        base.PaymentProvider         = base.PaymentProvider.Nil
         expiry_unix_ts_ms:       int                          = 0
+        grace_unix_ts_ms:        int                          = 0
 
     scenarios: list[Scenario] = [
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  subscription_duration_s = 30 * base.SECONDS_IN_DAY,
                  expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
+                 grace_unix_ts_ms        = 0,
                  payment_provider        = base.PaymentProvider.GooglePlayStore),
 
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  subscription_duration_s = 365 * base.SECONDS_IN_DAY,
                  expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
+                 grace_unix_ts_ms        = 0,
                  payment_provider        = base.PaymentProvider.GooglePlayStore)
     ]
 
@@ -76,7 +79,7 @@ def test_backend_same_user_stacks_subscription():
                                        payment_tx=payment_tx,
                                        subscription_duration_s=it.subscription_duration_s,
                                        expiry_unix_ts_ms=it.expiry_unix_ts_ms,
-                                       grace_unix_ts_ms=0,
+                                       grace_unix_ts_ms=it.grace_unix_ts_ms,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -118,14 +121,14 @@ def test_backend_same_user_stacks_subscription():
         unredeemed_payment_list = backend.get_unredeemed_payments_list(db.sql_conn)
         assert len(unredeemed_payment_list) == 0
 
-    runtime: backend.RuntimeRow                     = backend.get_runtime(db.sql_conn)
-    assert runtime.gen_index                       == 2
+    runtime: backend.RuntimeRow                             = backend.get_runtime(db.sql_conn)
+    assert runtime.gen_index                               == 2
 
-    user_list: list[backend.UserRow]                = backend.get_users_list(db.sql_conn)
-    assert len(user_list)                          == 1
-    assert user_list[0].master_pkey                == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert user_list[0].gen_index                  == runtime.gen_index - 1
-    assert user_list[0].expiry_unix_ts_ms          == scenarios[1].expiry_unix_ts_ms
+    user_list: list[backend.UserRow]                        = backend.get_users_list(db.sql_conn)
+    assert len(user_list)                                  == 1
+    assert user_list[0].master_pkey                        == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
+    assert user_list[0].gen_index                          == runtime.gen_index - 1
+    assert user_list[0].expiry_unix_ts_ms                  == scenarios[1].expiry_unix_ts_ms
 
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
@@ -156,12 +159,55 @@ def test_backend_same_user_stacks_subscription():
     assert revocation_list[0].gen_index                    == 0
     assert revocation_list[0].expiry_unix_ts_ms            == scenarios[0].expiry_unix_ts_ms
 
-    expire_result:     backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
-    assert expire_result.already_done_by_someone_else == False
-    assert expire_result.success                      == True
-    assert expire_result.payments                     == 1
-    assert expire_result.revocations                  == 1
-    assert expire_result.users                        == 0
+    expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(db.sql_conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
+    assert expire_result.already_done_by_someone_else      == False
+    assert expire_result.success                           == True
+    assert expire_result.payments                          == 1
+    assert expire_result.revocations                       == 1
+    assert expire_result.users                             == 0
+
+    # NOTE: Update the latest payments expiry and grace period
+    payment_tx                                              = backend.PaymentProviderTransaction()
+    payment_tx.provider                                     = scenarios[1].payment_provider
+    payment_tx.google_payment_token                         = scenarios[1].google_payment_token
+    payment_tx.google_order_id                              = scenarios[1].google_order_id
+    new_expiry_unix_ts_ms                                   = scenarios[1].expiry_unix_ts_ms + 1000
+    new_grace_unix_ts_ms                                    = scenarios[1].expiry_unix_ts_ms + 2000
+    updated: bool                                           = backend.update_payment_unix_ts_ms(sql_conn=db.sql_conn, payment_tx=payment_tx, expiry_unix_ts_ms=new_expiry_unix_ts_ms, grace_unix_ts_ms=new_grace_unix_ts_ms, err=err)
+    assert updated
+
+    # NOTE: Verify that the new grace and expiry were assigned to the user
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
+    assert len(payment_list)                               == 2
+    assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
+    assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
+    assert payment_list[0].payment_provider                == scenarios[0].payment_provider
+    assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
+    assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
+    assert payment_list[0].grace_unix_ts_ms                == scenarios[0].grace_unix_ts_ms
+    assert payment_list[0].refunded_unix_ts_ms             is None
+    assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
+    assert len(payment_list[0].apple.tx_id)                == 0
+    assert len(payment_list[0].apple.original_tx_id)       == 0
+    assert len(payment_list[0].apple.web_line_order_tx_id) == 0
+
+    assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
+    assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
+    assert payment_list[1].payment_provider                == scenarios[1].payment_provider
+    assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
+    assert payment_list[1].expiry_unix_ts_ms               == new_expiry_unix_ts_ms
+    assert payment_list[1].grace_unix_ts_ms                == new_grace_unix_ts_ms
+    assert payment_list[1].refunded_unix_ts_ms             is None
+    assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
+    assert len(payment_list[0].apple.tx_id)                == 0
+    assert len(payment_list[0].apple.original_tx_id)       == 0
+    assert len(payment_list[0].apple.web_line_order_tx_id) == 0
+
+    # NOTE: Get the user and payments and verify that the expiry and grace are correct
+    with base.SQLTransaction(db.sql_conn) as tx:
+        get: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
+        assert get.latest_expiry_unix_ts_ms == new_expiry_unix_ts_ms
+        assert get.latest_grace_unix_ts_ms  == new_grace_unix_ts_ms
 
     _ = backend.verify_db(db.sql_conn, err)
     if len(err.msg_list) > 0:
