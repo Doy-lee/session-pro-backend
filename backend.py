@@ -138,7 +138,7 @@ class PaymentRow:
     subscription_duration_s: int                  = 0
     payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
     redeemed_unix_ts_ms:     int | None           = None
-    expiry_unix_ts_ms:       int                  = None
+    expiry_unix_ts_ms:       int                  = 0
     refunded_unix_ts_ms:     int | None           = None
     apple:                   AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
     google_payment_token:    str                  = ''
