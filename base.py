@@ -188,6 +188,10 @@ def round_unix_ts_ms_to_next_day(unix_ts_ms: int) -> int:
     result: int = (unix_ts_ms + (MILLISECONDS_IN_DAY - 1)) // MILLISECONDS_IN_DAY * MILLISECONDS_IN_DAY
     return result
 
+def round_unix_ts_ms_to_start_of_day(unix_ts_ms: int) -> int:
+    result: int = unix_ts_ms // MILLISECONDS_IN_DAY * MILLISECONDS_IN_DAY
+    return result
+
 def format_bytes(size: int):
     units = [
         (1 << 40, 'TB'),

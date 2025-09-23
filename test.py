@@ -48,16 +48,19 @@ def test_backend_same_user_stacks_subscription():
         subscription_duration_s: int                          = 0
         proof:                   backend.ProSubscriptionProof = dataclasses.field(default_factory=backend.ProSubscriptionProof)
         payment_provider:        base.PaymentProvider         = base.PaymentProvider.Nil
+        expiry_unix_ts_ms:       int                          = 0
 
     scenarios: list[Scenario] = [
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  subscription_duration_s = 30 * base.SECONDS_IN_DAY,
+                 expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
                  payment_provider        = base.PaymentProvider.GooglePlayStore),
 
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  subscription_duration_s = 365 * base.SECONDS_IN_DAY,
+                 expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
                  payment_provider        = base.PaymentProvider.GooglePlayStore)
     ]
 
@@ -72,6 +75,7 @@ def test_backend_same_user_stacks_subscription():
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                        payment_tx=payment_tx,
                                        subscription_duration_s=it.subscription_duration_s,
+                                       expiry_unix_ts_ms=it.expiry_unix_ts_ms,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -80,8 +84,7 @@ def test_backend_same_user_stacks_subscription():
         assert unredeemed_payment_list[0].status                  == backend.PaymentStatus.Unredeemed
         assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
         assert unredeemed_payment_list[0].redeemed_unix_ts_ms     == None
-        assert unredeemed_payment_list[0].activated_unix_ts_ms    == None
-        assert unredeemed_payment_list[0].expired_unix_ts_ms      == None
+        assert unredeemed_payment_list[0].expiry_unix_ts_ms       == it.expiry_unix_ts_ms
         assert unredeemed_payment_list[0].refunded_unix_ts_ms     == None
         assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].google_order_id         == it.google_order_id
@@ -99,16 +102,16 @@ def test_backend_same_user_stacks_subscription():
                                                                     rotating_pkey=rotating_key.verify_key,
                                                                     payment_tx=add_pro_payment_tx)
 
-        it.proof = backend.add_pro_payment(version            = version,
-                                           sql_conn           = db.sql_conn,
-                                           signing_key        = backend_key,
+        it.proof = backend.add_pro_payment(version             = version,
+                                           sql_conn            = db.sql_conn,
+                                           signing_key         = backend_key,
                                            redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                           master_pkey        = master_key.verify_key,
-                                           rotating_pkey      = rotating_key.verify_key,
-                                           payment_tx         = add_pro_payment_tx,
-                                           master_sig         = master_key.sign(add_payment_hash).signature,
-                                           rotating_sig       = rotating_key.sign(add_payment_hash).signature,
-                                           err                = err)
+                                           master_pkey         = master_key.verify_key,
+                                           rotating_pkey       = rotating_key.verify_key,
+                                           payment_tx          = add_pro_payment_tx,
+                                           master_sig          = master_key.sign(add_payment_hash).signature,
+                                           rotating_sig        = rotating_key.sign(add_payment_hash).signature,
+                                           err                 = err)
 
         # Verify payment was redeemed
         unredeemed_payment_list = backend.get_unredeemed_payments_list(db.sql_conn)
@@ -121,17 +124,16 @@ def test_backend_same_user_stacks_subscription():
     assert len(user_list)                          == 1
     assert user_list[0].master_pkey                == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                  == runtime.gen_index - 1
-    assert user_list[0].expiry_unix_ts_ms          == redeemed_unix_ts_ms + ((scenarios[0].subscription_duration_s + scenarios[1].subscription_duration_s + base.SECONDS_IN_DAY) *  1000)
+    assert user_list[0].expiry_unix_ts_ms          == scenarios[1].expiry_unix_ts_ms
 
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
-    assert payment_list[0].redeemed_unix_ts_ms              == redeemed_unix_ts_ms
-    assert payment_list[0].activated_unix_ts_ms             == redeemed_unix_ts_ms
-    assert payment_list[0].expired_unix_ts_ms               is None
-    assert payment_list[0].refunded_unix_ts_ms              is None
+    assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
+    assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
+    assert payment_list[0].refunded_unix_ts_ms             is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -140,10 +142,9 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
-    assert payment_list[1].redeemed_unix_ts_ms              == redeemed_unix_ts_ms
-    assert payment_list[1].activated_unix_ts_ms             == None
-    assert payment_list[1].expired_unix_ts_ms               is None
-    assert payment_list[1].refunded_unix_ts_ms              is None
+    assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
+    assert payment_list[1].expiry_unix_ts_ms               == scenarios[1].expiry_unix_ts_ms
+    assert payment_list[1].refunded_unix_ts_ms             is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -152,13 +153,9 @@ def test_backend_same_user_stacks_subscription():
     revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.sql_conn)
     assert len(revocation_list)                            == 1
     assert revocation_list[0].gen_index                    == 0
-    assert revocation_list[0].expiry_unix_ts_ms             == redeemed_unix_ts_ms + ((scenarios[0].subscription_duration_s + base.SECONDS_IN_DAY) * 1000)
+    assert revocation_list[0].expiry_unix_ts_ms            == scenarios[0].expiry_unix_ts_ms
 
-    assert isinstance(payment_list[0].activated_unix_ts_ms, int)
-
-    expire_unix_ts_ms: int                  = base.round_unix_ts_ms_to_next_day(payment_list[0].activated_unix_ts_ms + ((payment_list[0].subscription_duration_s + 1) * 1000))
-    expire_result:     backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn,
-                                                                                           unix_ts_ms=expire_unix_ts_ms)
+    expire_result:     backend.ExpireResult = backend.expire_payments_revocations_and_users(db.sql_conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
     assert expire_result.already_done_by_someone_else == False
     assert expire_result.success                      == True
     assert expire_result.payments                     == 1
@@ -192,6 +189,8 @@ def test_server_add_payment_flow():
                                                    server_x25519_pkey=server_x25519_skey.public_key)
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
+    unix_ts_ms: int                 = int(time.time() * 1000)
+    next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     master_key                      = nacl.signing.SigningKey.generate()
     rotating_key                    = nacl.signing.SigningKey.generate()
     payment_tx                      = backend.PaymentProviderTransaction()
@@ -199,23 +198,22 @@ def test_server_add_payment_flow():
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     payment_tx.google_order_id      = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                    payment_tx=payment_tx,
-                                    subscription_duration_s=30 * base.SECONDS_IN_DAY,
-                                    err=err)
+                                   payment_tx=payment_tx,
+                                   subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                   expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                   err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
     first_gen_index_hash:   bytes = b''
     first_expiry_unix_ts_ms: int = 0
     if 1: # Grab the pro status before anything has happened
         version:      int   = 0
-        unix_ts_ms:   int   = int(time.time() * 1000)
         history:      bool  = True
         hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
-
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms':   unix_ts_ms,
+                      'unix_ts_ms':  unix_ts_ms,
                       'history':     history}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
@@ -260,19 +258,19 @@ def test_server_add_payment_flow():
                                                                         payment_tx=add_pro_payment_tx)
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                               shared_key=shared_key,
-                                               endpoint=server.ROUTE_ADD_PRO_PAYMENT,
-                                               request_body={
-                                                   'version':              version,
-                                                   'master_pkey':          bytes(master_key.verify_key).hex(),
-                                                   'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
-                                                   'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-                                                   'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-                                                   'payment_tx': {
-                                                       'provider':             add_pro_payment_tx.provider.value,
-                                                       'google_payment_token': add_pro_payment_tx.google_payment_token,
-                                                   }
-                                               })
+                                                  shared_key=shared_key,
+                                                  endpoint=server.ROUTE_ADD_PRO_PAYMENT,
+                                                  request_body={
+                                                      'version':              version,
+                                                      'master_pkey':          bytes(master_key.verify_key).hex(),
+                                                      'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+                                                      'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                                      'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                                      'payment_tx': {
+                                                          'provider':             add_pro_payment_tx.provider.value,
+                                                          'google_payment_token': add_pro_payment_tx.google_payment_token,
+                                                      }
+                                                  })
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -296,7 +294,7 @@ def test_server_add_payment_flow():
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
@@ -390,9 +388,10 @@ def test_server_add_payment_flow():
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
         new_payment_tx.google_order_id      = os.urandom(len(payment_tx.google_payment_token)).hex()
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                        payment_tx=new_payment_tx,
-                                        subscription_duration_s=30 * base.SECONDS_IN_DAY,
-                                        err=err)
+                                       payment_tx=new_payment_tx,
+                                       subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                       expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                       err=err)
 
         new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
         new_add_pro_payment_tx.provider             = new_payment_tx.provider
@@ -440,7 +439,7 @@ def test_server_add_payment_flow():
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 

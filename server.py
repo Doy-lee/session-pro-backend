@@ -271,18 +271,12 @@ API
         status:                  1 byte integer describing the status of the consumption of the
                                  payment for Session Pro with the following mapping:
                                    2 => Redeemed
-                                        Payment was recognised by the backend and is in queue to be
-                                        activated for Session Pro entitlement. Most users payments
-                                        immediately transition from redeemed to activated as they
-                                        should generally only have 1 active payment at a time.
-                                   3 => Activated
-                                        Payment was activated and the subscription duration is
-                                        actively being consumed to provide a user Session Pro
-                                        entitlement.
-                                   4 => Expired
+                                        Payment was recognised by the backend and is being used for
+                                        Session Pro entitlement.
+                                   3 => Expired
                                         Session Pro entitlement has expired and is no longer being
                                         provided for this payment
-                                   5 => Refunded
+                                   4 => Refunded
                                         User has successfully refunded the payment and Session Pro
                                         entitlement is no longer available
         subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
@@ -291,18 +285,12 @@ API
                                  registered is coming from with the following mapping:
                                    1 => Google Play Store
                                    2 => Apple iOS App Store
-        activated_unix_ts_ms:    8 byte unix timestamp indicating if the payment is has been
-                                 activated to enable entitlement to Session Pro before. 0 if the
-                                 payment has never been activated (e.g.: This account has another
-                                 subscription that is active already and being consumed first, or,
-                                 the payment was refunded before it could be activated e.t.c).
-        expired_unix_ts_ms:      8 byte unix timestamp indicating when the payment was expired. 0 if
-                                 it never expired.
+        expiry_unix_ts_ms:       8 byte unix timestamp indicating when the payment is due to expire.
         redeemed_unix_ts_ms:     8 byte unix timestamp indicating when the payment was registered.
                                  This timestamp is rounded up to the next day boundary from the
                                  actual registration date.
-        refunded_unix_ts_ms:     8 byte unix timestamp indicating when the payment was expired. 0 if
-                                 it never expired.
+        refunded_unix_ts_ms:     8 byte unix timestamp indicating when the payment was refunded. 0
+                                 if it never refunded.
         google_payment_token:    When payment provider is Google Play Store, a string which is set
                                  to the platform-specific purchase token for the subscription.
         google_order_id:         When payment provider is Google Play Store, a string which is set
@@ -334,8 +322,7 @@ API
               "status": 3,
               "subscription_duration_s": 2592000,
               "payment_provider": 2
-              "activated_unix_ts_ms": 1755734400000,
-              "expired_unix_ts_ms": 0,
+              "expiry_unix_ts_ms": 0,
               "redeemed_unix_ts_ms": 1755734400000,
               "refunded_unix_ts_ms": 0,
               "apple_original_tx_id": "123456789011121",
@@ -485,17 +472,17 @@ def add_pro_payment():
 
     # Submit the payment to the DB
     with open_db_from_flask_request_context(flask.current_app) as db:
-        redeemed_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
-        proof                    = backend.add_pro_payment(sql_conn            = db.sql_conn,
-                                                           version             = version,
-                                                           signing_key         = db.runtime.backend_key,
-                                                           redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                                           master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                           rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                           payment_tx          = user_payment,
-                                                           master_sig          = master_sig_bytes,
-                                                           rotating_sig        = rotating_sig_bytes,
-                                                           err                 = err)
+        unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
+        proof           = backend.add_pro_payment(sql_conn      = db.sql_conn,
+                                                  version       = version,
+                                                  signing_key   = db.runtime.backend_key,
+                                                  redeemed_unix_ts_ms    = unix_ts_ms,
+                                                  master_pkey   = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                  rotating_pkey = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                  payment_tx    = user_payment,
+                                                  master_sig    = master_sig_bytes,
+                                                  rotating_sig  = rotating_sig_bytes,
+                                                  err           = err)
 
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
@@ -668,9 +655,8 @@ def get_pro_payments():
             has_payments = False
             for row in list_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
-                # initially and every payment we come across, if they have an active payment (of
-                # which there should only be 1 activated payment at a time) in their current
-                # history, we report them as active.
+                # initially and every payment we come across, if they have a redeemed payment
+                # in their current history, we report them as active.
                 if not has_payments:
                     user_pro_status = UserProStatus.Expired
                     has_payments    = True
@@ -679,14 +665,13 @@ def get_pro_payments():
                 subscription_duration_s: int   = row[2]
                 payment_provider               = base.PaymentProvider(row[3])
                 redeemed_unix_ts_ms:     int   = row[4]
-                activated_unix_ts_ms:    int   = row[5]  if row[5]  else 0
-                expired_unix_ts_ms:      int   = row[6]  if row[6]  else 0
-                refunded_unix_ts_ms:     int   = row[7]  if row[7]  else 0
-                apple_original_tx_id:    str   = row[8]  if row[8]  else ''
-                apple_tx_id:             str   = row[9]  if row[9]  else ''
-                apple_web_line_order_id: str   = row[10] if row[10] else ''
-                google_payment_token:    str   = row[11] if row[11] else ''
-                google_order_id:         str   = row[12] if row[12] else ''
+                expiry_unix_ts_ms:       int   = row[5]  if row[5]  else 0
+                refunded_unix_ts_ms:     int   = row[6]  if row[6]  else 0
+                apple_original_tx_id:    str   = row[7]  if row[7]  else ''
+                apple_tx_id:             str   = row[8]  if row[8]  else ''
+                apple_web_line_order_id: str   = row[9]  if row[9]  else ''
+                google_payment_token:    str   = row[10] if row[10] else ''
+                google_order_id:         str   = row[11] if row[11] else ''
 
                 # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                 # confidential until the user actually registers the token themselves which they
@@ -703,8 +688,7 @@ def get_pro_payments():
                             'status':                  int(status.value),
                             'subscription_duration_s': subscription_duration_s,
                             'payment_provider':        int(payment_provider.value),
-                            'activated_unix_ts_ms':    activated_unix_ts_ms,
-                            'expired_unix_ts_ms':      expired_unix_ts_ms,
+                            'expiry_unix_ts_ms':       expiry_unix_ts_ms,
                             'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
                             'refunded_unix_ts_ms':     refunded_unix_ts_ms,
                             'google_payment_token':    google_payment_token,
@@ -715,8 +699,7 @@ def get_pro_payments():
                             'status':                  int(status.value),
                             'subscription_duration_s': subscription_duration_s,
                             'payment_provider':        int(payment_provider.value),
-                            'activated_unix_ts_ms':    activated_unix_ts_ms,
-                            'expired_unix_ts_ms':      expired_unix_ts_ms,
+                            'expiry_unix_ts_ms':       expiry_unix_ts_ms,
                             'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
                             'refunded_unix_ts_ms':     refunded_unix_ts_ms,
                             'apple_original_tx_id':    apple_original_tx_id,
@@ -725,7 +708,7 @@ def get_pro_payments():
                         })
 
                 # NOTE: Determine pro status if it is a relevant
-                if status == backend.PaymentStatus.Activated:
+                if status == backend.PaymentStatus.Redeemed:
                     user_pro_status = UserProStatus.Active
 
                 # NOTE: If we determine that the user is active and the user didn't request for
