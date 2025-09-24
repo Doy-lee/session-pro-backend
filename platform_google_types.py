@@ -57,7 +57,6 @@ class SubscriptionNotificationType(IntEnum):
     # A subscription's consent period for price step-up has begun or the user has provided consent for the price step-up. This RTDN is sent only for subscriptions in a region where price step-up is required.
     SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED = 22
 
-
 class ProductType(IntEnum):
     """Product types for voided purchases"""
     # A subscription purchase has been voided.
@@ -380,6 +379,13 @@ class SubscriptionV2Data:
     # User profile associated with purchases made with 'Subscribe with Google'.
     # subscribe_with_google_info:  SubscriptionV2SubscribeWithGoogleInfo
 
+
+@dataclasses.dataclass
+class SubscriptionProductDetails:
+    # Duration of the subscription. In seconds.
+    billing_period_s: int
+    # Duration an auto-renewing (non-canceled) subscriptions entitlement continues after the subscription expires. Usually for billing issues. In milliseconds.
+    grace_period_ms: int
 
 def json_dict_require_google_money(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
     price_obj = base.json_dict_require_obj(d, key, err)
