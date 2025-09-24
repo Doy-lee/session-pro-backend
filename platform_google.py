@@ -1,17 +1,21 @@
 import json
 import logging
 import os
+import sqlite3
 import sys
 import typing
 
 from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
 
+import backend
 import base
+from backend import PaymentProviderTransaction, AddRevocationItem
 from base import json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
-    json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum
+    json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, \
+    parse_enum_to_str, obfuscate, get_now_ms
 
 import env
 
@@ -30,7 +34,7 @@ from platform_google_types import SubscriptionNotificationType, \
     SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason, \
     SubscriptionsV2SubscriptionCanceledStateContextUser, \
     SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse, SubscriptionsV2SubscriptionCanceledStateContext, \
-    json_dict_optional_google_empty_object_bool
+    json_dict_optional_google_empty_object_bool, SubscriptionProductDetails
 
 SCOPES = ['https://www.googleapis.com/auth/androidpublisher']
 
@@ -42,6 +46,115 @@ def create_service():
 
     service = build('androidpublisher', 'v3', credentials=credentials)
     return service
+
+
+def get_subscription_info(package_name: str, product_id: str, err: base.ErrorSink):
+    service = create_service()
+    result = None
+    try:
+        response = service.monetization().subscriptions().get(
+            packageName=package_name,
+            productId=product_id
+        ).execute()
+
+        result = response
+    except Exception as e:
+        err.msg_list.append(f'Failed to get subscription details: {e}')
+
+    # assert result is None if err.has() else isinstance(result, SubscriptionV2Data)
+    return result
+
+
+def get_subscription_details_for_product_id(package_name: str, product_id: str, err: base.ErrorSink) -> dict[str, SubscriptionProductDetails] | None:
+    result = None
+
+    subscriptions = get_subscription_info(package_name, product_id, err)
+    if subscriptions is None:
+        return result
+
+    base_plans = json_dict_require_array(subscriptions, "basePlans", err)
+
+    for plan in base_plans:
+        base_plan_id = json_dict_require_str(plan, "basePlanId", err)
+        auto_renewing_base_plan_type = json_dict_optional_obj(plan, "autoRenewingBasePlanType", err)
+        grace_period_duration = json_dict_require_str(auto_renewing_base_plan_type, "gracePeriodDuration", err)
+        billing_period_duration = json_dict_require_str(auto_renewing_base_plan_type, "billingPeriodDuration", err)
+
+        if grace_period_duration[0] != "P":
+            err.msg_list.append(f'Grace period duration must be ISO 8601 format but does not start with "P" ({grace_period_duration[0]})')
+        if grace_period_duration[-1] != "D":
+            err.msg_list.append(f'Grace period duration must be ISO 8601 format but does not end with "D" ({grace_period_duration[-0]})')
+
+        billing_period_unit = billing_period_duration[-1]
+
+        if billing_period_duration[0] != "P":
+            err.msg_list.append(f'Billing period duration must be ISO 8601 format but does not start with "P" ({billing_period_duration[0]})')
+        if billing_period_unit not in ["D", "M", "Y"]:
+            err.msg_list.append(f'Billing period duration must be ISO 8601 format but does not end with "D", "M" or "Y" ({billing_period_unit})')
+
+        if err.has():
+            continue
+
+        grace_period_days_str = grace_period_duration[1:-1]
+        grace_period_ms = None
+        try:
+            grace_period_days = int(grace_period_days_str)
+            if grace_period_days < 0:
+                err.msg_list.append(f'Grace period cannot be less than 0: {grace_period_days}')
+            else:
+                grace_period_ms = grace_period_days * base.MILLISECONDS_IN_DAY
+        except Exception as e:
+            err.msg_list.append(f'Failed to parse grace period days "{grace_period_days_str}": {e}')
+
+        billing_period_n_str = billing_period_duration[1:-1]
+        billing_period_n_int = None
+        try:
+            billing_period_n_int = int(billing_period_n_str)
+            if billing_period_n_int < 0:
+                err.msg_list.append(f'Billing period cannot be less than 0: {billing_period_n_int}')
+        except Exception as e:
+            err.msg_list.append(f'Failed to parse billing period "{billing_period_n_str}": {e}')
+
+        if err.has():
+            continue
+
+        billing_period_s = None
+        match billing_period_unit:
+            case "D":
+                billing_period_s = billing_period_n_int * base.SECONDS_IN_DAY
+            case "M":
+                billing_period_s = billing_period_n_int * base.SECONDS_IN_MONTH
+            case "Y":
+                billing_period_s = billing_period_n_int * base.SECONDS_IN_YEAR
+            case _:
+                err.msg_list.append(f'Unsupported billing period unit: {billing_period_unit}')
+
+        if err.has():
+            continue
+
+        if result is None:
+            result = {}
+
+        result[base_plan_id] = SubscriptionProductDetails(
+            billing_period_s=billing_period_s,
+            grace_period_ms=grace_period_ms,
+        )
+
+    return result
+
+
+def get_subscription_details_for_plan(plan_id: str, err: base.ErrorSink):
+    details = get_subscription_details_for_product_id(platform_config.google_package_name, platform_config.google_subscription_product_id, err)
+    if details is None:
+        err.msg_list.append(f'Failed to get details for {platform_config.google_package_name} and {platform_config.google_subscription_product_id}')
+
+    plan_details = details[plan_id] if plan_id in details else None
+
+    if plan_details is None:
+        err.msg_list.append(f'Unable to find plan details for plan_id {plan_id}')
+
+    return plan_details
+
 
 def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
     """
@@ -309,11 +422,139 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
 def handle_not_implemented(name: str, err: base.ErrorSink):
     err.msg_list.append(f"'{name}' is not implemented!")
 
+def get_line_item(details: SubscriptionV2Data, err: base.ErrorSink):
+    result = None
+    if len(details.line_items) == 0:
+        err.msg_list.append(f"No line items for subscription!")
+    else:
+        line_item = details.line_items[0]
+        if line_item is None:
+            err.msg_list.append(f"No line item for subscription!")
+        else:
+            result = line_item
+    return result
 
-def handle_notification(body:dict, err: base.ErrorSink):
+def queue_user_entitlement_amend(purchase_token: str, details: SubscriptionV2Data, err: base.ErrorSink):
+    line_item = get_line_item(details, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+    details = get_subscription_details_for_plan(line_item.product_id, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+    tx = PaymentProviderTransaction(
+        provider=base.PaymentProvider.GooglePlayStore,
+        google_order_id=line_item.offer_details.offer_id,
+        google_payment_token=purchase_token,
+    )
+
+    sql_conn = sqlite3.connect(env.SESH_PRO_BACKEND_DB_PATH)
+
+    backend.update_payment_unix_ts_ms(
+        sql_conn=sql_conn,
+        payment_tx=tx,
+        grace_unix_ts_ms=details.grace_period_ms,
+        expiry_unix_ts_ms=line_item.expiry_time.unix_milliseconds,
+        err=err,
+    )
+
+
+def queue_user_entitlement_remove_grace_period(purchase_token: str, details: SubscriptionV2Data, err: base.ErrorSink):
+    line_item = get_line_item(details, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+    details = get_subscription_details_for_plan(line_item.product_id, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+    tx = PaymentProviderTransaction(
+        provider=base.PaymentProvider.GooglePlayStore,
+        google_order_id=line_item.offer_details.offer_id,
+        google_payment_token=purchase_token,
+    )
+
+    sql_conn = sqlite3.connect(env.SESH_PRO_BACKEND_DB_PATH)
+
+    backend.update_payment_unix_ts_ms(
+        sql_conn=sql_conn,
+        payment_tx=tx,
+        grace_unix_ts_ms=0,
+        expiry_unix_ts_ms=line_item.expiry_time.unix_milliseconds,
+        err=err,
+    )
+
+
+def queue_user_entitlement_grant(purchase_token: str, details: SubscriptionV2Data, err: base.ErrorSink):
+    line_item = get_line_item(details, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+    details = get_subscription_details_for_plan(line_item.product_id, err)
+
+    if err.has():
+        err.msg_list.append(f'Failed to add user entitlement for {purchase_token}')
+        return
+
+
+    tx = PaymentProviderTransaction(
+        provider=base.PaymentProvider.GooglePlayStore,
+        google_order_id=line_item.offer_details.offer_id,
+        google_payment_token=purchase_token,
+    )
+
+    sql_conn = sqlite3.connect(env.SESH_PRO_BACKEND_DB_PATH)
+
+    backend.add_unredeemed_payment(
+        sql_conn=sql_conn,
+        payment_tx=tx,
+        subscription_duration_s=details.billing_period_s,
+        grace_unix_ts_ms=details.grace_period_ms,
+        expiry_unix_ts_ms=line_item.expiry_time.unix_milliseconds,
+        err=err,
+    )
+
+
+def queue_user_entitlement_revoke(details: SubscriptionV2Data, err: base.ErrorSink):
+    line_item = get_line_item(details, err)
+    if err.has():
+        err.msg_list.append(f'Failed to revoke entitlement')
+        return
+
+    sql_conn = sqlite3.connect(env.SESH_PRO_BACKEND_DB_PATH)
+
+    revocation = AddRevocationItem(
+        payment_provider=base.PaymentProvider.GooglePlayStore,
+        tx_id=line_item.offer_details.offer_id,
+    )
+
+    if err.has():
+        err.msg_list.append(f'Failed to revoke entitlement')
+        return
+
+    backend.add_revocation(
+        sql_conn=sql_conn,
+        revocation=revocation,
+    )
+
+
+def handle_notification(body: dict, err: base.ErrorSink):
         body_version = json_dict_require_str(body, "version", err)
         package_name = json_dict_require_str(body, "packageName", err)
         event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
+
+        now_ms = get_now_ms()
 
         if package_name != platform_config.google_package_name:
             err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
@@ -351,67 +592,119 @@ def handle_notification(body:dict, err: base.ErrorSink):
 
             assert subscription_notification_type is not None
 
+            details = get_subscription_v2(package_name, purchase_token, err)
+
+            if err.has():
+                err.msg_list.append(f'Parsing purchase token {obfuscate(purchase_token)} failed')
+                return
+
+            assert details is not None
+
+            acknowledgement_state = details.acknowledgement_state
+            if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+                err.msg_list.append(f'Message is already acknowledged')
+
+            if err.has():
+                return
+
             match subscription_notification_type:
-                case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED:
-                    handle_not_implemented("SUBSCRIPTION_RECOVERED", err)
-                case SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
-                    handle_not_implemented("SUBSCRIPTION_RENEWED", err)
+                case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
+                    if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+
+                    if not err.has():
+                        queue_user_entitlement_grant(purchase_token, details, err)
+
                 case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
-                    handle_not_implemented("SUBSCRIPTION_CANCELED", err)
+                    if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED:
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+
+                    if not err.has():
+                        queue_user_entitlement_remove_grace_period(purchase_token, details, err)
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
-                    details = get_subscription_v2(package_name, purchase_token, err)
+                    """
+                    These are the steps documented by Google:
+                    When a user purchases a subscription, a SubscriptionNotification message with type SUBSCRIPTION_PURCHASED is sent to your RTDN client. Whether you receive this notification or you register a new purchase in-app through PurchasesUpdatedListener or manually fetching purchases in your app's onResume() method, you should process the new purchase in your secure backend. To do this, follow these steps:
+                    1. Query the purchases.subscriptionsv2.get endpoint to get a subscription resource that contains the latest subscription state.
+                    2. Make sure that the value of the subscriptionState field is SUBSCRIPTION_STATE_ACTIVE.
+                    3. Verify the purchase.
+                    4. Give the user access to the content. The user account associated with the purchase can be identified with the ExternalAccountIdentifiers object from the subscription resource if identifiers were set at purchase time using setObfuscatedAccountId and setObfuscatedProfileId.
+                    """
+                    if details.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
+                        # TODO: maybe we want to handle pending state differently
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}. This can be ignored.')
+                    elif details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
 
-                    if err.has():
-                        err.msg_list.append(f'Parsing purchase token {purchase_token} failed')
-                        return
+                    if not err.has():
+                        if details.linked_purchase_token is not None:
+                            queue_user_entitlement_revoke(details, err)
+                            if err.has():
+                                err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
 
-                    assert details is not None
+                        if not err.has():
+                            queue_user_entitlement_grant(purchase_token, details, err)
 
-                    acknowledgement_state = details.acknowledgement_state
-                    if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
-                        err.msg_list.append(f'Message is already acknowledged')
-
-                    # TODO: if linked_purchase_token exits we need to revoke the old subscription proof
-
-                    if details.test_purchase is not None:
-                        print(details.test_purchase)
-
-                    if err.has():
-                        return
-
-                    # match subscription_state:
-                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED:
-                    #         subscription_state = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
-                    #     case SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
-
-
-                    handle_not_implemented("SUBSCRIPTION_PURCHASED", err)
                 case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
-                    handle_not_implemented("SUBSCRIPTION_ON_HOLD", err)
+                    # No entitlement change required
+                    pass
+
                 case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
-                    handle_not_implemented("SUBSCRIPTION_IN_GRACE_PERIOD", err)
+                    # No entitlement change required
+                    pass
+
                 case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
-                    handle_not_implemented("SUBSCRIPTION_RESTARTED", err)
+                    if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+
+                    if not err.has():
+                        queue_user_entitlement_amend(purchase_token, details, err)
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
-                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_CONFIRMED", err)
+                    # No entitlement change required
+                    pass
+
                 case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
-                    err.msg_list.append(f'subscription notificationType SUBSCRIPTION_DEFERRED ({subscription_notification_type}) is unsupported!')
+                    err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
-                    handle_not_implemented("SUBSCRIPTION_PAUSED", err)
+                    err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
-                    handle_not_implemented("SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED", err)
+                    err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+
                 case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
-                    handle_not_implemented("SUBSCRIPTION_REVOKED", err)
+                    if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+                        err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+
+                    if not err.has():
+                        queue_user_entitlement_revoke(details, err)
+
                 case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
-                    handle_not_implemented("SUBSCRIPTION_EXPIRED", err)
+                    # No entitlement change required
+                    pass
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
-                    handle_not_implemented("SUBSCRIPTION_PRICE_CHANGE_UPDATED", err)
+                    # No entitlement change required
+                    pass
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PENDING_PURCHASE_CANCELED:
-                    handle_not_implemented("SUBSCRIPTION_PENDING_PURCHASE_CANCELED", err)
+                    line_item = get_line_item(details, err)
+                    # TODO: Collect cancel reason
+                    if not err.has() and line_item.expiry_time.unix_milliseconds < now_ms:
+                        queue_user_entitlement_revoke(details, err)
+
                 case SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
-                    handle_not_implemented("SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED", err)
+                    # No entitlement change required
+                    pass
+
                 case _:
-                    err.msg_list.append(f'subscription notificationType is invalid: {subscription_notification_type}')
+                    err.msg_list.append(f'subscription notificationType is invalid: {parse_enum_to_str(subscription_notification_type)}')
+
+            if err.has():
+                err.msg_list.append(f'Failed to handle {parse_enum_to_str(details.subscription_state)} for token {obfuscate(purchase_token)}')
+                return
 
         elif is_voided_notification:
             purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
@@ -428,16 +721,16 @@ def handle_notification(body:dict, err: base.ErrorSink):
                 case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
                     match refund_type:
                         case RefundType.REFUND_TYPE_FULL_REFUND:
-                            handle_not_implemented("handle_subscription_refund", err)
+                            handle_not_implemented(parse_enum_to_str(refund_type), err)
                         case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
                             # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesnt relate to subscriptions
-                            err.msg_list.append(f'voided purchase refundType REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND ({refund_type}) is unsupported!')
+                            err.msg_list.append(f'voided purchase refundType {parse_enum_to_str(refund_type)} is unsupported!')
                         case _:
-                            err.msg_list.append(f'voided purchase refundType is not valid: {refund_type}')
+                            err.msg_list.append(f'voided purchase refundType is not valid: {parse_enum_to_str(refund_type)}')
                 case ProductType.PRODUCT_TYPE_ONE_TIME:
-                    err.msg_list.append(f'voided purchase productType PRODUCT_TYPE_ONE_TIME ({product_type}) is unsupported!')
+                    err.msg_list.append(f'voided purchase productType {parse_enum_to_str(product_type)} is unsupported!')
                 case _:
-                    err.msg_list.append(f'voided purchase productType is not valid: {product_type}')
+                    err.msg_list.append(f'voided purchase productType is not valid: {parse_enum_to_str(product_type)}')
 
         elif is_one_time_product_notification:
             err.msg_list.append(f'one time product is not supported!')
@@ -508,6 +801,8 @@ def entry_point():
 
     if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
         raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
+
+    env.SESH_PRO_BACKEND_DB_PATH  = os.getenv('SESH_PRO_BACKEND_DB_PATH', './backend.db')
 
     env.SESH_PRO_BACKEND_UNSAFE_LOGGING = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
 

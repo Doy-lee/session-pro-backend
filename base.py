@@ -4,12 +4,15 @@ have no dependency on any project files, only, native Python packages. Typically
 functionality from the testing suite and the project but not limited to.
 '''
 import json
+import time
 import traceback
 import sqlite3
 import datetime
 import typing
 import enum
 import dataclasses
+from math import floor
+
 import env
 
 class PaymentProvider(enum.Enum):
@@ -19,6 +22,10 @@ class PaymentProvider(enum.Enum):
 
 SECONDS_IN_DAY:      int       = 60 * 60 * 24
 MILLISECONDS_IN_DAY: int       = 60 * 60 * 24 * 1000
+MILLISECONDS_IN_MONTH: int     = MILLISECONDS_IN_DAY * 30
+SECONDS_IN_MONTH: int          = SECONDS_IN_DAY * 30
+MILLISECONDS_IN_YEAR: int      = MILLISECONDS_IN_DAY * 365
+SECONDS_IN_YEAR: int           = SECONDS_IN_DAY * 365
 DEV_BACKEND_MODE:    bool      = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 
@@ -217,6 +224,36 @@ def format_seconds(duration_s: int):
         result += "{}{}m".format(" " if len(result) > 0 else "", minutes)
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
+
+def get_now_ms():
+    return time.time_ns() // 1_000_000
+
+def obfuscate(val: str) -> str:
+    """
+    obfuscate a string to contain the first and last 20% of the original string
+    """
+    n_ends = max(floor(len(val) * 0.2), 1)
+    return f"{val[:n_ends]}…{val[-n_ends:]}"
+
+def parse_enum_to_str(enum_value: typing.Union[enum.IntEnum, enum.StrEnum]) -> str:
+    """
+    Convert an IntEnum or StrEnum instance to its string name for logging.
+
+    Args:
+        enum_value: An instance of IntEnum or StrEnum
+
+    Returns:
+        The name of the enum member as a string
+    """
+    name = ''
+    value = None
+    if isinstance(enum_value, (enum.IntEnum, enum.StrEnum)):
+        name = enum_value.name
+
+    if isinstance(enum_value, enum.IntEnum):
+        value = enum_value.value
+
+    return f'{name} ({value})' if value is not None else name
 
 def safe_dump_dict_keys_or_data(d: dict) -> str:
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
