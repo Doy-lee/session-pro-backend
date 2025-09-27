@@ -8,6 +8,7 @@ import collections.abc
 import datetime
 import enum
 import dataclasses
+import random
 
 import base
 
@@ -1117,11 +1118,17 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             internal_payment_tx.apple_original_tx_id        = ''
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}')
+
+        # Randomly apply a grace period
+        apply_grace       = bool(random.getrandbits(1))
+        expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
+        grace_unix_ts_ms  = expiry_unix_ts_ms   + (60 * 1000) if apply_grace else 0
+
         add_unredeemed_payment(sql_conn=sql_conn,
                                payment_tx=internal_payment_tx,
                                subscription_duration_s=base.SECONDS_IN_DAY * 30,
-                               expiry_unix_ts_ms=redeemed_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                               grace_unix_ts_ms=0,
+                               expiry_unix_ts_ms=expiry_unix_ts_ms,
+                               grace_unix_ts_ms=grace_unix_ts_ms,
                                err=err)
 
     # Verify some of the request parameters
