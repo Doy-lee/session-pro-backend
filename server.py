@@ -486,16 +486,19 @@ def add_pro_payment():
     # Submit the payment to the DB
     with open_db_from_flask_request_context(flask.current_app) as db:
         unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
-        proof           = backend.add_pro_payment(sql_conn      = db.sql_conn,
-                                                  version       = version,
-                                                  signing_key   = db.runtime.backend_key,
-                                                  redeemed_unix_ts_ms    = unix_ts_ms,
-                                                  master_pkey   = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                  rotating_pkey = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                  payment_tx    = user_payment,
-                                                  master_sig    = master_sig_bytes,
-                                                  rotating_sig  = rotating_sig_bytes,
-                                                  err           = err)
+        if base.DEV_BACKEND_MODE:
+            unix_ts_ms = int(time.time() * 1000)
+
+        proof                                                         = backend.add_pro_payment(sql_conn      = db.sql_conn,
+                                                  version             = version,
+                                                  signing_key         = db.runtime.backend_key,
+                                                  redeemed_unix_ts_ms = unix_ts_ms,
+                                                  master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                  rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                  payment_tx          = user_payment,
+                                                  master_sig          = master_sig_bytes,
+                                                  rotating_sig        = rotating_sig_bytes,
+                                                  err                 = err)
 
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)

@@ -9,6 +9,7 @@ import datetime
 import enum
 import dataclasses
 import random
+import time
 
 import base
 
@@ -783,12 +784,18 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
 
             allocated: AllocatedGenID = allocate_new_gen_id_if_master_pkey_has_payments_internal(tx=tx, master_pkey=master_pkey)
             if allocated.found:
+                proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
+                if base.DEV_BACKEND_MODE:
+                    proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
+
                 result = build_proof(gen_index         = allocated.gen_index,
                                      rotating_pkey     = rotating_pkey,
-                                     expiry_unix_ts_ms = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms),
+                                     expiry_unix_ts_ms = proof_expiry_unix_ts_ms,
                                      signing_key       = signing_key,
                                      gen_index_salt    = allocated.gen_index_salt)
-                assert result.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {base.format_seconds(result.expiry_unix_ts_ms)}"
+
+                if not base.DEV_BACKEND_MODE:
+                    assert result.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {result.expiry_unix_ts_ms}"
             else:
                 err.msg_list.append(f'Failed to update DB after new payment was redeemed for {master_pkey}')
 
@@ -1120,12 +1127,12 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             internal_payment_tx.apple_web_line_order_tx_id  = ''
             internal_payment_tx.apple_original_tx_id        = payment_tx.apple_tx_id
 
-        print(f'Registering payment in DEV mode: {internal_payment_tx}')
+        print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
         # Randomly apply a grace period
-        apply_grace       = bool(random.getrandbits(1))
-        expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
-        grace_unix_ts_ms  = expiry_unix_ts_ms   + (60 * 1000) if apply_grace else 0
+        apply_grace         = bool(random.getrandbits(1))
+        expiry_unix_ts_ms   = redeemed_unix_ts_ms + (60 * 1000)
+        grace_unix_ts_ms    = expiry_unix_ts_ms   + (60 * 1000) if apply_grace else 0
 
         add_unredeemed_payment(sql_conn=sql_conn,
                                payment_tx=internal_payment_tx,
@@ -1159,8 +1166,9 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
     # specifying this argument, so clients should not be specifying this time,
     # ever, it should be generated and rounded up by the server hence the
     # assert.
-    assert redeemed_unix_ts_ms % (base.SECONDS_IN_DAY * 1000) == 0, \
-            "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
+    if not base.DEV_BACKEND_MODE:
+        assert redeemed_unix_ts_ms % (base.SECONDS_IN_DAY * 1000) == 0, \
+                "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
     proof: ProSubscriptionProof = redeem_payment(sql_conn=sql_conn,
