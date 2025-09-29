@@ -911,8 +911,11 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
             _ = tx.cursor.execute(f'''
                     SELECT 1
                     FROM payments
-                    WHERE AND payment_provider = ? AND apple_original_tx_id = ? AND apple_web_line_order_tx_id = ?
-            ''', (int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
+                    WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+            ''', (int(payment_tx.provider.value),
+                  payment_tx.apple_original_tx_id,
+                  payment_tx.apple_tx_id,
+                  payment_tx.apple_web_line_order_tx_id))
 
             record = tx.cursor.fetchone()
             if not record:
