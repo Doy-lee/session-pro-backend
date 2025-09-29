@@ -222,7 +222,7 @@ def safe_dump_dict_keys_or_data(d: dict) -> str:
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return json.dumps(d)
     else:
-        return ', '.join(d.keys())
+        return 'dictionary w/ keys: ' + ', '.join(d.keys())
 
 def safe_dump_arbitrary_value_or_type(v) -> str:
     t = type(v)

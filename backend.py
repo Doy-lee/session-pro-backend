@@ -1115,7 +1115,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         elif internal_payment_tx.provider == base.PaymentProvider.iOSAppStore:
             internal_payment_tx.apple_tx_id                 = payment_tx.apple_tx_id
             internal_payment_tx.apple_web_line_order_tx_id  = ''
-            internal_payment_tx.apple_original_tx_id        = ''
+            internal_payment_tx.apple_original_tx_id        = payment_tx.apple_tx_id
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}')
 
