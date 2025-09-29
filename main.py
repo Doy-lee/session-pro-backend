@@ -4,11 +4,11 @@ the DB and responding startup arguments before handing over control-flow to Flas
 
 This application has command line options that must be specified as environment variables because
 this application runs directly as a flask app (in a dev environment) and it also can be served over
-WSGI for a production usecase.
+UWSGI for a production use-case.
 
 We've designed the backend primarily for UWSGI which mounts the flask app with no possibility to
 forward command line arguments to the underlying application. Thus we cannot use argparse or flask's
-@click.options as there's no way to specify them in the uWSGI manifest hence the design decision to
+@click.options as there's no way to specify them in the UWSGI manifest hence the design decision to
 use environment variables.
 '''
 
@@ -179,12 +179,12 @@ def entry_point() -> flask.Flask:
     # out of the set should be running this thread to clean the DB.
     #
     # But this complicates the architecture _alot_ trying to get UWSGI to
-    # intelligently handle this, either by defining a a custom hook, or
+    # intelligently handle this, either by defining a custom hook, or
     # _multiple_ UWSGI instances, or running them under UWSGI emperor so that
     # you can then run 2 apps (100% more setup than 1 app!) for the backend.
     #
     # The trade-off in choosing that is unacceptable for managing Session Pro
-    # subscriptions which on paper is a very simple CRUD capplication.
+    # subscriptions which on paper is a very simple CRUD application.
     # Instead, I've embedded the periodic cleaning of the DB into the app
     # itself so that the entire stack is self-contained and hence monolithic.
     #
@@ -202,7 +202,7 @@ def entry_point() -> flask.Flask:
     thread = threading.Thread(target=backend_proof_expiry_thread_entry_point, args=(db_path,))
     thread.start()
 
-    # The flask runner/uWSGI takes over from here and runs the application for
+    # The flask runner/UWSGI takes over from here and runs the application for
     # us across multiple processes if necessary. We'll close our db connection
     # here. Each request we receive will open their own connection the DB.
     db.sql_conn.close()
