@@ -404,14 +404,14 @@ class UserProStatus(enum.Enum):
 
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
-CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
-CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
+FLASK_CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
+FLASK_CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
-ROUTE_ADD_PRO_PAYMENT     = '/add_pro_payment'
-ROUTE_GET_PRO_PROOF       = '/get_pro_proof'
-ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
-ROUTE_GET_PRO_STATUS      = '/get_pro_status'
+FLASK_ROUTE_ADD_PRO_PAYMENT     = '/add_pro_payment'
+FLASK_ROUTE_GET_PRO_PROOF       = '/get_pro_proof'
+FLASK_ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
+FLASK_ROUTE_GET_PRO_STATUS      = '/get_pro_status'
 
 RESPONSE_SUCCESS          = 0
 
@@ -458,14 +458,14 @@ def make_get_all_payments_hash(version: int, master_pkey: nacl.signing.VerifyKey
 def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
     result                                                      = flask.Flask(__name__)
     result.config['TESTING']                                    = testing_mode
-    result.config[CONFIG_DB_PATH_KEY]                           = db_path
-    result.config[CONFIG_DB_PATH_IS_URI_KEY]                    = db_path_is_uri
+    result.config[FLASK_CONFIG_DB_PATH_KEY]                     = db_path
+    result.config[FLASK_CONFIG_DB_PATH_IS_URI_KEY]              = db_path_is_uri
     result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
     result.register_blueprint(onion_req.flask_blueprint_v4)
     return result
 
-@flask_blueprint.route(ROUTE_ADD_PRO_PAYMENT, methods=['POST'])
+@flask_blueprint.route(FLASK_ROUTE_ADD_PRO_PAYMENT, methods=['POST'])
 def add_pro_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -532,14 +532,14 @@ def add_pro_payment():
     return result
 
 def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDBAtPath:
-    assert CONFIG_DB_PATH_KEY        in flask.current_app.config
-    assert CONFIG_DB_PATH_IS_URI_KEY in flask.current_app.config
-    db_path        = typing.cast(str, flask_app.config[CONFIG_DB_PATH_KEY])
-    db_path_is_uri = typing.cast(bool, flask_app.config[CONFIG_DB_PATH_IS_URI_KEY])
+    assert FLASK_CONFIG_DB_PATH_KEY        in flask.current_app.config
+    assert FLASK_CONFIG_DB_PATH_IS_URI_KEY in flask.current_app.config
+    db_path        = typing.cast(str, flask_app.config[FLASK_CONFIG_DB_PATH_KEY])
+    db_path_is_uri = typing.cast(bool, flask_app.config[FLASK_CONFIG_DB_PATH_IS_URI_KEY])
     result         = backend.OpenDBAtPath(db_path, db_path_is_uri)
     return result
 
-@flask_blueprint.route(ROUTE_GET_PRO_PROOF, methods=['POST'])
+@flask_blueprint.route(FLASK_ROUTE_GET_PRO_PROOF, methods=['POST'])
 def get_pro_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -599,7 +599,7 @@ def get_pro_proof() -> flask.Response:
     result = make_success_response(dict_result=proof.to_dict())
     return result
 
-@flask_blueprint.route(ROUTE_GET_PRO_REVOCATIONS, methods=['POST'])
+@flask_blueprint.route(FLASK_ROUTE_GET_PRO_REVOCATIONS, methods=['POST'])
 def get_pro_revocations():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
@@ -644,8 +644,7 @@ def get_pro_revocations():
     return result
 
 # TODO: we need to add the user_errors table changes to any endpoints that need to report a generic error to a user
-
-@flask_blueprint.route(ROUTE_GET_PRO_STATUS, methods=['POST'])
+@flask_blueprint.route(FLASK_ROUTE_GET_PRO_STATUS, methods=['POST'])
 def get_pro_payments():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)

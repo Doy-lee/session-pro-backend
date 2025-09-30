@@ -6,6 +6,7 @@ import backend
 import sqlite3
 import sys
 import time
+import dataclasses
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -28,8 +29,19 @@ from appstoreserverlibrary.signed_data_verifier import (
     SignedDataVerifier           as AppleSignedDataVerifier,
 )
 
-ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
-flask_blueprint                               = flask.Blueprint('session-pro-backend-apple', __name__)
+import server
+
+@dataclasses.dataclass
+class Core:
+    app_store_server_api_client: AppleAppStoreServerAPIClient
+    signed_data_verifier:        AppleSignedDataVerifier
+
+FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
+FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY                = 'session_pro_backend_platform_apple_core'
+
+# The object containing routes that you register onto a Flask app to turn it
+# into an app that accepts Apple iOS App Store subscription notifications
+flask_blueprint                                     = flask.Blueprint('session-pro-backend-apple', __name__)
 
 
 def get_pro_plan_type_from_apple_plan_id(plan_id: str, err: base.ErrorSink) -> backend.ProPlanType:
@@ -54,152 +66,6 @@ def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bo
         result = False
         if err:
             err.msg_list.append(msg)
-    return result
-
-@flask_blueprint.route(ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
-def notifications_apple_app_connect_sandbox() -> flask.Response:
-    print(f"Request: {flask.request.data}")
-    flask.abort(500)
-
-def entry_point():
-    # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
-    # integration
-    try:
-        import platform_config
-        import_error = False
-        if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print("ERROR: Missing 'apple_key_id' string in platform_config.py")
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
-            import_error = True
-
-        if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
-            import_error = True
-
-        if import_error:
-            raise ImportError
-
-    except ImportError:
-        print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
-      ```python
-      import pathlib
-      apple_key_id: str      = '<Private Key ID>'
-      apple_issuer_id: str   = '<Key Issuer ID>'
-      apple_bundle_id: str   = 'com.your_organisation.your_project'
-      apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
-      apple_root_certs: list[bytes] = [
-          pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
-          pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
-          pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
-      ]
-      ```
-    ''')
-        sys.exit(1)
-
-    # NOTE: For version 2 notifications, it retries five times, at 1, 12, 24, 48, and 72 hours after the previous attempt.
-    #
-    #   https://developer.apple.com/documentation/appstoreservernotifications/responding-to-app-store-server-notifications
-
-    app_apple_id: int | None = None
-    apple_env                = AppleEnvironment.SANDBOX
-    if apple_env != AppleEnvironment.SANDBOX:
-        assert app_apple_id is not None, "App ID must be set in a non-sandbox environment"
-
-    apple_client = AppleAppStoreServerAPIClient(signing_key=platform_config.apple_key_bytes,
-                                                key_id=platform_config.apple_key_id,
-                                                issuer_id=platform_config.apple_issuer_id,
-                                                bundle_id=platform_config.apple_bundle_id,
-                                                environment=apple_env)
-
-    apple_verifier = AppleSignedDataVerifier(root_certificates=platform_config.apple_root_certs,
-                                             enable_online_checks=True,
-                                             environment=apple_env,
-                                             bundle_id=platform_config.apple_bundle_id,
-                                             app_apple_id=app_apple_id)
-
-    # try:
-    #     response_test_notif: AppleSendTestNotificationResponse = apple_client.request_test_notification()
-    #     print("Send test notif: ", response_test_notif)
-
-    #     notification_token = response_test_notif.testNotificationToken
-    #     if notification_token:
-    #         response_check_test_notif: AppleCheckTestNotificationResponse = apple_client.get_test_notification_status(test_notification_token=notification_token)
-    #         print("Check test notif: ", response_check_test_notif)
-    #         if response_check_test_notif.signedPayload:
-    #             decoded_response: AppleResponseBodyV2DecodedPayload = apple_verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
-    #             print('Decoded test response: ', decoded_response)
-    # except AppleAPIException as e:
-    #     print(e)
-
-def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
-    result: int | None = None
-
-    all_fields_set: bool  = False
-    all_fields_set       |= require_field(body.bundleId,  f'Apple notification {notif_type} is missing bundle ID from payload', err)
-    all_fields_set       |= require_field(body.productId, f'Apple notification {notif_type} is missing product ID from payload', err)
-    if not all_fields_set:
-        return result
-
-    # NOTE: Assert the types for LSP now that we have checked that they exist
-    assert isinstance(body.bundleId, str)
-    assert isinstance(body.productId, str)
-
-    # NOTE: Verify the bundle ID
-    if body.bundleId != platform_config.apple_bundle_id:
-        err.msg_list.append(f'Apple notification {notif_type} bundle ID \'{body.bundleId}\' did not match expected \'{platform_config.apple_bundle_id}\'')
-        return result
-
-    # NOTE: Convert product ID to duration
-    if body.productId == 'com.getsession.org.pro_sub':
-        result = 365 * base.SECONDS_IN_DAY
-    else:
-        err.msg_list.append(f'Apple notification {notif_type} specified unrecognised \'{body.productId}\'')
-
-    return result
-
-def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> AppleJWSTransactionDecodedPayload | None:
-    raw_tx: str | None = None
-    if require_field(body.data, f'{body.notificationType} notification is missing body\'s data', err):
-        assert isinstance(body.data, AppleData)
-        if require_field(body.data.signedTransactionInfo, f'{body.notificationType} notification is missing body data\'s signedTransactionInfo', err):
-            assert isinstance(body.data.signedTransactionInfo, str)
-            raw_tx = body.data.signedTransactionInfo
-
-    # Parse and verify the raw TX
-    result: AppleJWSTransactionDecodedPayload | None = None
-    if raw_tx:
-        try:
-            result = verifier.verify_and_decode_signed_transaction(raw_tx)
-        except AppleVerificationException as e:
-            if err:
-                err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
-
-    return result
-
-def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload) -> backend.PaymentProviderTransaction:
-    result = backend.PaymentProviderTransaction()
-    if not tx.originalTransactionId or not tx.transactionId:
-        return result
-    result.provider             = base.PaymentProvider.iOSAppStore
-    result.apple_original_tx_id = tx.originalTransactionId
-    result.apple_tx_id          = tx.transactionId
-    if tx.webOrderLineItemId:
-        result.apple_web_line_order_tx_id = tx.webOrderLineItemId
     return result
 
 def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBodyV2DecodedPayload, sql_conn: sqlite3.Connection):
@@ -734,4 +600,160 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         print(f'ERROR: {err_msg}\nPayload was: {json.dumps(body, indent=1)}')
 
 
-entry_point()
+@flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
+def notifications_apple_app_connect_sandbox() -> flask.Response:
+    print(f"Request: {flask.request.data}")
+
+    assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
+    assert isinstance(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
+    core = typing.cast(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
+
+    flask.abort(500)
+    with server.open_db_from_flask_request_context(flask.current_app) as db:
+        handle_notification(verifier=core.signed_data_verifier, body=body, sql_conn=db.sql_conn)
+
+def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
+    try:
+        response_test_notif: AppleSendTestNotificationResponse = client.request_test_notification()
+        print("Send test notif: ", response_test_notif)
+
+        notification_token = response_test_notif.testNotificationToken
+        if notification_token:
+            response_check_test_notif: AppleCheckTestNotificationResponse = client.get_test_notification_status(test_notification_token=notification_token)
+            print("Check test notif: ", response_check_test_notif)
+            if response_check_test_notif.signedPayload:
+                decoded_response: AppleResponseBodyV2DecodedPayload = verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
+                print('Decoded test response: ', decoded_response)
+    except AppleAPIException as e:
+        print(e)
+
+def init(flask: flask.Flask):
+    # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
+    # integration
+    try:
+        import platform_config
+        import_error = False
+        if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print("ERROR: Missing 'apple_key_id' string in platform_config.py")
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
+            import_error = True
+
+        if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            import_error = True
+
+        if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
+            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            import_error = True
+
+        if import_error:
+            raise ImportError
+
+    except ImportError:
+        print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
+      ```python
+      import pathlib
+      apple_key_id: str      = '<Private Key ID>'
+      apple_issuer_id: str   = '<Key Issuer ID>'
+      apple_bundle_id: str   = 'com.your_organisation.your_project'
+      apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
+      apple_root_certs: list[bytes] = [
+          pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
+          pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
+          pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
+      ]
+      ```
+    ''')
+        sys.exit(1)
+
+    # NOTE: For version 2 notifications, it retries five times, at 1, 12, 24, 48, and 72 hours after the previous attempt.
+    #
+    #   https://developer.apple.com/documentation/appstoreservernotifications/responding-to-app-store-server-notifications
+
+    app_apple_id: int | None = None
+    apple_env                = AppleEnvironment.SANDBOX
+    if apple_env != AppleEnvironment.SANDBOX:
+        assert app_apple_id is not None, "App ID must be set in a non-sandbox environment"
+
+    app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key=platform_config.apple_key_bytes,
+                                                               key_id=platform_config.apple_key_id,
+                                                               issuer_id=platform_config.apple_issuer_id,
+                                                               bundle_id=platform_config.apple_bundle_id,
+                                                               environment=apple_env)
+    signed_data_verifier        = AppleSignedDataVerifier     (root_certificates=platform_config.apple_root_certs,
+                                                               enable_online_checks=True,
+                                                               environment=apple_env,
+                                                               bundle_id=platform_config.apple_bundle_id,
+                                                               app_apple_id=app_apple_id)
+    flask.register_blueprint(flask_blueprint)
+
+    # NOTE: Add the core data structure for Apple into the flask config dictionary. This makes it
+    # accessible in routes across concurrent connections.
+    flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = Core(app_store_server_api_client, signed_data_verifier)
+
+def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
+    result: int | None = None
+
+    all_fields_set: bool  = False
+    all_fields_set       |= require_field(body.bundleId,  f'Apple notification {notif_type} is missing bundle ID from payload', err)
+    all_fields_set       |= require_field(body.productId, f'Apple notification {notif_type} is missing product ID from payload', err)
+    if not all_fields_set:
+        return result
+
+    # NOTE: Assert the types for LSP now that we have checked that they exist
+    assert isinstance(body.bundleId, str)
+    assert isinstance(body.productId, str)
+
+    # NOTE: Verify the bundle ID
+    if body.bundleId != platform_config.apple_bundle_id:
+        err.msg_list.append(f'Apple notification {notif_type} bundle ID \'{body.bundleId}\' did not match expected \'{platform_config.apple_bundle_id}\'')
+        return result
+
+    # NOTE: Convert product ID to duration
+    if body.productId == 'com.getsession.org.pro_sub':
+        result = 365 * base.SECONDS_IN_DAY
+    else:
+        err.msg_list.append(f'Apple notification {notif_type} specified unrecognised \'{body.productId}\'')
+
+    return result
+
+def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> AppleJWSTransactionDecodedPayload | None:
+    raw_tx: str | None = None
+    if require_field(body.data, f'{body.notificationType} notification is missing body\'s data', err):
+        assert isinstance(body.data, AppleData)
+        if require_field(body.data.signedTransactionInfo, f'{body.notificationType} notification is missing body data\'s signedTransactionInfo', err):
+            assert isinstance(body.data.signedTransactionInfo, str)
+            raw_tx = body.data.signedTransactionInfo
+
+    # Parse and verify the raw TX
+    result: AppleJWSTransactionDecodedPayload | None = None
+    if raw_tx:
+        try:
+            result = verifier.verify_and_decode_signed_transaction(raw_tx)
+        except AppleVerificationException as e:
+            if err:
+                err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
+
+    return result
+
+def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload) -> backend.PaymentProviderTransaction:
+    result = backend.PaymentProviderTransaction()
+    if not tx.originalTransactionId or not tx.transactionId:
+        return result
+    result.provider             = base.PaymentProvider.iOSAppStore
+    result.apple_original_tx_id = tx.originalTransactionId
+    result.apple_tx_id          = tx.transactionId
+    if tx.webOrderLineItemId:
+        result.apple_web_line_order_tx_id = tx.webOrderLineItemId
+    return result

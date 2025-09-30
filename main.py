@@ -26,6 +26,7 @@ import env
 import base
 import backend
 import server
+import platform_apple
 
 def os_get_boolean_env(var_name: str, default: bool = False):
     value = os.getenv(var_name, str(int(default)))  # Default to 0 or 1
@@ -91,22 +92,14 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
 
 def entry_point() -> flask.Flask:
     # Get arguments from environment
-    db_path:        str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',                 './backend.db')
-    db_path_is_uri: bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI', False)
-    print_tables:   bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',   False)
-    dev_backend:    bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',            False)
+    db_path:             str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',                      './backend.db')
+    db_path_is_uri:      bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',      False)
+    print_tables:        bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',        False)
+    dev_backend:         bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',                 False)
+    with_platform_apple: bool = os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE', False)
 
-    # env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-
-    # if not env.GOOGLE_APPLICATION_CREDENTIALS:
-    #     raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
-
-    # if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
-    #     raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
-
-    unsafe_logging = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
-    if unsafe_logging == '1':
-        env.SESH_PRO_BACKEND_UNSAFE_LOGGING = True
+    env.SESH_PRO_BACKEND_UNSAFE_LOGGING = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
+    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         print("SESH_PRO_BACKEND_UNSAFE_LOGGING environment is set, this must not be used in production!")
 
     # Ensure the path is setup for writing the database
@@ -211,6 +204,11 @@ def entry_point() -> flask.Flask:
                                       db_path=db.path,
                                       db_path_is_uri=db_path_is_uri,
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+
+
+    # Enable Apple iOS App Store notifications routes on the server if enabled
+    if with_platform_apple:
+        platform_apple.init(result)
     return result
 
 # Flask entry point

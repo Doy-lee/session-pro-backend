@@ -263,7 +263,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -304,7 +304,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_ADD_PRO_PAYMENT,
+                                                  endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
                                                   request_body={
                                                       'version':              version,
                                                       'master_pkey':          bytes(master_key.verify_key).hex(),
@@ -382,7 +382,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_PROOF,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_PROOF,
                                                   request_body=request_body)
 
         # POST and get response
@@ -460,7 +460,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_ADD_PRO_PAYMENT,
+                                                  endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
                                                   request_body=request_body)
 
         # POST and get response
@@ -509,7 +509,7 @@ def test_server_add_payment_flow():
         request_body={'version': 0, 'ticket':  0}
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_REVOCATIONS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -553,7 +553,7 @@ def test_server_add_payment_flow():
     if 1:
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_REVOCATIONS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
                                                   request_body={'version': 0, 'ticket':  curr_revocation_ticket})
 
         # POST and get response
@@ -601,7 +601,7 @@ def test_server_add_payment_flow():
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -635,7 +635,7 @@ def test_server_add_payment_flow():
             hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -663,7 +663,7 @@ def test_server_add_payment_flow():
             hash_to_sign:  bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -691,7 +691,7 @@ def test_server_add_payment_flow():
             hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
