@@ -146,6 +146,13 @@ def entry_point() -> flask.Flask:
 
     print(f'Session Pro Backend\n{info_string}')
 
+    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING or with_platform_apple:
+        print(f'  Features:')
+        if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
+            print(f'    Unsafe logging enabled (this must NOT be used in production)')
+        if with_platform_apple:
+            print(f'    Platform: Apple iOS App Store notification handling is enabled')
+
     if dev_backend:
         print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
         print("### @@@ !!!                  !!! @@@ ###")
