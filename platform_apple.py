@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import time
 import dataclasses
+from datetime import datetime
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -593,7 +594,8 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
 
     print(f"Received Apple notification: {get.json}")
     with open('sesh_pro_backend_debug.log', 'a') as file:
-        _ = file.write(f'Received Apple notification: {get.json}\n')
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Received Apple notification: {get.json}\n')
 
     assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
@@ -610,8 +612,9 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         flask.abort(500)
 
     resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
-    with open('sesh_pro_backend_debug.logs', 'a') as file:
-        _ = file.write(f'Decoded Apple notification: {resp}\n')
+    with open('sesh_pro_backend_debug.log', 'a') as file:
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Decoded Apple notification: {resp}\n')
 
     flask.abort(500)
 
