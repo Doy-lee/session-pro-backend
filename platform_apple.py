@@ -704,9 +704,6 @@ def init(flask: flask.Flask):
     # accessible in routes across concurrent connections.
     flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = Core(app_store_server_api_client, signed_data_verifier)
 
-    resp = signed_data_verifier.verify_and_decode_notification(item)
-    print(resp)
-
 def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
     result: int | None = None
 
