@@ -588,7 +588,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     print(f"Request: {flask.request.data}")
 
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
-    assert isinstance(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
+    assert isinstance(flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY], Core)
     core = typing.cast(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
 
     flask.abort(500)
@@ -684,6 +684,8 @@ def init(flask: flask.Flask):
     # NOTE: Add the core data structure for Apple into the flask config dictionary. This makes it
     # accessible in routes across concurrent connections.
     flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = Core(app_store_server_api_client, signed_data_verifier)
+
+    # _ = signed_data_verifier.verify_and_decode_notification(item)
 
 def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
     result: int | None = None
