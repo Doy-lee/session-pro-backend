@@ -29,6 +29,7 @@ from appstoreserverlibrary.signed_data_verifier import (
     SignedDataVerifier           as AppleSignedDataVerifier,
 )
 
+import base
 import server
 
 @dataclasses.dataclass
@@ -585,11 +586,29 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
 def notifications_apple_app_connect_sandbox() -> flask.Response:
-    print(f"Request: {flask.request.data}")
+    get: server.GetJSONFromFlaskRequest = server.get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        print(f'Failed to parse Apple notification as JSON: {flask.request.data}')
+        flask.abort(500)
 
+    print(f"Received Apple notification: {get.json}")
+
+    assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
     assert isinstance(flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY], Core)
     core = typing.cast(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
+
+    if 'signedPayload' not in get.json:
+        print(f'Failed to parse Apple notification, signedPayload key was missing: {base.safe_dump_dict_keys_or_data(get.json)}')
+        flask.abort(500)
+
+    signed_payload = get.json['signedPayload']
+    if not isinstance(signed_payload, str):
+        print(f'Failed to parse Apple notification, signed payload was not a string: {type(signed_payload)}')
+        flask.abort(500)
+
+    resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
+    print(resp)
 
     flask.abort(500)
     with server.open_db_from_flask_request_context(flask.current_app) as db:
