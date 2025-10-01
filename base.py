@@ -218,26 +218,26 @@ def format_seconds(duration_s: int):
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
 
-def safe_dump_dict_keys_or_data(d: dict) -> str:
+# NOTE: Restricted type-set, JSON obviously supports much more than this, but
+# our use-case only needs a small subset of it as of current so KISS.
+JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
+
+def safe_dump_dict_keys_or_data(d: dict[str, JSONValue]) -> str:
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return json.dumps(d)
     else:
         return 'dictionary w/ keys: ' + ', '.join(d.keys())
 
-def safe_dump_arbitrary_value_or_type(v) -> str:
-    t = type(v)
+def safe_dump_arbitrary_value_or_type(v: typing.Any) -> str:
+    t: type = type(v)
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return f'({t}) {v}'
     else:
-        return t
+        return f'{t}'
 
 def safe_get_dict_value_type(d: dict, key: str) -> str:
     v = d.get(key)
     return safe_dump_arbitrary_value_or_type(v)
-
-# NOTE: Restricted type-set, JSON obviously supports much more than this, but
-# our use-case only needs a small subset of it as of current so KISS.
-JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
 
 def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str:
     result = ''
