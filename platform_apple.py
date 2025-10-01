@@ -592,6 +592,8 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         flask.abort(500)
 
     print(f"Received Apple notification: {get.json}")
+    with open('sesh_pro_backend_debug.logs', 'a') as file:
+        _ = file.write(f'Received Apple notification: {get.json}\n')
 
     assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
@@ -608,11 +610,10 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         flask.abort(500)
 
     resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
-    print(resp)
+    with open('sesh_pro_backend_debug.logs', 'a') as file:
+        _ = file.write(f'Decoded Apple notification: {resp}\n')
 
     flask.abort(500)
-    with server.open_db_from_flask_request_context(flask.current_app) as db:
-        handle_notification(verifier=core.signed_data_verifier, body=body, sql_conn=db.sql_conn)
 
 def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
     try:
