@@ -592,7 +592,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         flask.abort(500)
 
     print(f"Received Apple notification: {get.json}")
-    with open('sesh_pro_backend_debug.logs', 'a') as file:
+    with open('sesh_pro_backend_debug.log', 'a') as file:
         _ = file.write(f'Received Apple notification: {get.json}\n')
 
     assert isinstance(get.json, dict)
