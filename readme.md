@@ -113,12 +113,14 @@ python -m pytest test.py --verbose --capture=no
 # Our backend spawns one long-running thread for expiring rows in the DB, this
 # needs to be running to maintain the integrity of the DB.
 #
-# Enable `py-call-osafterfork` is essential and makes the spawned child
-# processes respect OS level signals. This lets us catch SIGINT issued from the
-# master UWSGI instance and propagate it down to our expiring rows thread or
-# otherwise the application locks up on exit as the thread will never get
-# terminated.
-#
+# Lazy apps `--lazy-apps` ensures that each spawned process runs our
+# `entry_point` in main # instead of having 1 master process that runs it and
+# then multiple sub-workers that sit-idle waiting for requests via flask. This
+# is required as otherwise UWSGI has problems terminating the workers (for some
+# reason, see: https://github.com/unbit/uwsgi/issues/1609). Ordinarily you would
+# want to use `py-call-osafterfork` however that option is not supported on some
+# older versions of UWSGI still in-use.
+
 # (It may be possible to replace this with the injected uwsgi.signals Python
 # module by UWSGI when it launches the backend. However that leaks UWSGI
 # implementation detail into the backend and also it's a good idea that child
@@ -145,10 +147,10 @@ SESH_PRO_BACKEND_DB_PATH=./data/pro.db \
   --callable flask_app \
   --processes 4 \
   --enable-threads \
-  --py-call-osafterfork \
   --die-on-term \
   --strict \
   --need-app \
   --vacuum \
+  --lazy-apps \
   --procname-prefix \"SESH Pro Backend \"
 ```
