@@ -442,7 +442,7 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
         else:
             result.json = json_dict
     except Exception as e:
-        result.err_msg = str(e)
+        result.err_msg = f'JSON failed to be parsed: {e}'
 
     return result
 

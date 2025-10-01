@@ -14,6 +14,7 @@ import dataclasses
 from math import floor
 
 import env
+import os
 
 class PaymentProvider(enum.Enum):
     Nil             = 0
@@ -28,6 +29,7 @@ MILLISECONDS_IN_YEAR: int      = MILLISECONDS_IN_DAY * 365
 SECONDS_IN_YEAR: int           = SECONDS_IN_DAY * 365
 DEV_BACKEND_MODE:    bool      = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
+WITH_PLATFORM_APPLE: bool      = False
 
 @dataclasses.dataclass
 class ErrorSink:
@@ -472,3 +474,11 @@ def validate_string_list(items: list[JSONValue]) -> typing.TypeGuard[list[str]]:
 def handle_not_implemented(name: str, err: ErrorSink):
     err.msg_list.append(f"'{name}' is not implemented!")
 
+def os_get_boolean_env(var_name: str, default: bool = False):
+    value = os.getenv(var_name, str(int(default)))  # Default to 0 or 1
+    if value == '1':
+        return True
+    elif value == '0':
+        return False
+    else:
+        raise ValueError(f"Invalid value for environment variable '{var_name}': {value}. Allowed values are 0 or 1.")

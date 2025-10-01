@@ -28,15 +28,6 @@ import backend
 import server
 import platform_apple
 
-def os_get_boolean_env(var_name: str, default: bool = False):
-    value = os.getenv(var_name, str(int(default)))  # Default to 0 or 1
-    if value == '1':
-        return True
-    elif value == '0':
-        return False
-    else:
-        raise ValueError(f"Invalid value for environment variable '{var_name}': {value}. Allowed values are 0 or 1.")
-
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
     global proof_expiry_thread_cv
@@ -92,15 +83,14 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
 
 def entry_point() -> flask.Flask:
     # Get arguments from environment
-    db_path:             str  = os.getenv('SESH_PRO_BACKEND_DB_PATH',                      './backend.db')
-    db_path_is_uri:      bool = os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',      False)
-    print_tables:        bool = os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',        False)
-    dev_backend:         bool = os_get_boolean_env('SESH_PRO_BACKEND_DEV',                 False)
-    with_platform_apple: bool = os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE', False)
+    db_path:             str            = os.getenv('SESH_PRO_BACKEND_DB_PATH',                      './backend.db')
+    db_path_is_uri:      bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',      False)
+    print_tables:        bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',        False)
+    dev_backend:         bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                 False)
+    with_platform_apple: bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE', False)
 
-    env.SESH_PRO_BACKEND_UNSAFE_LOGGING = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
-    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
-        print("SESH_PRO_BACKEND_UNSAFE_LOGGING environment is set, this must not be used in production!")
+    # TODO: Move into base or move all the other environment variables into env
+    env.SESH_PRO_BACKEND_UNSAFE_LOGGING = base.os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
 
     # Ensure the path is setup for writing the database
     try:
@@ -240,7 +230,9 @@ def entry_point() -> flask.Flask:
 
     # Enable Apple iOS App Store notifications routes on the server if enabled
     if with_platform_apple:
-        platform_apple.init(result)
+        base.WITH_PLATFORM_APPLE  = True
+        core: platform_apple.Core = platform_apple.init()
+        platform_apple.equip_flask_routes(core, result)
     return result
 
 # Flask entry point

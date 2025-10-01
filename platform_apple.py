@@ -7,6 +7,8 @@ import sqlite3
 import sys
 import time
 import dataclasses
+import pprint
+from datetime import datetime
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -14,6 +16,7 @@ from appstoreserverlibrary.models.Environment                   import Environme
 from appstoreserverlibrary.models.Type                          import Type                          as AppleType
 from appstoreserverlibrary.models.TransactionReason             import TransactionReason             as AppleTransactionReason
 from appstoreserverlibrary.models.JWSTransactionDecodedPayload  import JWSTransactionDecodedPayload  as AppleJWSTransactionDecodedPayload
+from appstoreserverlibrary.models.JWSRenewalInfoDecodedPayload  import JWSRenewalInfoDecodedPayload  as AppleJWSRenewalInfoDecodedPayload
 from appstoreserverlibrary.models.Data                          import Data                          as AppleData
 from appstoreserverlibrary.models.ResponseBodyV2DecodedPayload  import ResponseBodyV2DecodedPayload  as AppleResponseBodyV2DecodedPayload
 from appstoreserverlibrary.models.Subtype                       import Subtype                       as AppleSubtype
@@ -29,6 +32,7 @@ from appstoreserverlibrary.signed_data_verifier import (
     SignedDataVerifier           as AppleSignedDataVerifier,
 )
 
+import base
 import server
 
 @dataclasses.dataclass
@@ -42,7 +46,6 @@ FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY                = 'session_pro_backend_platf
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Apple iOS App Store subscription notifications
 flask_blueprint                                     = flask.Blueprint('session-pro-backend-apple', __name__)
-
 
 def get_pro_plan_type_from_apple_plan_id(plan_id: str, err: base.ErrorSink) -> backend.ProPlanType:
     raise NotImplementedError("get_pro_plan_type_from_apple_plan_id")
@@ -59,6 +62,11 @@ def get_pro_plan_type_from_apple_plan_id(plan_id: str, err: base.ErrorSink) -> b
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {plan_id}')
             return ProPlanType.Nil
 
+def print_obj(obj: typing.Any) -> str:
+    # NOTE: For some reason pprint is unable to pretty print Apple classes. We do it manually ourselves
+    attrs  = {attr: getattr(obj, attr) for attr in dir(obj) if not attr.startswith('_') and not callable(getattr(obj, attr))}
+    result = f'{pprint.pformat(attrs)}'
+    return result
 
 def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bool:
     result = True
@@ -135,9 +143,9 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
        body.notificationType == AppleNotificationV2.DID_RENEW        or \
        body.notificationType == AppleNotificationV2.ONE_TIME_CHARGE:
         # AppleNotificationV2.ONE_TIME_CHARGE
-        #   A notification type that indicates the customer purchased a consumable, non-consumable, or
-        #   non-renewing subscription. The App Store also sends this notification when the customer
-        #   receives access to a non-consumable product through Family Sharing.
+        #   A notification type that indicates the customer purchased a consumable, non-consumable,
+        #   or non-renewing subscription. The App Store also sends this notification when the
+        #   customer receives access to a non-consumable product through Family Sharing.
         #
         #   For notifications about auto-renewable subscription purchases, see the SUBSCRIBED
         #   notification type.
@@ -180,49 +188,51 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #     The billing retry successfully recovers the subscription. (subtype BILLING_RECOVERY)
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. TX was {json.dumps(tx, indent=1)}',            err) and \
-               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. TX was {json.dumps(tx, indent=1)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. TX was {json.dumps(tx, indent=1)}',  err) and \
-               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. TX was {json.dumps(tx, indent=1)}',          err) and \
-               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. TX was {json.dumps(tx, indent=1)}',                  err) and \
-               require_field(tx.type,                  f'{body.notificationType} is missing TX type. TX was {json.dumps(tx, indent=1)}',                    err) and \
-               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. TX was {json.dumps(tx, indent=1)}',  err):
+            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
+               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
+               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
+               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
+               require_field(tx.type,                  f'{body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
+               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int)
-                assert isinstance(tx.originalTransactionId, str)
-                assert isinstance(tx.transactionId,         str)
-                assert isinstance(tx.expiresDate,           str)
-                assert isinstance(tx.transactionReason,     AppleTransactionReason)
-                assert isinstance(tx.type,                  AppleType)
-                assert isinstance(tx.webOrderLineItemId,    str)
+                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.expiresDate,           int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
+                assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
+                assert isinstance(tx.webOrderLineItemId,    str),                    f'{print_obj(tx)}'
 
                 if body.notificationType == AppleNotificationV2.ONE_TIME_CHARGE:
                     # NOTE: Verify that the TX type is what we expect it to be
                     expected_type = AppleType.NON_RENEWING_SUBSCRIPTION
                     if tx.type != expected_type:
-                        err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. TX was {json.dumps(tx, indent=1)}')
+                        err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
                     # NOTE: Verify purchase type is what we expect it to be
                     expected_reason = AppleTransactionReason.PURCHASE
                     if tx.transactionReason != expected_reason:
-                        err.msg_list.append(f'{body.notificationType} TX type ({tx.transactionReason}) was not the expected value for a one-time payment: {expected_reason}. TX was {json.dumps(tx, indent=1)}')
+                        err.msg_list.append(f'{body.notificationType} TX type ({tx.transactionReason}) was not the expected value for a one-time payment: {expected_reason}. {print_obj(tx)}')
                 else:
                     # NOTE: Verify that the TX type is what we expect it to be
                     expected_type = AppleType.AUTO_RENEWABLE_SUBSCRIPTION
                     if tx.type != expected_type:
-                        err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. TX was {json.dumps(tx, indent=1)}')
+                        err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
                 # NOTE: Extract duration
-                subscription_duration_s: int | None = sub_duration_s_from_response_body_v2(body.notificationType, tx, err)
+                subscription_duration_s: int | None                         = sub_duration_s_from_response_body_v2(body.notificationType, tx, err)
+                payment_tx:              backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
 
                 # NOTE: Process notification
                 if len(err.msg_list) == 0:
                     assert isinstance(subscription_duration_s, int)
-                    payment_tx = payment_tx_from_apple_jws_transaction(tx)
                     backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                    payment_tx              = payment_tx,
                                                    subscription_duration_s = subscription_duration_s,
+                                                   expiry_unix_ts_ms       = tx.expiresDate,
+                                                   grace_unix_ts_ms        = 0, # TODO: To be removed
                                                    err                     = err)
 
     elif body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
@@ -242,27 +252,27 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #   Customer upgrades a subscription within the same subscription group. (subtype UPGRADE)
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. TX was {json.dumps(tx, indent=1)}',            err) and \
-               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. TX was {json.dumps(tx, indent=1)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. TX was {json.dumps(tx, indent=1)}',  err) and \
-               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. TX was {json.dumps(tx, indent=1)}',          err) and \
-               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. TX was {json.dumps(tx, indent=1)}',                  err) and \
-               require_field(tx.type,                  f'{body.notificationType} is missing TX type. TX was {json.dumps(tx, indent=1)}',                    err) and \
-               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. TX was {json.dumps(tx, indent=1)}',  err):
+            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
+               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
+               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
+               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
+               require_field(tx.type,                  f'{body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
+               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int)
-                assert isinstance(tx.originalTransactionId, str)
-                assert isinstance(tx.transactionId,         str)
-                assert isinstance(tx.expiresDate,           str)
-                assert isinstance(tx.transactionReason,     AppleTransactionReason)
-                assert isinstance(tx.type,                  AppleType)
-                assert isinstance(tx.webOrderLineItemId,    str)
+                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.expiresDate,           str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
+                assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
+                assert isinstance(tx.webOrderLineItemId,    str),                    f'{print_obj(tx)}'
 
                 # NOTE: Verify that the TX type is what we expect it to be
                 expected_type = AppleType.AUTO_RENEWABLE_SUBSCRIPTION
                 if tx.type != expected_type:
-                    err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. TX was {json.dumps(tx, indent=1)}')
+                    err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
                 # NOTE: Extract duration
                 subscription_duration_s: int | None = sub_duration_s_from_response_body_v2(body.notificationType, tx, err)
@@ -272,7 +282,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                     assert isinstance(subscription_duration_s, int)
                     if not body.subtype:
                         # User is cancelling their upgrade. End the current subscription and revive the old subscription
-                        # TODO: Err, how do I find the "previous" subscription and re-activate it.
+                        # TODO: Err, how do I find the 'previous' subscription and re-activate it.
                         pass
 
                     elif body.subtype == AppleSubtype.DOWNGRADE:
@@ -313,27 +323,27 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. TX was {json.dumps(tx, indent=1)}',            err) and \
-               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. TX was {json.dumps(tx, indent=1)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. TX was {json.dumps(tx, indent=1)}',  err) and \
-               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. TX was {json.dumps(tx, indent=1)}',          err) and \
-               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. TX was {json.dumps(tx, indent=1)}',                  err) and \
-               require_field(tx.type,                  f'{body.notificationType} is missing TX type. TX was {json.dumps(tx, indent=1)}',                    err) and \
-               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. TX was {json.dumps(tx, indent=1)}',  err):
+            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
+               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
+               require_field(tx.originalPurchaseDate,  f'{body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
+               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
+               require_field(tx.type,                  f'{body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
+               require_field(tx.webOrderLineItemId,    f'{body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int)
-                assert isinstance(tx.originalTransactionId, str)
-                assert isinstance(tx.transactionId,         str)
-                assert isinstance(tx.expiresDate,           str)
-                assert isinstance(tx.transactionReason,     AppleTransactionReason)
-                assert isinstance(tx.type,                  AppleType)
-                assert isinstance(tx.webOrderLineItemId,    str)
+                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.expiresDate,           str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
+                assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
+                assert isinstance(tx.webOrderLineItemId,    str),                    f'{print_obj(tx)}'
 
                 # NOTE: Verify that the TX type is what we expect it to be
                 expected_type = AppleType.AUTO_RENEWABLE_SUBSCRIPTION
                 if tx.type != expected_type:
-                    err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. TX was {json.dumps(tx, indent=1)}')
+                    err.msg_list.append(f'{body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
                 # NOTE: Extract duration
                 subscription_duration_s: int | None = sub_duration_s_from_response_body_v2(body.notificationType, tx, err)
@@ -371,7 +381,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
                                                      apple_original_tx_id       = tx.originalTransactionId,
                                                      refund_unix_ts_ms          = unix_ts_ms)
 
-                        # TODO: Submit the "new" payment
+                        # TODO: Submit the 'new' payment
                         payment_tx = payment_tx_from_apple_jws_transaction(tx)
                         backend.add_unredeemed_payment(sql_conn                = sql_conn,
                                                         payment_tx              = payment_tx,
@@ -404,18 +414,18 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #     A family member loses access to the subscription through Family Sharing.
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. TX was {json.dumps(tx, indent=1)}',            err) and \
-               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. TX was {json.dumps(tx, indent=1)}', err) and \
-               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. TX was {json.dumps(tx, indent=1)}',          err) and \
-               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. TX was {json.dumps(tx, indent=1)}',                  err) and \
-               require_field(tx.type,                  f'{body.notificationType} is missing TX type. TX was {json.dumps(tx, indent=1)}',                    err):
+            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
+               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
+               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
+               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
+               require_field(tx.type,                  f'{body.notificationType} is missing TX type. {print_obj(tx)}',                    err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.expiresDate,           str)
-                assert isinstance(tx.originalTransactionId, str)
-                assert isinstance(tx.transactionId,         str)
-                assert isinstance(tx.transactionReason,     AppleTransactionReason)
-                assert isinstance(tx.type,                  AppleType)
+                assert isinstance(tx.expiresDate,           str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
+                assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
 
                 # NOTE: Extract components
                 # TODO: Is the transaction ID unique for this refund or the same as the one it wants to refund??
@@ -438,18 +448,18 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         #   Apple reverses a previously granted refund due to a dispute that the customer raised.
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. TX was {json.dumps(tx, indent=1)}',            err) and \
-               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. TX was {json.dumps(tx, indent=1)}', err) and \
-               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. TX was {json.dumps(tx, indent=1)}',          err) and \
-               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. TX was {json.dumps(tx, indent=1)}',                  err) and \
-               require_field(tx.type,                  f'{body.notificationType} is missing TX type. TX was {json.dumps(tx, indent=1)}',                    err):
+            if require_field(tx.expiresDate,           f'{body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
+               require_field(tx.originalTransactionId, f'{body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
+               require_field(tx.transactionId,         f'{body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
+               require_field(tx.transactionReason,     f'{body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
+               require_field(tx.type,                  f'{body.notificationType} is missing TX type. {print_obj(tx)}',                    err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.expiresDate,           str)
-                assert isinstance(tx.originalTransactionId, str)
-                assert isinstance(tx.transactionId,         str)
-                assert isinstance(tx.transactionReason,     AppleTransactionReason)
-                assert isinstance(tx.type,                  AppleType)
+                assert isinstance(tx.expiresDate,           int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
+                assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
 
                 # NOTE: Extract components
                 if len(err.msg_list) == 0:
@@ -507,6 +517,8 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
          body.notificationType == AppleNotificationV2.GRACE_PERIOD_EXPIRED or \
          body.notificationType == AppleNotificationV2.CONSUMPTION_REQUEST  or \
          body.notificationType == AppleNotificationV2.PRICE_INCREASE:
+
+        tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
 
         if body.notificationType == AppleNotificationV2.EXPIRED:
             # A notification type that, along with its subtype, indicates that a subscription
@@ -602,39 +614,60 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
 def notifications_apple_app_connect_sandbox() -> flask.Response:
-    print(f"Request: {flask.request.data}")
+    get: server.GetJSONFromFlaskRequest = server.get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        print(f'Failed to parse Apple notification as JSON: {flask.request.data}')
+        flask.abort(500)
 
+    print(f'Received Apple notification: {json.dumps(get.json, indent=1)}')
+    with open('sesh_pro_backend_debug.log', 'a') as file:
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Received Apple notification: {get.json}\n')
+
+    assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
-    assert isinstance(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
+    assert isinstance(flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY], Core)
     core = typing.cast(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
 
+    if 'signedPayload' not in get.json:
+        print(f'Failed to parse Apple notification, signedPayload key was missing: {base.safe_dump_dict_keys_or_data(get.json)}')
+        flask.abort(500)
+
+    signed_payload = get.json['signedPayload']
+    if not isinstance(signed_payload, str):
+        print(f'Failed to parse Apple notification, signed payload was not a string: {type(signed_payload)}')
+        flask.abort(500)
+
+    resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
+    with open('sesh_pro_backend_debug.log', 'a') as file:
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Decoded Apple notification: {resp}\n')
+
     flask.abort(500)
-    with server.open_db_from_flask_request_context(flask.current_app) as db:
-        handle_notification(verifier=core.signed_data_verifier, body=body, sql_conn=db.sql_conn)
 
 def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
     try:
         response_test_notif: AppleSendTestNotificationResponse = client.request_test_notification()
-        print("Send test notif: ", response_test_notif)
+        print('Send test notif: ', response_test_notif)
 
         notification_token = response_test_notif.testNotificationToken
         if notification_token:
             response_check_test_notif: AppleCheckTestNotificationResponse = client.get_test_notification_status(test_notification_token=notification_token)
-            print("Check test notif: ", response_check_test_notif)
+            print('Check test notif: ', response_check_test_notif)
             if response_check_test_notif.signedPayload:
                 decoded_response: AppleResponseBodyV2DecodedPayload = verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
                 print('Decoded test response: ', decoded_response)
     except AppleAPIException as e:
         print(e)
 
-def init(flask: flask.Flask):
+def init() -> Core:
     # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
     # integration
     try:
         import platform_config
         import_error = False
         if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print("ERROR: Missing 'apple_key_id' string in platform_config.py")
+            print('ERROR: Missing "apple_key_id" string in platform_config.py')
             import_error = True
 
         if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
@@ -684,7 +717,7 @@ def init(flask: flask.Flask):
     app_apple_id: int | None = None
     apple_env                = AppleEnvironment.SANDBOX
     if apple_env != AppleEnvironment.SANDBOX:
-        assert app_apple_id is not None, "App ID must be set in a non-sandbox environment"
+        assert app_apple_id is not None, 'App ID must be set in a non-sandbox environment'
 
     app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key=platform_config.apple_key_bytes,
                                                                key_id=platform_config.apple_key_id,
@@ -696,33 +729,30 @@ def init(flask: flask.Flask):
                                                                environment=apple_env,
                                                                bundle_id=platform_config.apple_bundle_id,
                                                                app_apple_id=app_apple_id)
+
+    result = Core(app_store_server_api_client, signed_data_verifier)
+    return result
+
+def equip_flask_routes(core: Core, flask: flask.Flask):
     flask.register_blueprint(flask_blueprint)
 
     # NOTE: Add the core data structure for Apple into the flask config dictionary. This makes it
     # accessible in routes across concurrent connections.
-    flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = Core(app_store_server_api_client, signed_data_verifier)
+    flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = core
 
 def sub_duration_s_from_response_body_v2(notif_type: AppleNotificationV2, body: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> int | None:
-    result: int | None = None
-
-    all_fields_set: bool  = False
-    all_fields_set       |= require_field(body.bundleId,  f'Apple notification {notif_type} is missing bundle ID from payload', err)
-    all_fields_set       |= require_field(body.productId, f'Apple notification {notif_type} is missing product ID from payload', err)
+    result:         int | None  = None
+    all_fields_set: bool        = False
+    all_fields_set             |= require_field(body.productId, f'Apple notification {notif_type} is missing product ID from payload', err)
     if not all_fields_set:
         return result
 
     # NOTE: Assert the types for LSP now that we have checked that they exist
-    assert isinstance(body.bundleId, str)
     assert isinstance(body.productId, str)
-
-    # NOTE: Verify the bundle ID
-    if body.bundleId != platform_config.apple_bundle_id:
-        err.msg_list.append(f'Apple notification {notif_type} bundle ID \'{body.bundleId}\' did not match expected \'{platform_config.apple_bundle_id}\'')
-        return result
 
     # NOTE: Convert product ID to duration
     if body.productId == 'com.getsession.org.pro_sub':
-        result = 365 * base.SECONDS_IN_DAY
+        result = 30 * base.SECONDS_IN_DAY
     else:
         err.msg_list.append(f'Apple notification {notif_type} specified unrecognised \'{body.productId}\'')
 
@@ -747,13 +777,38 @@ def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBod
 
     return result
 
-def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload) -> backend.PaymentProviderTransaction:
+def maybe_get_apple_jws_renewal_info_from_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> AppleJWSRenewalInfoDecodedPayload | None:
+    raw_tx: str | None = None
+    if require_field(body.data, f'{body.notificationType} notification is missing body\'s data', err):
+        assert isinstance(body.data, AppleData)
+        if require_field(body.data.signedTransactionInfo, f'{body.notificationType} notification is missing body data\'s signedTransactionInfo', err):
+            assert isinstance(body.data.signedTransactionInfo, str)
+            raw_tx = body.data.signedTransactionInfo
+
+    # Parse and verify the raw TX
+    result: AppleJWSRenewalInfoDecodedPayload | None = None
+    if raw_tx:
+        try:
+            result = verifier.verify_and_decode_renewal_info(raw_tx)
+        except AppleVerificationException as e:
+            if err:
+                err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
+
+    return result
+
+def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> backend.PaymentProviderTransaction:
     result = backend.PaymentProviderTransaction()
-    if not tx.originalTransactionId or not tx.transactionId:
-        return result
-    result.provider             = base.PaymentProvider.iOSAppStore
-    result.apple_original_tx_id = tx.originalTransactionId
-    result.apple_tx_id          = tx.transactionId
-    if tx.webOrderLineItemId:
-        result.apple_web_line_order_tx_id = tx.webOrderLineItemId
+    if not tx.originalTransactionId:
+        err.msg_list.append('Failed to convert Apple TX to payment TX, original transaction ID is missing')
+    if not tx.originalTransactionId:
+        err.msg_list.append('Failed to convert Apple TX to payment TX, original transaction ID is missing')
+
+    if len(err.msg_list) == 0:
+        assert tx.originalTransactionId, print_obj(tx)
+        assert tx.transactionId,         print_obj(tx)
+        result.provider             = base.PaymentProvider.iOSAppStore
+        result.apple_original_tx_id = tx.originalTransactionId
+        result.apple_tx_id          = tx.transactionId
+        if tx.webOrderLineItemId:
+            result.apple_web_line_order_tx_id = tx.webOrderLineItemId
     return result
