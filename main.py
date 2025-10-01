@@ -165,9 +165,34 @@ def entry_point() -> flask.Flask:
         base.print_db_to_stdout(db.sql_conn)
         os._exit(1)
 
-    _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
-    _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
-    _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit
+    # NOTE: Running the application just in Flask (e.g. local development) we
+    # need a way to signal to the long-running payment expiry thread to
+    # terminate itself, we do this using a cv+mutex combo otherwise the
+    # application hangs on exit, forever as the thread is never terminated.
+    #
+    # In UWSGI we want to use the same code to catch the signal and terminate,
+    # but, by default UWSGI hijacks the signal handler and so our thread
+    # termination code doesn't run. However, you can override this on UWSGI by
+    # passing the flag `py-call-osafterfork` which makes the UWSGI process
+    # respect our custom signal handlers.
+    #
+    # This option however is not present on older UWSGI version like 2.0.21.
+    # But actually UWSGI is able to terminate the thread without our signal
+    # handling because they hijack the process and do whatever magic they do as
+    # long as you pass `--lazy-apps` which ensures that each spawned process
+    # runs our `entry_point`.
+    #
+    # Since UWSGI can handle terminating the thread we only equip our signal
+    # handlers if we know we're not running in UWSGI mode, this means we don't
+    # need to use `py-call-osafterfork` which increases the backend's
+    # compatibility to a large suite of operating environments.
+    try:
+        import uwsgi  # pyright: ignore[reportMissingModuleSource, reportUnusedImport]
+    except ImportError:
+        # NOTE: For Flask handlers
+        _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+        _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
+        _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit
 
     # Dispatch a long-running "thread" that wakes up every 00:00 UTC to expire
     # entries in the DB. This thread has program-lifetime and hence should exit
