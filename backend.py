@@ -97,19 +97,19 @@ SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
   SQLField('google_order_id',                'BLOB'),
 ]
 
-SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes,      # master_pkey
-                                                            int,        # status
-                                                            int,        # subscription_duration_s
-                                                            int,        # payment_provider
-                                                            int,        # redeemed_unix_ts_ms
-                                                            int,        # expiry_unix_ts_ms
-                                                            int,        # grace_unix_ts_ms
-                                                            int | None, # refunded_unix_ts_ms
-                                                            str | None, # apple_original_tx_id
-                                                            str | None, # apple_tx_id
-                                                            str | None, # apple_web_line_order_tx_id
-                                                            str | None, # google_payment_token
-                                                            str | None] # google_order_id
+SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # master_pkey
+                                                            int,          # status
+                                                            int,          # subscription_duration_s
+                                                            int,          # payment_provider
+                                                            int,          # redeemed_unix_ts_ms
+                                                            int,          # expiry_unix_ts_ms
+                                                            int,          # grace_unix_ts_ms
+                                                            int | None,   # refunded_unix_ts_ms
+                                                            str | None,   # apple_original_tx_id
+                                                            str | None,   # apple_tx_id
+                                                            str | None,   # apple_web_line_order_tx_id
+                                                            str | None,   # google_payment_token
+                                                            str | None]   # google_order_id
 
 @dataclasses.dataclass
 class PaymentProviderTransaction:
@@ -134,18 +134,9 @@ class AppleTransaction:
     web_line_order_tx_id: str = ''
 
 @dataclasses.dataclass
-class UnredeemedPaymentRow:
-    id:                      int                  = 0
-    subscription_duration_s: int                  = 0
-    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
-    apple:                   AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
-    google_payment_token:    str                  = ''
-    google_order_id:         str                  = ''
-
-@dataclasses.dataclass
 class PaymentRow:
     id:                      int                  = 0
-    master_pkey:             bytes                = ZERO_BYTES32
+    master_pkey:             bytes | None         = None
     status:                  PaymentStatus        = PaymentStatus.Nil
     subscription_duration_s: int                  = 0
     payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil

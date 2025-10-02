@@ -11,6 +11,7 @@ import typing
 import enum
 import dataclasses
 import env
+import os
 
 class PaymentProvider(enum.Enum):
     Nil             = 0
@@ -356,3 +357,12 @@ def json_dict_optional_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) ->
         else:
             err.msg_list.append(f'Key "{key}" value was not an object: "{safe_get_dict_value_type(d, key)}"')
     return result
+
+def os_get_boolean_env(var_name: str, default: bool = False):
+    value = os.getenv(var_name, str(int(default)))  # Default to 0 or 1
+    if value == '1':
+        return True
+    elif value == '0':
+        return False
+    else:
+        raise ValueError(f"Invalid value for environment variable '{var_name}': {value}. Allowed values are 0 or 1.")
