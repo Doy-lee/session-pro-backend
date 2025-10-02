@@ -614,7 +614,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
     with open('sesh_pro_backend_debug.log', 'a') as file:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        _ = file.write(f'{ts}: Decoded Apple notification: {json.dumps(resp, indent=1)}\n')
+        _ = file.write(f'{ts}: Decoded Apple notification: {resp}\n')
 
     flask.abort(500)
 
