@@ -240,6 +240,7 @@ def entry_point() -> flask.Flask:
 
     # Enable Apple iOS App Store notifications routes on the server if enabled
     if with_platform_apple:
+        base.WITH_PLATFORM_APPLE = True
         platform_apple.init(result)
     return result
 

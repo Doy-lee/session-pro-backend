@@ -21,6 +21,7 @@ SECONDS_IN_DAY:      int       = 60 * 60 * 24
 MILLISECONDS_IN_DAY: int       = 60 * 60 * 24 * 1000
 DEV_BACKEND_MODE:    bool      = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
+WITH_PLATFORM_APPLE: bool      = False
 
 @dataclasses.dataclass
 class ErrorSink:

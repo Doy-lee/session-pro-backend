@@ -27,6 +27,7 @@ from vendor import onion_req
 import backend
 import base
 import server
+import platform_apple
 
 def test_backend_same_user_stacks_subscription():
     # Setup DB
@@ -721,3 +722,8 @@ def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
     # maintaining a bleeding edge version of it).
     onion_req.test_onion_request_response_lifecycle()
+
+def test_platform_apple():
+    if not base.WITH_PLATFORM_APPLE:
+        return
+
