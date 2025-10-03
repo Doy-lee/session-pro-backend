@@ -486,7 +486,21 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
         # data comes through here yet.
         tx: AppleJWSTransactionDecodedPayload | None = maybe_get_apple_jws_transaction_from_response_body_v2(body, verifier, err)
         if tx:
-            err.msg_list.append(f'Received TX: {tx}, TODO: this needs to be handled but first check what data we got')
+            if body.subtype == AppleSubtype.AUTO_RENEW_DISABLED or body.subtype == AppleSubtype.AUTO_RENEW_ENABLED:
+                # NOTE: For Apple a decision was made to turn off the grace period/keep it minimal
+                # In reality the timing between the billing cycle and the payment processor
+                # executing is never going to be precisely on the dot. For renewing we will set the
+                # grace period to 1hr to cover this window on behalf of the user.
+                grace_duration_ms: int                                = (60 * 60 * 1) if body.subtype == AppleSubtype.AUTO_RENEW_ENABLED else 0
+                payment_tx:        backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
+                if len(err.msg_list) == 0:
+                    _ = backend.update_payment_unix_ts_ms(sql_conn=sql_conn,
+                                                          payment_tx=payment_tx,
+                                                          expiry_unix_ts_ms=0,                # TODO: This is removed in the latest iteration of the DB by ryan, yet to be merged
+                                                          grace_unix_ts_ms=grace_duration_ms, # TODO: This is updated to a ms duration in the latest iteration of the db, yet to be merged
+                                                          err=err)
+            else:
+                err.msg_list.append(f'Received TX: {print_obj(tx)}, with unrecognised subtype for a DID_CHANGE_RENEWAL_STATUS notification')
 
     elif body.notificationType == AppleNotificationV2.DID_FAIL_TO_RENEW:
         # A notification type that, along with its subtype, indicates that the subscription failed
@@ -609,7 +623,7 @@ def handle_notification(verifier: AppleSignedDataVerifier, body: AppleResponseBo
 
     if len(err.msg_list):
         err_msg = '\n'.join(err.msg_list)
-        print(f'ERROR: {err_msg}\nPayload was: {json.dumps(body, indent=1)}')
+        print(f'ERROR: {err_msg}\nPayload was: {print_obj(body)}')
 
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
