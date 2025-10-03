@@ -845,7 +845,7 @@ def update_payment_unix_ts_ms(sql_conn:          sqlite3.Connection,
                 _ = tx.cursor.execute(f'''
                     UPDATE payments
                     SET    expiry_unix_ts_ms = ?, grace_unix_ts_ms = ?
-                    WHERE  apple_original_tx_id = ? ANFD apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                    WHERE  apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
                 ''', (expiry_unix_ts_ms,
                       grace_unix_ts_ms,
                       payment_tx.apple_original_tx_id,
