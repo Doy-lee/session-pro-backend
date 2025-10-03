@@ -316,7 +316,7 @@ def safe_dump_dict_keys_or_data(d: dict[str, typing.Any] | None) -> str:
     
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return json.dumps(d)
-    
+
     return "dictionary w/ keys: {" + extract_keys_recursive(d) + "}"
 
 def safe_dump_arbitrary_value_or_type(v) -> str:

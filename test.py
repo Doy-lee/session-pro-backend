@@ -279,11 +279,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -291,8 +291,8 @@ def test_server_add_payment_flow():
         result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
         result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
         assert len(err.msg_list) == 0,                                       '{err.msg_list}'
-        assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert len(result_items) == 0,                                       f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 0,                                       f'Response was: {json.dumps(response_json, indent=2)}'
 
     if 1: # Simulate client request to register a payment
         version: int                            = 0
@@ -330,11 +330,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0,  f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0,  f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -398,11 +398,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -477,11 +477,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -526,11 +526,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -570,11 +570,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -582,13 +582,13 @@ def test_server_add_payment_flow():
         result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items', err=err)
         result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_version == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert result_ticket  == 1, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert result_ticket  == 1, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # List should be empty because we passed in the newest revocation
         # ticket. There are no changes to the revocation list so the backend
         # will return an empty list
-        assert len(result_items) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
 
     # Get the pro status now w/ a bunch of payments
     if 1:
@@ -618,11 +618,11 @@ def test_server_add_payment_flow():
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
         # Parse status from response
-        assert response_json['status'] == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Parse result object is at root
-        assert 'result' in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
         result_json = response_json['result']
 
         # Extract the fields
@@ -630,8 +630,8 @@ def test_server_add_payment_flow():
         result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
         result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
         assert len(err.msg_list) == 0,                                 '{err.msg_list}'
-        assert result_status     == server.UserProStatus.Active.value, f'Reponse was: {json.dumps(response_json, indent=2)}'
-        assert len(result_items) == 2,                                 f'Reponse was: {json.dumps(response_json, indent=2)}'
+        assert result_status     == server.UserProStatus.Active.value, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert len(result_items) == 2,                                 f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but use a too old timestamp
         if 1:
@@ -656,9 +656,9 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 1,     f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['errors']) > 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert 'result' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 1,     f'Response was: {json.dumps(response_json, indent=2)}'
+            assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but create a hash with the rotating key
         if 1:
@@ -684,9 +684,9 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 1,     f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['errors']) > 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
-            assert 'result' not in response_json, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 1,     f'Response was: {json.dumps(response_json, indent=2)}'
+            assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         # Retry the request but with no history
         if 1:
@@ -715,7 +715,7 @@ def test_server_add_payment_flow():
             # Parse status from response
             result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
-            assert len(result_items) == 0, f'Reponse was: {json.dumps(response_json, indent=2)}'
+            assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
