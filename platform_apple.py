@@ -31,6 +31,23 @@ from appstoreserverlibrary.signed_data_verifier import (
 ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
 flask_blueprint                               = flask.Blueprint('session-pro-backend-apple', __name__)
 
+
+def get_pro_plan_type_from_apple_plan_id(plan_id: str, err: base.ErrorSink) -> backend.ProPlanType:
+    raise NotImplementedError("get_pro_plan_type_from_apple_plan_id")
+    assert plan_id.startswith("pro")
+    match plan_id:
+        case "session-pro-1-month":
+            return ProPlanType.OneMonth
+        case "session-pro-3-months":
+            return ProPlanType.ThreeMonth
+        case "session-pro-12-months":
+            return ProPlanType.TwelveMonth
+        case _:
+            assert False, f'Invalid apple plan_id: {plan_id}'
+            err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {plan_id}')
+            return ProPlanType.Nil
+
+
 def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bool:
     result = True
     if field is None:

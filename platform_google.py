@@ -8,9 +8,9 @@ import google.cloud.pubsub_v1.subscriber.message
 
 import backend
 import base
-from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, UserErrorTransaction
+from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
 from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, \
-    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, parse_enum_to_str, obfuscate, get_now_ms
+    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, dump_enum_details, obfuscate, get_now_ms
 
 import env
 
@@ -18,44 +18,51 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 from main import os_get_boolean_env
-from platform_google_api import get_line_item, get_subscription_details_for_base_plan_id, get_subscription_v2, get_valid_order_id
+from platform_google_api import SubscriptionPlanTxFields, get_line_item, get_subscription_plan_tx_fields, google_api_fetch_subscription_details_for_base_plan_id, google_api_fetch_subscription_v2, get_valid_order_id
 from platform_google_types import GoogleDuration, SubscriptionNotificationType, \
     SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, GoogleTimestamp, SubscriptionsV2SubscriptionStateType
 
-def add_user_unredeemed_payment(purchase_token: str, base_plan_id: str, order_id: str, expiry_time: GoogleTimestamp, err: base.ErrorSink):
+
+def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> ProPlanType:
+    assert base_plan_id.startswith("session-pro")
+    match base_plan_id:
+        case "session-pro-1-month":
+            return ProPlanType.OneMonth
+        case "session-pro-3-months":
+            return ProPlanType.ThreeMonth
+        case "session-pro-12-months":
+            return ProPlanType.TwelveMonth
+        case _:
+            assert False, f'Invalid google base_plan_id: {base_plan_id}'
+            err.msg_list.append(f'Invalid google base_plan_id, unable to determine plan variant: {base_plan_id}')
+            return ProPlanType.Nil
+
+
+def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlanTxFields, err: base.ErrorSink):
     """
     Add an unredeemed payment to the database.
-
-    Args:
-        purchase_token (str)            : Globally unique purchase token for google payments
-        base_plan_id (str)              : ID of the Google subscription's base plan. Not the product_id.
-        order_id (str)                  : Unique ID of the successful order
-        expiry_time: (GoogleTimestamp)  : Time at which the subscription expires
-        err: (ErrorSink)                : Error Sink
-
     """
-    plan = backend.get_pro_plan_type_from_google_base_plan_id(base_plan_id, err)
+    plan = get_pro_plan_type_from_google_base_plan_id(tx_fields.base_plan_id, err)
     
     if err.has():
         return
     
-    assert plan is not None and len(order_id) > 0 and len(purchase_token) > 0
+    assert plan is not None and len(tx_fields.order_id) > 0 and len(purchase_token) > 0
     
     tx = PaymentProviderTransaction(
         provider=base.PaymentProvider.GooglePlayStore,
-        google_order_id=order_id,
+        google_order_id=tx_fields.order_id,
         google_payment_token=purchase_token,
     )
     
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-
-    backend.add_unredeemed_payment(
-        sql_conn=db.sql_conn,
-        payment_tx=tx,
-        plan=plan,
-        expiry_unix_ts_ms=expiry_time.unix_milliseconds,
-        err=err,
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        backend.add_unredeemed_payment(
+            sql_conn=db.sql_conn,
+            payment_tx=tx,
+            plan=plan,
+            expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
+            err=err,
+        )
 
 
 def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_duration: GoogleDuration, err: base.ErrorSink):
@@ -78,14 +85,13 @@ def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_durat
         google_payment_token=purchase_token,
     )
     
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-
-    success = backend.update_payment_grace_duration_ms(
-        sql_conn=db.sql_conn,
-        payment_tx=tx,
-        grace_duration_ms=grace_duration.milliseconds,
-        err=err,
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        success = backend.update_payment_grace_duration_ms(
+            sql_conn=db.sql_conn,
+            payment_tx=tx,
+            grace_duration_ms=grace_duration.milliseconds,
+            err=err,
+        )
 
     if not success:
         err.msg_list.append(f'Failed to add user grace period expiry for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
@@ -109,28 +115,21 @@ def remove_user_grace_period_expiry(purchase_token: str, order_id: str, err: bas
         google_payment_token=purchase_token,
     )
     
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-
-    success = backend.update_payment_grace_duration_ms(
-        sql_conn=db.sql_conn,
-        payment_tx=tx,
-        grace_duration_ms=0,
-        err=err,
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        success = backend.update_payment_grace_duration_ms(
+            sql_conn=db.sql_conn,
+            payment_tx=tx,
+            grace_duration_ms=0,
+            err=err,
+        )
 
     if not success:
         err.msg_list.append(f'Failed to remove user grace period for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
 
 
+
 def add_user_revocation(order_id: str):
-    """
-    Revoke a pro proof for an order id in the database.
-
-    Args:
-        order_id (str)  : Unique ID of the successful order
-        err:            Error Sink
-
-    """
+    """Revoke a pro proof for an order id in the database."""
     assert len(order_id) > 0
 
     revocation = AddRevocationItem(
@@ -138,11 +137,11 @@ def add_user_revocation(order_id: str):
         tx_id=order_id,
     )
 
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-    backend.add_revocation(
-        sql_conn=db.sql_conn,
-        revocation=revocation,
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        backend.add_revocation(
+            sql_conn=db.sql_conn,
+            revocation=revocation,
+        )
 
 
 def add_user_canceled_reason(details: SubscriptionV2Data, err: base.ErrorSink):
@@ -150,24 +149,24 @@ def add_user_canceled_reason(details: SubscriptionV2Data, err: base.ErrorSink):
 
 
 def validate_no_existing_purchase_token_error(purchase_token:str, err: base.ErrorSink):
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-    result = backend.get_user_error(
-        sql_conn=db.sql_conn,
-        provider_id=purchase_token
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        result = backend.get_user_error(
+            sql_conn=db.sql_conn,
+            provider_id=purchase_token
+        )
 
     if result.provider_id == purchase_token:
-        err.msg_list.append(f"Received RTDN notificaiton for already errored purchase token: {obfuscate(purchase_token)})")
+        err.msg_list.append(f"Received RTDN notificaiton for already errored purchase token: {obfuscate(purchase_token)}")
 
 
 def handle_notification_error_with_purchase_token(error_tx: UserErrorTransaction, err: base.ErrorSink):
     error_tx.provider = base.PaymentProvider.GooglePlayStore
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-    backend.add_user_error(
-        sql_conn=db.sql_conn,
-        error_tx=error_tx,
-        err=err
-    )
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        backend.add_user_error(
+            sql_conn=db.sql_conn,
+            error_tx=error_tx,
+            err=err
+        )
 
 
 def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, err: base.ErrorSink):
@@ -223,9 +222,8 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
             return
 
         assert subscription_notification_type is not None
-        user_error_tx.error_type = int(subscription_notification_type.value)
         
-        details = get_subscription_v2(package_name, purchase_token, err)
+        details = google_api_fetch_subscription_v2(package_name, purchase_token, err)
 
         if err.has():
             err.msg_list.append(f'Parsing subscriptionv2 response for purchase token {obfuscate(purchase_token)} failed')
@@ -240,43 +238,30 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
         if err.has():
             return
 
+        tx_fields = get_subscription_plan_tx_fields(details, err)
+
         match subscription_notification_type:
             case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
                 if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
-                    line_item = get_line_item(details)
-                    order_id = get_valid_order_id(details, err)
-                    
-                    if line_item.expiry_time.unix_milliseconds < now_ms:
-                        err.msg_list.append(f"Subscription is already expired! expiry_time ({line_item.expiry_time.unix_milliseconds}) < {now_ms}")
+                    if tx_fields.expiry_time.unix_milliseconds < now_ms:
+                        err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        add_user_unredeemed_payment(
-                            purchase_token=purchase_token,
-                            base_plan_id=line_item.offer_details.base_plan_id,
-                            order_id=order_id,
-                            expiry_time=line_item.expiry_time,
-                            err=err,
-                    )
+                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
 
 
             case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
                 if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED:
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
-                    line_item = get_line_item(details)
-                    order_id = get_valid_order_id(details, err)
-                    
-                    if not err.has():
-                        if line_item.expiry_time.unix_milliseconds < now_ms:
-                            add_user_revocation(order_id)
-                        else:
-                            remove_user_grace_period_expiry(purchase_token=purchase_token,
-                                                            order_id=order_id,
-                                                            err=err)
+                    if tx_fields.expiry_time.unix_milliseconds < now_ms:
+                        add_user_revocation(tx_fields.order_id)
+                    else:
+                        remove_user_grace_period_expiry(purchase_token, tx_fields.order_id, err)
                 
                 #if not err.has():
                 #    add_user_canceled_reason(details, err)
@@ -292,33 +277,22 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                 """
                 if details.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_PENDING:
                     # TODO: maybe we want to handle pending state differently
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}. This can be ignored.')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}. This can be ignored.')
                 elif details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
                     if details.linked_purchase_token is not None:
-                        order_id = get_valid_order_id(details, err)
-                        if not err.has():
-                            add_user_revocation(order_id)
-                        else:
-                            err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
+                        # TODO: this kinda can fail, and if it does we need to log the error. The revoke + grant should also happen in a single sqlite3 transaction
+                        add_user_revocation(tx_fields.order_id)
+                        # err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
+
+                    # TODO: expiry < now verification and error logging can probably be combined earlier as its used in most branches
+                    if tx_fields.expiry_time.unix_milliseconds < now_ms:
+                        err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        line_item = get_line_item(details)
-                        order_id = get_valid_order_id(details, err)
-                        
-                        if line_item.expiry_time.unix_milliseconds < now_ms:
-                            err.msg_list.append(f"Subscription is already expired! expiry_time ({line_item.expiry_time.unix_milliseconds}) < {now_ms}")
-
-                        if not err.has():
-                            add_user_unredeemed_payment(
-                                purchase_token=purchase_token,
-                                base_plan_id=line_item.offer_details.base_plan_id,
-                                order_id=order_id,
-                                expiry_time=line_item.expiry_time,
-                                err=err,
-                        )
+                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
                 # No entitlement change required
@@ -330,44 +304,37 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
 
             case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
                 if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
-                    line_item = get_line_item(details)
-                    order_id = get_valid_order_id(details, err)
+                    plan_details = google_api_fetch_subscription_details_for_base_plan_id(tx_fields.base_plan_id, err)
                     
                     if not err.has():
-                        plan_details = get_subscription_details_for_base_plan_id(line_item.offer_details.base_plan_id, err)
-                        
-                        if not err.has():
-                            assert plan_details is not None
-                            print(plan_details)
-                            add_user_grace_period_expiry(purchase_token=purchase_token,
-                                                         order_id=order_id,
-                                                         grace_duration=plan_details.grace_period,
-                                                         err=err)
+                        assert plan_details is not None
+                        add_user_grace_period_expiry(purchase_token=purchase_token,
+                                                     order_id=tx_fields.order_id,
+                                                     grace_duration=plan_details.grace_period,
+                                                     err=err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
                 # No entitlement change required
                 pass
 
             case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
-                err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+                err.msg_list.append(f'Subscription notificationType {dump_enum_details(subscription_notification_type)} is unsupported!')
 
             case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
-                err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+                err.msg_list.append(f'Subscription notificationType {dump_enum_details(subscription_notification_type)} is unsupported!')
 
             case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
-                err.msg_list.append(f'Subscription notificationType {parse_enum_to_str(subscription_notification_type)} is unsupported!')
+                err.msg_list.append(f'Subscription notificationType {dump_enum_details(subscription_notification_type)} is unsupported!')
 
             case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
                 if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
-                    err.msg_list.append(f'Subscription state is {parse_enum_to_str(details.subscription_state)} in a {parse_enum_to_str(subscription_notification_type)}')
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
-                    order_id = get_valid_order_id(details, err)
-                    if not err.has():
-                        add_user_revocation(order_id)
+                    add_user_revocation(tx_fields.order_id)
 
             case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
                 # No entitlement change required
@@ -379,26 +346,19 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
 
             case SubscriptionNotificationType.SUBSCRIPTION_PENDING_PURCHASE_CANCELED:
                 # TODO: I think we can just remove all of this, this case is super underdocumented, needs to be investigated more
-                line_item = get_line_item(details)
-                # TODO: Collect cancel reason
-
-                if not err.has() and line_item.expiry_time.unix_milliseconds < now_ms:
-                    order_id = get_valid_order_id(details, err)
-                    if not err.has():
-                        add_user_revocation(order_id)
+                if tx_fields.expiry_time.unix_milliseconds < now_ms:
+                    add_user_revocation(tx_fields.order_id)
 
             case SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
                 # No entitlement change required
                 pass
 
             case _:
-                err.msg_list.append(f'subscription notificationType is invalid: {parse_enum_to_str(subscription_notification_type)}')
+                err.msg_list.append(f'subscription notificationType is invalid: {dump_enum_details(subscription_notification_type)}')
 
         if err.has():
-            line_item = get_line_item(details)
-            order_id  = get_valid_order_id(details, err)
             # Purchase token logging is included in the wrapper function
-            err.msg_list.append(f'Failed to handle {parse_enum_to_str(details.subscription_state)} for order_id {obfuscate(order_id) if len(order_id) > 0 else "N/A"}')
+            err.msg_list.append(f'Failed to handle {dump_enum_details(details.subscription_state)} for order_id {obfuscate(tx_fields.order_id) if len(tx_fields.order_id) > 0 else "N/A"}')
             return
 
     elif is_voided_notification:
@@ -421,19 +381,19 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                 case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
                     match refund_type:
                         case RefundType.REFUND_TYPE_FULL_REFUND:
-                            handle_not_implemented(parse_enum_to_str(refund_type), err)
+                            handle_not_implemented(dump_enum_details(refund_type), err)
                         case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
                             # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesn't relate to subscriptions
-                            err.msg_list.append(f'voided purchase refundType {parse_enum_to_str(refund_type)} is unsupported!')
+                            err.msg_list.append(f'voided purchase refundType {dump_enum_details(refund_type)} is unsupported!')
                         case _:
-                            err.msg_list.append(f'voided purchase refundType is not valid: {parse_enum_to_str(refund_type)}')
+                            err.msg_list.append(f'voided purchase refundType is not valid: {dump_enum_details(refund_type)}')
                 case ProductType.PRODUCT_TYPE_ONE_TIME:
-                    err.msg_list.append(f'voided purchase productType {parse_enum_to_str(product_type)} is unsupported!')
+                    err.msg_list.append(f'voided purchase productType {dump_enum_details(product_type)} is unsupported!')
                 case _:
-                    err.msg_list.append(f'voided purchase productType is not valid: {parse_enum_to_str(product_type)}')
+                    err.msg_list.append(f'voided purchase productType is not valid: {dump_enum_details(product_type)}')
 
         if err.has():
-            err.msg_list.append(f'Failed to handle {parse_enum_to_str(refund_type) if refund_type is not None else "N/A"} for purchase_token {obfuscate(purchase_token)} with order_id {obfuscate(order_id) if len(order_id) > 0 else "N/A"}')
+            err.msg_list.append(f'Failed to handle {dump_enum_details(refund_type) if refund_type is not None else "N/A"} order_id {obfuscate(order_id) if len(order_id) > 0 else "N/A"}')
             return
 
     elif is_one_time_product_notification:
@@ -519,8 +479,8 @@ def entry_point():
 
     env.SESH_PRO_BACKEND_UNSAFE_LOGGING = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
 
-    db = OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH)
-    backend.delete_user_errors(db.sql_conn, base.PaymentProvider.GooglePlayStore)
+    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        backend.delete_user_errors(db.sql_conn, base.PaymentProvider.GooglePlayStore)
 
     with pubsub_v1.SubscriberClient() as sub_client:
         sub_path = sub_client.subscription_path(project='loki-5a81e', subscription='session-pro-sub')

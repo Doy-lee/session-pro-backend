@@ -1,4 +1,5 @@
 import dataclasses
+import traceback
 import typing
 from enum import IntEnum, StrEnum
 from typing import Optional, override
@@ -22,7 +23,7 @@ class GoogleTimestamp(Timestamp):
             self.unix_seconds = self.ToSeconds()
 
         except Exception as e:
-            err.msg_list.append(f'Failed to parse timestamp "{rfc3339_timestamp}": {e}')
+            err.msg_list.append(f'Failed to parse timestamp "{rfc3339_timestamp}": {traceback.format_exc()}')
 
 
 # Copied from google.protobuf.internal.well_known_types
@@ -41,10 +42,12 @@ class GoogleDuration():
                 raise ValueError(f"Duration too long! {self.seconds} > {_DURATION_SECONDS_MAX}")
             self.milliseconds = self.seconds * 1000
         except Exception as e:
-            err.msg_list.append(f'Failed to parse duration "{iso8601_duration}: {e}"')
+            err.msg_list.append(f'Failed to parse duration "{iso8601_duration}: {traceback.format_exc()}"')
     
     def FromJsonString(self, value: str) -> int:
         """Parse a ISO 8601 Duration string format to a Duration.
+        NOTE: this parser is not fully compliant with ISO 8601, it is intended for use
+        with google's protobuf duration value.
 
         Args:
           value (str): An ISO 8601 duration string. Example of accepted format: 'P3M'
@@ -61,28 +64,39 @@ class GoogleDuration():
         seconds_multiplier = 0
         buffer_units = ''
         duration_seconds = 0
+        in_time_component = False
         for c in value:
             commit = True
             match c:
                 case 'Y':
                     seconds_multiplier = base.SECONDS_IN_YEAR
                 case 'M':
-                    seconds_multiplier = base.SECONDS_IN_MONTH
+                    if in_time_component:
+                        seconds_multiplier = 60
+                    else:
+                        seconds_multiplier = base.SECONDS_IN_MONTH
                 case 'W':
                     seconds_multiplier = base.SECONDS_IN_DAY * 7
                 case 'D':
                     seconds_multiplier = base.SECONDS_IN_DAY
-                case 'T' | 'P':
+                case 'P':
                     seconds_multiplier = 0
                     commit = False
+                case 'T':
+                    seconds_multiplier = 0
+                    commit = False
+                    in_time_component = True
                 case 'H':
+                    if not in_time_component:
+                        raise ValueError("Attempted to parse a time value outside of an ISO 8601 time component")
                     seconds_multiplier = 60 * 60
-                case 'M':
-                    seconds_multiplier = 60
                 case 'S':
+                    if not in_time_component:
+                        raise ValueError("Attempted to parse a time value outside of an ISO 8601 time component")
                     seconds_multiplier = 1
                 case _:
-                    assert(c in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+                    if not c.isdigit():
+                        raise ValueError(f"Attempted to parse an illegal character: {c}")
                     buffer_units += c
                     commit = False
 
@@ -451,6 +465,12 @@ class SubscriptionV2Data:
     # User profile associated with purchases made with 'Subscribe with Google'.
     # subscribe_with_google_info:  SubscriptionV2SubscribeWithGoogleInfo
 
+@dataclasses.dataclass
+class Monetizationv3SubscriptionData:
+    """
+    NOTE: only the fields we use are here, the api returns loads of other info we dont need.
+    """
+    base_plans: base.JSONArray
 
 @dataclasses.dataclass
 class SubscriptionProductDetails:

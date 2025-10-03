@@ -34,35 +34,6 @@ class ProPlanType(enum.Enum):
     ThreeMonth      = 2
     TwelveMonth     = 3
 
-def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> ProPlanType:
-    assert base_plan_id.startswith("session-pro")
-    match base_plan_id:
-        case "session-pro-1-month":
-            return ProPlanType.OneMonth
-        case "session-pro-3-months":
-            return ProPlanType.ThreeMonth
-        case "session-pro-12-months":
-            return ProPlanType.TwelveMonth
-        case _:
-            assert False, f'Invalid google base_plan_id: {base_plan_id}'
-            err.msg_list.append(f'Invalid google base_plan_id, unable to determine plan variant: {base_plan_id}')
-            return ProPlanType.Nil
-
-def get_pro_plan_type_from_apple_plan_id(plan_id: str, err: base.ErrorSink) -> ProPlanType:
-    raise NotImplementedError("get_pro_plan_type_from_apple_plan_id")
-    assert plan_id.startswith("pro")
-    match plan_id:
-        case "session-pro-1-month":
-            return ProPlanType.OneMonth
-        case "session-pro-3-months":
-            return ProPlanType.ThreeMonth
-        case "session-pro-12-months":
-            return ProPlanType.TwelveMonth
-        case _:
-            assert False, f'Invalid apple plan_id: {plan_id}'
-            err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {plan_id}')
-            return ProPlanType.Nil
-
 @dataclasses.dataclass
 class ExpireResult:
     already_done_by_someone_else: bool = False
@@ -148,7 +119,7 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes,      # master
                                                             int,        # status
                                                             int,        # plan
                                                             int,        # payment_provider
-                                                            int,        # redeemed_unix_ts_ms
+                                                            int | None, # redeemed_unix_ts_ms
                                                             int,        # expiry_unix_ts_ms
                                                             int,        # grace_period_duration_ms
                                                             int,        # platform_refund_expiry_unix_ts_ms
@@ -173,7 +144,6 @@ class UserErrorTransaction:
     provider:                   base.PaymentProvider = base.PaymentProvider.Nil
     apple_original_tx_id:       str = ''
     google_payment_token:       str = ''
-    error_type:                 int                  = 0
 
 @dataclasses.dataclass
 class AddProPaymentUserTransaction:
@@ -230,7 +200,7 @@ class UserErrorRow:
 class GetUserAndPayments:
     user:                               UserRow                                           = dataclasses.field(default_factory=UserRow)
     payments_it:                        collections.abc.Iterator[SQLTablePaymentRowTuple] = dataclasses.field(default_factory=lambda: iter([SQLTablePaymentRowTuple()]))
-    latest_grace_duration_ms:           int                                               = 0
+    latest_expiry_unix_ts_ms:           int                                               = 0
     latest_grace_period_duration_ms:    int                                               = 0
 
 @dataclasses.dataclass
@@ -371,12 +341,12 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRo
             item.status                             = PaymentStatus(row[2])
             item.plan                               = ProPlanType(row[3])
             item.payment_provider                   = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_ms                = row[5]
+            item.redeemed_unix_ts_ms                = row[5] if row[5] else None
             item.expiry_unix_ts_ms                  = row[6]
             item.grace_period_duration_ms           = row[7]
             item.platform_refund_expiry_unix_ts_ms  = row[8]
-            item.refunded_unix_ts_ms                = row[9]
-            item.apple.original_tx_id               = row[10] if row[10]  else ''
+            item.refunded_unix_ts_ms                = row[9] if row[9] else None
+            item.apple.original_tx_id               = row[10] if row[10] else ''
             item.apple.tx_id                        = row[11] if row[11] else ''
             item.apple.web_line_order_tx_id         = row[12] if row[12] else ''
             item.google_payment_token               = row[13] if row[13] else ''
@@ -397,12 +367,12 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
             item.status                             = PaymentStatus(row[2])
             item.plan                               = ProPlanType(row[3])
             item.payment_provider                   = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_ms                = row[5]
+            item.redeemed_unix_ts_ms                = row[5] if row[5] else None
             item.expiry_unix_ts_ms                  = row[6]
             item.grace_period_duration_ms           = row[7]
             item.platform_refund_expiry_unix_ts_ms  = row[8]
-            item.refunded_unix_ts_ms                = row[9]
-            item.apple.original_tx_id               = row[10] if row[10]  else ''
+            item.refunded_unix_ts_ms                = row[9] if row[9] else None
+            item.apple.original_tx_id               = row[10] if row[10] else ''
             item.apple.tx_id                        = row[11] if row[11] else ''
             item.apple.web_line_order_tx_id         = row[12] if row[12] else ''
             item.google_payment_token               = row[13] if row[13] else ''
@@ -427,7 +397,7 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     row = tx.cursor.fetchone()
     row = typing.cast(tuple[int, int] | None, row)
     if row:
-        result.latest_grace_duration_ms         = row[0]
+        result.latest_expiry_unix_ts_ms         = row[0]
         result.latest_grace_period_duration_ms  = row[1]
 
     _ = tx.cursor.execute(f'''
@@ -614,9 +584,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             CREATE TABLE IF NOT EXISTS user_errors (
                 -- Unique provider id, this is the purchase token on google, and x (TODO: add apple token name) on apple
                 provider_id                 STRING PRIMARY KEY NOT NULL,
-                payment_provider            INTEGER NOT NULL,
-                -- Notificaiton type on google, and x (TODO: add apple notification type info) on apple
-                error_type                  INTEGER NOT NULL
+                payment_provider            INTEGER NOT NULL
             );
 
             CREATE TRIGGER IF NOT EXISTS increment_revocation_ticket_after_insert
@@ -675,7 +643,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
         if len(it.google_payment_token) != BLAKE2B_DIGEST_SIZE:
             err.msg_list.append(f'Unredeeemed payment #{index} token is not 32 bytes, was {len(it.google_payment_token)}')
         if it.plan == ProPlanType.Nil:
-               err.msg_list.append(f'Unredeemed payment #{index} had an invalid plan, received ({base.parse_enum_to_str(it.plan)})')
+               err.msg_list.append(f'Unredeemed payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
 
     # NOTE: Wednesday, 27 August 2025 00:00:00, arbitrary date in the past that PRO cannot
     # possibly be before. We should update this to to the PRO release date.
@@ -735,7 +703,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
         # NOTE: Verify the plan, it should always be set once it enters the DB..
         if it.plan == ProPlanType.Nil:
-               err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.parse_enum_to_str(it.plan)})')
+               err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
         base.verify_payment_provider(it.payment_provider, err)
 
         # NOTE: Check that the payment's redeemed ts is a reasonable value
@@ -1205,8 +1173,11 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         add_unredeemed_payment(sql_conn=sql_conn,
                                payment_tx=internal_payment_tx,
                                plan=ProPlanType.OneMonth,
-                               expiry_unix_ts_ms=redeemed_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                               expiry_unix_ts_ms=expiry_unix_ts_ms,
                                err=err)
+        
+        if apply_grace:
+            _ = update_payment_grace_duration_ms(sql_conn, internal_payment_tx, 60 * 1000, err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
@@ -1421,27 +1392,24 @@ def add_user_error(sql_conn: sqlite3.Connection, error_tx: UserErrorTransaction,
                 case base.PaymentProvider.Nil:
                     pass
                 case base.PaymentProvider.GooglePlayStore:
-                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider, error_type)
-                                            VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
+                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
+                                            VALUES (?, ?) ON CONFLICT DO NOTHING''',
                          (error_tx.google_payment_token,
-                          int(error_tx.provider.value),
-                          error_tx.error_type))
+                          int(error_tx.provider.value)))
                 case base.PaymentProvider.iOSAppStore:
-                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider, error_type)
-                                            VALUES (?, ?, ?) ON CONFLICT DO NOTHING''', 
+                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
+                                            VALUES (?, ?) ON CONFLICT DO NOTHING''', 
                          (error_tx.apple_original_tx_id,
-                          int(error_tx.provider.value),
-                          error_tx.error_type))
+                          int(error_tx.provider.value)))
 
 def get_user_error_from_sql_tx(tx: base.SQLTransaction, provider_id: str) -> UserErrorRow:
     assert tx.cursor is not None
     _                        = tx.cursor.execute('SELECT * FROM user_errors WHERE provider_id = ?', ((provider_id),))
     result: UserErrorRow     = UserErrorRow()
-    row                      = typing.cast(tuple[str, int, int] | None, tx.cursor.fetchone())
+    row                      = typing.cast(tuple[str, int] | None, tx.cursor.fetchone())
     if row:
         result.provider_id       = row[0]
         result.payment_provider  = base.PaymentProvider(row[1])
-        result.error_type        = row[2]
     return result;
 
 

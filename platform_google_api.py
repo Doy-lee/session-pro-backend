@@ -1,16 +1,17 @@
+import dataclasses
 import base
-from base import handle_not_implemented, json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
+from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
     json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, \
-    parse_enum_to_str, obfuscate, get_now_ms, validate_string_list
+    dump_enum_details, obfuscate, get_now_ms, validate_string_list
 
 import env
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 import platform_config
-from platform_google_types import SubscriptionNotificationType, \
+from platform_google_types import Monetizationv3SubscriptionData, SubscriptionNotificationType, \
     SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, GoogleTimestamp, \
     SubscriptionV2DataOfferDetails, GoogleMoney, SubscriptionV2SubscriptionItemPriceChangeDetails, \
     SubscriptionV2SubscriptionItemPriceChangeDetailsModeType, SubscriptionV2SubscriptionItemPriceChangeDetailsStateType, \
@@ -27,7 +28,6 @@ SCOPES = ['https://www.googleapis.com/auth/androidpublisher']
 
 def create_service():
     """Create and return the Android Publisher service object using environment credentials."""
-    # Get the service account file path from environment variable
     credentials = service_account.Credentials.from_service_account_file(
         env.GOOGLE_APPLICATION_CREDENTIALS, scopes=SCOPES)
 
@@ -35,23 +35,15 @@ def create_service():
     return service
 
 
-def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
+def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
     """
-    Call the purchases.subscriptionsv2.get endpoint.
-
-    Args:
-        package_name (str)  : The package name of your app
-        token (str)         : The purchase token for the subscription
-        err (ErrorSink)     : The error sink
-
-    Returns:
-        SubscriptionV2Data: The subscription details
+    Call the purchases.subscriptionsv2.get endpoint. https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get
     """
     service = create_service()
     result = None
     response = service.purchases().subscriptionsv2().get(
         packageName=package_name,
-        token=token
+        token=purchase_token
     ).execute()
 
     if isinstance(response, dict):
@@ -312,7 +304,10 @@ def get_subscription_v2(package_name: str, token: str, err: base.ErrorSink) -> S
     return result
 
 
-def get_subscription_info(package_name: str, product_id: str, err: base.ErrorSink) -> dict | None:
+def google_api_fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: base.ErrorSink) -> Monetizationv3SubscriptionData | None:
+    """
+    Call the Google monetizationv3.subscriptions.get endpoint: https://developers.google.com/android-publisher/api-ref/rest/v3/monetization.subscriptions/get 
+    """
     service = create_service()
     result = None
     response = service.monetization().subscriptions().get(
@@ -321,27 +316,30 @@ def get_subscription_info(package_name: str, product_id: str, err: base.ErrorSin
     ).execute()
 
     if isinstance(response, dict):
-        result = response
+        base_plans = json_dict_require_array(response, "basePlans", err)
+        
+        if not err.has():
+            result = Monetizationv3SubscriptionData(
+                base_plans=base_plans
+            )
+
     else:
         err.msg_list.append(f'Subscription info response is not a valid dict: {safe_dump_arbitrary_value_or_type(response)}')
 
-    # assert result is None if err.has() else isinstance(result, SubscriptionV2Data)
+    assert result is None if err.has() else isinstance(result, Monetizationv3SubscriptionData)
     return result
 
 
-def get_subscription_details_for_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> SubscriptionProductDetails | None:
+def google_api_fetch_subscription_details_for_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> SubscriptionProductDetails | None:
     """
-    Get the details for a plan.
-
-    Args:
-        base_plan_id (str)  : The id of the subscription product plan
-        err: (ErrorSink)    : Error Sink
-    Returns:
-        Plan information for plan if it exists.
+    Internally calls the Google monetization v3 api
     """
     result = None
 
-    subscriptions = get_subscription_info(platform_config.google_package_name, platform_config.google_subscription_product_id, err)
+    subscriptions = google_api_fetch_monetizationv3_subscriptions_for_product_id(
+        package_name=platform_config.google_package_name,
+        product_id=platform_config.google_subscription_product_id,
+        err=err)
     
     if err.has():
         err.msg_list.append(f'Failed to get subscription details for {platform_config.google_package_name} and {platform_config.google_subscription_product_id}')
@@ -349,13 +347,8 @@ def get_subscription_details_for_base_plan_id(base_plan_id: str, err: base.Error
 
     assert(subscriptions is not None)
 
-    base_plans = json_dict_require_array(subscriptions, "basePlans", err)
-
-    if err.has():
-        return result
-
     found_plan = None
-    for plan in base_plans:
+    for plan in subscriptions.base_plans:
         assert(plan is not None)
 
         if not isinstance(plan, dict):
@@ -381,7 +374,7 @@ def get_subscription_details_for_base_plan_id(base_plan_id: str, err: base.Error
         break;
 
     if found_plan is None:
-        err.msg_list.append(f'Unable to find plan details for plan_id "{base_plan_id}", plan_details was {safe_dump_dict_keys_or_data(subscriptions)}')
+        err.msg_list.append(f'Unable to find plan details for plan_id "{base_plan_id}", plan_details was {subscriptions.base_plans}')
 
     return result
  
@@ -399,3 +392,22 @@ def get_valid_order_id(details: SubscriptionV2Data, err: base.ErrorSink) -> str:
         result = line_item.latest_successful_order_id
 
     return result
+
+@dataclasses.dataclass
+class SubscriptionPlanTxFields:
+    # ID of the Google subscription's base plan. Not the product_id.
+    base_plan_id: str
+    # Unique ID of the successful order
+    order_id: str
+    # Time at which the subscription expires
+    expiry_time: GoogleTimestamp
+
+def get_subscription_plan_tx_fields(details: SubscriptionV2Data, err: base.ErrorSink) -> SubscriptionPlanTxFields:
+    line_item = get_line_item(details)
+    order_id = get_valid_order_id(details, err)
+    return SubscriptionPlanTxFields(
+        base_plan_id=line_item.offer_details.base_plan_id,
+        order_id=order_id,
+        expiry_time=line_item.expiry_time,
+    )
+

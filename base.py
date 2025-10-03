@@ -245,15 +245,10 @@ def obfuscate(val: str) -> str:
     n_ends = max(floor(len(val) * 0.3), 1)
     return f"{val[:n_ends]}…{val[-n_ends:]}"
 
-def parse_enum_to_str(enum_value: enum.Enum) -> str:
+def dump_enum_details(enum_value: enum.Enum) -> str:
     """
-    Convert an IntEnum or StrEnum instance to its string name for logging.
-
-    Args:
-        enum_value: An instance of IntEnum or StrEnum
-
-    Returns:
-        The name of the enum member as a string
+    Convert an Enum instance to its string name for logging, including
+    its original value for integer enums.
     """
     name = enum_value.name
     value = None

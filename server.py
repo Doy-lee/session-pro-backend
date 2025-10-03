@@ -280,15 +280,12 @@ API
                                 expiry date associated with it.
       latest_grace_duration_ms: 8 byte duration integer indicating the grace period duration. 0 means
                                 auto-renewing is disabled. This is the amount of time the payment 
-                                atform will attempt to auto-renew the Session Pro subscription. The
-                                user is entitled to Session Pro during this period until
-                                `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients may wish
-                                to use this information to identify users with auto-renewing enabled,
-                                and, that the subscription is attempting to be renewed and inform
-                                the user accordingly. Clients can also request a proof for users in
-                                a grace period that will expire at the end of the grace period. If
-                                the grace period is not enabled (e.g. the user has a non-renewing
-                                subscription), this value will be set to 0.
+                                platform will attempt to auto-renew the subscription after it has
+                                expired. The user is entitled to Session Pro during this period
+                                until `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients can
+                                request a pro proof for users in a grace period that will expire at the
+                                end of the grace period. If the grace period is not enabled (e.g. the
+                                user has a non-renewing subscription), this value will be set to 0.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                  1 byte integer describing the status of the consumption of the
@@ -696,7 +693,7 @@ def get_pro_payments():
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
             latest_grace_duration_ms             = get_user.latest_grace_period_duration_ms
-            latest_expiry_unix_ts_ms             = get_user.latest_grace_duration_ms
+            latest_expiry_unix_ts_ms             = get_user.latest_expiry_unix_ts_ms
             has_payments = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
