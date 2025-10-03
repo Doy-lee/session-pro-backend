@@ -275,13 +275,16 @@ API
                        User had Session Pro payment(s) that were fully consumed previously and
                        currently don't have an active payment and hence entitlement to Session Pro
                        features.
+      auto_renewing           : 1 byte boolean indicating if the latest pro subscription (if active)
+                                is set to auto-renew at the its expiry time.
       latest_expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the entitlement of Session
                                 Pro is due to expire as defined by the payment with the latest
                                 expiry date associated with it.
-      latest_grace_duration_ms: 8 byte duration integer indicating the grace period duration. 0 means
-                                auto-renewing is disabled. This is the amount of time the payment 
-                                platform will attempt to auto-renew the subscription after it has
-                                expired. The user is entitled to Session Pro during this period
+      latest_grace_duration_ms: 8 byte duration integer indicating the grace period duration. This
+                                will be 0 if auto auto-renewing is disabled, but this being zero does
+                                not mean auto-renewing is disabled. This is the amount of time the
+                                payment  platform will attempt to auto-renew the subscription after
+                                it has expired. The user is entitled to Session Pro during this period
                                 until `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients can
                                 request a pro proof for users in a grace period that will expire at the
                                 end of the grace period. If the grace period is not enabled (e.g. the
@@ -706,6 +709,7 @@ def get_pro_payments():
                 status                                    = backend.PaymentStatus(row[1])
                 subscription_duration_s:            int   = row[2]
                 payment_provider                          = base.PaymentProvider(row[3])
+                # TODO: this can be None, is this a valid case?
                 redeemed_unix_ts_ms:                int   = row[4]
                 expiry_unix_ts_ms:                  int   = row[5]
                 grace_duration_ms:                  int   = row[6]
@@ -765,9 +769,12 @@ def get_pro_payments():
                 if not history and user_pro_status == UserProStatus.Active:
                     break
 
+    auto_renewing = latest_grace_duration_ms > 0
+
     result = make_success_response(dict_result={
         'version':                  0,
         'status':                   int(user_pro_status.value),
+        'auto_renewing':            auto_renewing,
         'latest_grace_duration_ms': latest_grace_duration_ms,
         'latest_expiry_unix_ts_ms': latest_expiry_unix_ts_ms,
         'items':                    items
