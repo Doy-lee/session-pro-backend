@@ -1,5 +1,17 @@
 # Google Platform
 
+## Refunds
+
+The Google Play store subscriptions have two types of refunds:
+1. Google refunds, which can only happen within 48 hours of a purchase.
+2. Developer refunds, which can happen at any time.
+
+Typically apps direct users to request refunds via Google if is has been less than 48 hours since the purchase,
+then direct users to their own app support channels if its been more than 48 hours since the purchase.
+
+The backend store's a `platform_expiry_ts_ms` timestamp to indicate what time a user's subscription is no
+longer eligible for a Google refund. After this time user should be directed to app support.
+
 ## Real Time Developer Notifications
 
 Whenever a monetization event happens the google RTDN (Real Time Developer Notification) service
@@ -69,9 +81,25 @@ For the purposes of determining a new subscription, expired means either the use
 - cancelled their subscription and the expiry time has passed.
 - had payment issues with their subscription and it has passed the account hold period.
 
-When a new subscription is received an unredeemed payment is added to the database
-with the subscription's purchase token, order id, expiry time, and grace period. This
+A new subscription also means changing from one plan to another. Eg: Moving from a
+one-month plan to a three-month plan.
+
+A purchase can also include a linked purchase token. If this is present in a purchase
+event it means the backend should revoke the subscription linked to the previous
+purchase token (the linked purchase token). This may happen if a user moves plans.
+
+When a new subscription is received an unredeemed payment is added to the database. An
 unredeemed payment can be redeemed by the user to generate a pro proof.
+
+#### Unredeemed Payment
+
+The following is added to the unredeemed payments table:
+- `order_id`
+- `purchase_token`
+- `provider`
+- `expiry_unix_ts_ms`
+- `plan`
+- `platform_refund_expiry_ts_ms`
 
 ### Renewals
 
@@ -88,9 +116,9 @@ This happens when a subscription:
 - is in its grace period and the user's payment method is successfully charged.
 - is in an account hold period and the user's payment method is successfully charged.
 
-When a renewed subscription is received an unredeemed payment is added to the database
-with the subscription's purchase token, order id, expiry time, and grace period. This
-unredeemed payment can be redeemed by the user to generate a pro proof.
+When a renewed subscription is received an unredeemed payment is added to the database.
+This unredeemed payment can be redeemed by the user to generate a pro proof.
+See [Unredeemed Payment](#Unredeemed-Payment)
 
 ### Grace Period
 
@@ -107,9 +135,12 @@ A subscription only has a grace period if it is set to auto-renew. This means
 subscriptions that have been cancelled don't have a grace period, as they
 do not auto-renew.
 
-**Because the expire time of a Pro Proof has the platform grace period duration
-baked into it, the backend can safely ignore these events as no changes need
-to be made to continue the user's entitlement**
+**Because the existence of a grace period on a user's subscription is known
+at the time the user's subscription renews, this event can be ignored. If a
+user enters a grace period they can request a grace period proof from the
+backend, the backend will sign these proofs as long as the user's subscription
+has its grace period enabled. The grace period is enabled as long as the user
+has not cancelled their subscription.**
 
 **The grace period must be at least 1 day, otherwise google will enforce a
 [Silent Grace Period](https://developer.android.com/google/play/billing/lifecycle/subscriptions#silent-grace-period)**
@@ -121,12 +152,12 @@ Notification = SUBSCRIPTION_ON_HOLD
 Subscription = SUBSCRIPTION_STATE_ON_HOLD
 ```
 
-An account hold event happens after a grace period has ended without a valid
-payment going through.
+An account hold event happens after a [grace period](#Grace-Period) has ended
+without a valid payment going through.
 
-**Because the expire time of a Pro Proof has the platform grace period duration
-baked into it, the backend can safely ignore these events as no changes need
-to be made to revoke the user's entitlement, the entitlement has now expired**
+**Because the backend issues proofs that expire at a pre-determined time, if
+the user transitions from a grace period to an account hold period they won't
+be able to request a new proof, as they are no longer in a grace period.**
 
 ### Account Hold Recovered
 
@@ -138,9 +169,9 @@ Subscription = SUBSCRIPTION_STATE_ACTIVE
 An account hold recovered event happens if during an account hold the user's
 payment method succeeds.
 
-When a recovered subscription is received an unredeemed payment is added to the database
-with the subscription's purchase token, order id, expiry time, and grace period. This
-unredeemed payment can be redeemed by the user to generate a pro proof.
+When a recovered subscription is received an unredeemed payment is added to the database.
+This unredeemed payment can be redeemed by the user to generate a pro proof.
+See [Unredeemed Payment](#Unredeemed-Payment)
 
 ### Cancellations
 
@@ -178,7 +209,8 @@ The restarted event happens when a user resubscribes to their canceled subscript
 
 The restarted event has no effect on entitlement. When this event is received
 the backend will update the grace period in the database, indicating to the user
-this subscription will auto-renew.
+this subscription will auto-renew. This will also allow the user to request a grace
+period proof if they enter a grace period after their subscription expires.
 
 **Google allows a user to "Resubscribe" after a subscription is expired, this is
 unrelated to the restarted state, even though from the users perspective this is
@@ -186,8 +218,6 @@ the same action. When a user resubscribes after their subscription is expired, t
 subscription is treated as a new purchase and the `SUBSCRIPTION_PURCHASED` event
 is triggered. This issues the user with a new purchase token and does not make
 use of the `linkedPurchaseToken` mechanism.**
-
-The backend will mark the original cancellation reason as reverted in the database.
 
 ### Expirations
 
@@ -201,9 +231,8 @@ An expired event happens when:
 cancelled (not set to auto-renew).
 - an on-hold subscription passes its hold period.
 
-**Because Pro Proofs are set to expire on their own at the expire time plus
-grace period, there is no need to make changes to entitlement when the expired
-event is received.**
+**Because Pro Proofs are set to expire on their own at the expire time, there
+is no need to make changes to entitlement when the expired event is received.**
 
 ### Revocations
 
@@ -241,6 +270,16 @@ all subscriptions plans for the application must not have them enabled:
 - SUBSCRIPTION_DEFERRED
 - SUBSCRIPTION_PAUSED
 - SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED
+
+### Error Handling
+
+To ensure event order consistency, when an RTDN notification encounters an error, the
+notification's purchase token is added to an error table.
+- any future notifications for that purchase token are ignored
+- any user requests involving that purchase token return an error message
+
+These errors require developer intervention and will be cleared up automatically
+once the problem code is fixed. 
 
 ## Price Changes
 
