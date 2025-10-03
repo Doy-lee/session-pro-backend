@@ -9,7 +9,7 @@ The Google Play store subscriptions have two types of refunds:
 Typically apps direct users to request refunds via Google if is has been less than 48 hours since the purchase,
 then direct users to their own app support channels if its been more than 48 hours since the purchase.
 
-The backend store's a `platform_expiry_ts_ms` timestamp to indicate what time a user's subscription is no
+The backend stores a `platform_expiry_ts_ms` timestamp to indicate what time a user's subscription is no
 longer eligible for a Google refund. After this time user should be directed to app support.
 
 ## Real Time Developer Notifications
@@ -275,7 +275,7 @@ all subscriptions plans for the application must not have them enabled:
 
 To ensure event order consistency, when an RTDN notification encounters an error, the
 notification's purchase token is added to an error table.
-- any future notifications for that purchase token are ignored
+- any future notifications for that purchase token are ignored and not acknowledged
 - any user requests involving that purchase token return an error message
 
 These errors require developer intervention and will be cleared up automatically
