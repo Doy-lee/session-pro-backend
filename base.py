@@ -4,12 +4,15 @@ have no dependency on any project files, only, native Python packages. Typically
 functionality from the testing suite and the project but not limited to.
 '''
 import json
+import time
 import traceback
 import sqlite3
 import datetime
 import typing
 import enum
 import dataclasses
+from math import floor
+
 import env
 
 class PaymentProvider(enum.Enum):
@@ -19,6 +22,10 @@ class PaymentProvider(enum.Enum):
 
 SECONDS_IN_DAY:      int       = 60 * 60 * 24
 MILLISECONDS_IN_DAY: int       = 60 * 60 * 24 * 1000
+MILLISECONDS_IN_MONTH: int     = MILLISECONDS_IN_DAY * 30
+SECONDS_IN_MONTH: int          = SECONDS_IN_DAY * 30
+MILLISECONDS_IN_YEAR: int      = MILLISECONDS_IN_DAY * 365
+SECONDS_IN_YEAR: int           = SECONDS_IN_DAY * 365
 DEV_BACKEND_MODE:    bool      = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 
@@ -218,28 +225,131 @@ def format_seconds(duration_s: int):
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
 
-def safe_dump_dict_keys_or_data(d: dict) -> str:
+def get_now_ms():
+    return time.time_ns() // 1_000_000
+
+def obfuscate(val: str) -> str:
+    """
+    Obfuscate a string to contain a partial first and last chunk of the
+    original string. If the string is less than 3 characters, the original
+    string is retuned, otherwise the first and last 30% are returned.
+    
+    Args:
+        val (str): String to obfuscate
+    
+    Returns:
+        str: The obfuscated string
+    """
+    if len(val) < 3:
+        return val
+    n_ends = max(floor(len(val) * 0.3), 1)
+    return f"{val[:n_ends]}…{val[-n_ends:]}"
+
+def dump_enum_details(enum_value: enum.Enum) -> str:
+    """
+    Convert an Enum instance to its string name for logging, including
+    its original value for integer enums.
+    """
+    name = enum_value.name
+    value = None
+    if isinstance(enum_value, enum.IntEnum):
+        value = enum_value.value
+
+    return f'{name} ({value})' if value is not None else name
+
+def _extract_keys_format_value(value):
+    """
+    Internal helper function to format dictionary values,
+    it's better to define this outside the function.
+    """
+    if isinstance(value, dict):
+        # Get all keys from the dictionary
+        keys = []
+        for k, v in value.items():
+            if isinstance(v, dict):
+                # If the value is a dict, recursively format it
+                keys.append(f"{k}: {_extract_keys_format_value(v)}")
+            else:
+                keys.append(k)
+        return "{" + ', '.join(keys) + "}"
+    else:
+        return str(value)
+
+def extract_keys_recursive(d: dict[str, typing.Any]) -> str:
+    """
+    Recursively extract keys from a nested dictionary and format them.
+    
+    Args:
+        d: Dictionary to extract keys from
+    
+    Returns:
+        String representation of keys in the format:
+        "{key1, key2: {subkey1, subkey2}, key3: {subkey: {subsubkey}}}"
+    """
+    try:
+        result = []
+        for key, value in d.items():
+            if isinstance(value, dict):
+                result.append(f"{key}: {_extract_keys_format_value(value)}")
+            else:
+                result.append(key)
+        
+        return ', '.join(result)
+    except Exception as e:
+        return "FAILED TO EXTRACT KEYS"
+
+def safe_dump_dict_keys_or_data(d: dict[str, typing.Any] | None) -> str:
+    """
+    Safely dump a dictionary's information to a string for logging.
+
+    If `env.SESH_PRO_BACKEND_UNSAFE_LOGGING` is True, the entire dict
+    data will be dumped.
+    Else a list of top-level keys will be dumped.
+    """
+    if d is None:
+        return "None"
+    
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return json.dumps(d)
-    else:
-        return 'dictionary w/ keys: ' + ', '.join(d.keys())
+
+    return "dictionary w/ keys: {" + extract_keys_recursive(d) + "}"
 
 def safe_dump_arbitrary_value_or_type(v) -> str:
+    """
+    Safely dump a value and its type to a string for logging.
+
+    If `env.SESH_PRO_BACKEND_UNSAFE_LOGGING` is True, the value
+    and type will be dumped.
+    Else just the type will be dumped.
+
+    Args:
+        v: Value to dump.
+
+    Returns:
+        String of value info in the format if unsafe logging:
+        "(type) value"
+        Else:
+        "type"
+    """
     t = type(v)
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
         return f'({t}) {v}'
     else:
-        return t
+        return str(t)
 
-def safe_get_dict_value_type(d: dict, key: str) -> str:
+
+def safe_get_dict_value_type(d: dict[str, typing.Any], key: str) -> str:
     v = d.get(key)
     return safe_dump_arbitrary_value_or_type(v)
 
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
-JSONValue = int | str | list[dict[str, int | str]] | dict[str, int | str]
+JSONPrimitive: typing.TypeAlias = str | int | float | bool | None
+JSONValue: typing.TypeAlias = JSONPrimitive | dict[str, 'JSONValue'] | list['JSONValue']
+JSONObject: typing.TypeAlias = dict[str, JSONValue]
+JSONArray: typing.TypeAlias = list[JSONValue]
 
-def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str:
+def json_dict_require_str(d: JSONObject, key: str, err: ErrorSink) -> str:
     result = ''
     if key in d:
         if isinstance(d[key], str):
@@ -250,7 +360,7 @@ def json_dict_require_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
-def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
+def json_dict_require_int(d: JSONObject, key: str, err: ErrorSink) -> int:
     result = 0
     if key in d:
         if isinstance(d[key], int):
@@ -261,7 +371,7 @@ def json_dict_require_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
-def json_dict_require_bool(d: dict[str, JSONValue], key: str, err: ErrorSink) -> bool:
+def json_dict_require_bool(d: JSONObject, key: str, err: ErrorSink) -> bool:
     result = False
     if key in d:
         if isinstance(d[key], bool):
@@ -272,7 +382,7 @@ def json_dict_require_bool(d: dict[str, JSONValue], key: str, err: ErrorSink) ->
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
-def json_dict_require_array(d: dict[str, JSONValue], key: str, err: ErrorSink) -> list[JSONValue]:
+def json_dict_require_array(d: JSONObject, key: str, err: ErrorSink) -> JSONArray:
     result: list[JSONValue] = []
     if key in d:
         if isinstance(d[key], list):
@@ -283,7 +393,7 @@ def json_dict_require_array(d: dict[str, JSONValue], key: str, err: ErrorSink) -
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
-def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> dict[str, JSONValue]:
+def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> JSONObject:
     result: dict[str, JSONValue] = {}
     if key in d:
         if isinstance(d[key], dict):
@@ -294,7 +404,7 @@ def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
     return result
 
-def json_dict_require_str_coerce_to_int(d: dict[str, JSONValue], key: str, err: ErrorSink) -> int:
+def json_dict_require_str_coerce_to_int(d: JSONObject, key: str, err: ErrorSink) -> int:
     result_str = json_dict_require_str(d, key, err)
     result = 0
     try:
@@ -303,14 +413,14 @@ def json_dict_require_str_coerce_to_int(d: dict[str, JSONValue], key: str, err: 
         err.msg_list.append(f'Unable to parse {key} type to an int: {e}')
     return result
 
-def json_dict_require_str_coerce_to_enum(d: dict[str, JSONValue], key: str, my_enum: typing.Type[enum.StrEnum], err: ErrorSink):
+def json_dict_require_str_coerce_to_enum(d: JSONObject, key: str, my_enum: typing.Type[enum.StrEnum], err: ErrorSink):
     result_str = json_dict_require_str(d, key, err)
     result = my_enum._value2member_map_.get(result_str)
     if result is None:
         err.msg_list.append(f'Unable to parse {key} type to an enum')
     return result
 
-def json_dict_require_int_coerce_to_enum(d: dict[str, JSONValue], key: str, my_enum: typing.Type[enum.IntEnum], err: ErrorSink):
+def json_dict_require_int_coerce_to_enum(d: JSONObject, key: str, my_enum: typing.Type[enum.IntEnum], err: ErrorSink):
     result = None
     result_int = None
     if key in d:
@@ -329,7 +439,7 @@ def json_dict_require_int_coerce_to_enum(d: dict[str, JSONValue], key: str, my_e
 
     return result
 
-def json_dict_optional_bool(d: dict[str, JSONValue], key: str, default: bool, err: ErrorSink) -> bool:
+def json_dict_optional_bool(d: JSONObject, key: str, default: bool, err: ErrorSink) -> bool:
     result = default
     if key in d:
         if isinstance(d[key], bool):
@@ -338,7 +448,7 @@ def json_dict_optional_bool(d: dict[str, JSONValue], key: str, default: bool, er
             err.msg_list.append(f'Key "{key}" value was not a bool: "{safe_get_dict_value_type(d, key)}"')
     return result
 
-def json_dict_optional_str(d: dict[str, JSONValue], key: str, err: ErrorSink) -> str | None:
+def json_dict_optional_str(d: JSONObject, key: str, err: ErrorSink) -> str | None:
     result = None
     if key in d:
         if isinstance(d[key], str):
@@ -347,7 +457,7 @@ def json_dict_optional_str(d: dict[str, JSONValue], key: str, err: ErrorSink) ->
             err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     return result
 
-def json_dict_optional_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> dict[str, JSONValue] | None:
+def json_dict_optional_obj(d: JSONObject, key: str, err: ErrorSink) -> JSONObject | None:
     result: dict[str, JSONValue] | None = None
     if key in d:
         if isinstance(d[key], dict):
@@ -355,3 +465,10 @@ def json_dict_optional_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) ->
         else:
             err.msg_list.append(f'Key "{key}" value was not an object: "{safe_get_dict_value_type(d, key)}"')
     return result
+
+def validate_string_list(items: list[JSONValue]) -> typing.TypeGuard[list[str]]:
+    return all(isinstance(item, str) for item in items)
+
+def handle_not_implemented(name: str, err: ErrorSink):
+    err.msg_list.append(f"'{name}' is not implemented!")
+

@@ -23,6 +23,17 @@ class PaymentStatus(enum.Enum):
     Expired    = 3
     Refunded   = 4
 
+class ProPlanType(enum.Enum):
+    """
+    Universal Pro Plan Identifier.
+    This enum is stored as an int in the database, existing entries must
+    not be reordered or changed.
+    """
+    Nil             = 0
+    OneMonth        = 1
+    ThreeMonth      = 2
+    TwelveMonth     = 3
+
 @dataclasses.dataclass
 class ExpireResult:
     already_done_by_someone_else: bool = False
@@ -64,22 +75,29 @@ class SQLField:
 SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
   SQLField('master_pkey',                'BLOB NOT NULL'),     # Session Pro master public key associated with the payment
   SQLField('status',                     'INTEGER NOT NULL'),  # Enum cooresponding to `PaymentStatus`
-  SQLField('subscription_duration_s',    'INTEGER NOT NULL'),
+  SQLField('plan',                       'INTEGER NOT NULL'),  # Enum cooresponding to `ProPlanType`
   SQLField('payment_provider',           'INTEGER NOT NULL'),
 
   # Timestamp of when the payment was redeemed rounded to the end of the day.
   SQLField('redeemed_unix_ts_ms',        'INTEGER'),
   SQLField('expiry_unix_ts_ms',          'INTEGER NOT NULL'),
 
-  # Timestamp at which the user's grace period will start if the user currently has an auto-renewing
-  # subscription. The user is entitled to Session Pro during this period until `expiry_unix_ts_ms`
-  # as usual, however clients may wish to use this information to identify users with auto-renewing
-  # enabled, and, that the subscription is attempting to be renewed and inform the user accordingly.
+  # Duration of the user's grace period. The user is entitled to Session Pro during this period until
+  # `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients may wish to use this information to identify
+  # users with auto-renewing enabled, and, that the subscription is attempting to be renewed and inform
+  # the user accordingly. Clients can also request a proof for users in a grace period that will expire
+  # at the end of the grace period.
   #
   # If the grace period is not enabled (e.g. the user has a non-renewing subscription), this value
   # will be set to 0.
-  SQLField('grace_unix_ts_ms',           'INTEGER NOT NULL'),
-  SQLField('refunded_unix_ts_ms',        'INTEGER'),
+  SQLField('grace_period_duration_ms',   'INTEGER NOT NULL'),
+
+  # Time at which the payment is no longer eligible for a refund through its payment platform. If
+  # the payment is always eligible for refund through its payment platform this value will be set
+  # to 0
+  SQLField('platform_refund_expiry_unix_ts_ms', 'INTEGER NOT NULL'),
+  SQLField('refunded_unix_ts_ms',               'INTEGER'),
+
   SQLField('apple_original_tx_id',       'BLOB'),
   SQLField('apple_tx_id',                'BLOB'),
   SQLField('apple_web_line_order_tx_id', 'BLOB'),
@@ -99,11 +117,12 @@ SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
 
 SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes,      # master_pkey
                                                             int,        # status
-                                                            int,        # subscription_duration_s
+                                                            int,        # plan
                                                             int,        # payment_provider
-                                                            int,        # redeemed_unix_ts_ms
+                                                            int | None, # redeemed_unix_ts_ms
                                                             int,        # expiry_unix_ts_ms
-                                                            int,        # grace_unix_ts_ms
+                                                            int,        # grace_period_duration_ms
+                                                            int,        # platform_refund_expiry_unix_ts_ms
                                                             int | None, # refunded_unix_ts_ms
                                                             str | None, # apple_original_tx_id
                                                             str | None, # apple_tx_id
@@ -121,6 +140,12 @@ class PaymentProviderTransaction:
     google_order_id:            str = ''
 
 @dataclasses.dataclass
+class UserErrorTransaction:
+    provider:                   base.PaymentProvider = base.PaymentProvider.Nil
+    apple_original_tx_id:       str = ''
+    google_payment_token:       str = ''
+
+@dataclasses.dataclass
 class AddProPaymentUserTransaction:
     provider:             base.PaymentProvider = base.PaymentProvider.Nil
     apple_tx_id:          str                  = ''
@@ -136,7 +161,7 @@ class AppleTransaction:
 @dataclasses.dataclass
 class UnredeemedPaymentRow:
     id:                      int                  = 0
-    subscription_duration_s: int                  = 0
+    plan:                    ProPlanType          = ProPlanType.Nil
     payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
     apple:                   AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
     google_payment_token:    str                  = ''
@@ -144,18 +169,19 @@ class UnredeemedPaymentRow:
 
 @dataclasses.dataclass
 class PaymentRow:
-    id:                      int                  = 0
-    master_pkey:             bytes                = ZERO_BYTES32
-    status:                  PaymentStatus        = PaymentStatus.Nil
-    subscription_duration_s: int                  = 0
-    payment_provider:        base.PaymentProvider = base.PaymentProvider.Nil
-    redeemed_unix_ts_ms:     int | None           = None
-    expiry_unix_ts_ms:       int                  = 0
-    grace_unix_ts_ms:        int                  = 0
-    refunded_unix_ts_ms:     int | None           = None
-    apple:                   AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
-    google_payment_token:    str                  = ''
-    google_order_id:         str                  = ''
+    id:                                 int                  = 0
+    master_pkey:                        bytes                = ZERO_BYTES32
+    status:                             PaymentStatus        = PaymentStatus.Nil
+    plan:                               ProPlanType          = ProPlanType.Nil
+    payment_provider:                   base.PaymentProvider = base.PaymentProvider.Nil
+    redeemed_unix_ts_ms:                int | None           = None
+    expiry_unix_ts_ms:                  int                  = 0
+    grace_period_duration_ms:           int                  = 0
+    platform_refund_expiry_unix_ts_ms:  int                  = 0
+    refunded_unix_ts_ms:                int | None           = None
+    apple:                              AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
+    google_payment_token:               str                  = ''
+    google_order_id:                    str                  = ''
 
 @dataclasses.dataclass
 class UserRow:
@@ -164,11 +190,18 @@ class UserRow:
     expiry_unix_ts_ms: int   = 0
 
 @dataclasses.dataclass
+class UserErrorRow:
+    provider_id:       str                  = ''
+    payment_provider:  base.PaymentProvider = base.PaymentProvider.Nil
+    error_type:        int                  = 0
+
+
+@dataclasses.dataclass
 class GetUserAndPayments:
-    user:                     UserRow                                           = dataclasses.field(default_factory=UserRow)
-    payments_it:              collections.abc.Iterator[SQLTablePaymentRowTuple] = dataclasses.field(default_factory=lambda: iter([SQLTablePaymentRowTuple()]))
-    latest_expiry_unix_ts_ms: int                                               = 0
-    latest_grace_unix_ts_ms:  int                                               = 0
+    user:                               UserRow                                           = dataclasses.field(default_factory=UserRow)
+    payments_it:                        collections.abc.Iterator[SQLTablePaymentRowTuple] = dataclasses.field(default_factory=lambda: iter([SQLTablePaymentRowTuple()]))
+    latest_expiry_unix_ts_ms:           int                                               = 0
+    latest_grace_period_duration_ms:    int                                               = 0
 
 @dataclasses.dataclass
 class RevocationRow:
@@ -302,21 +335,22 @@ def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRo
 
         rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
         for row in rows:
-            item                                = PaymentRow()
-            item.id                             = row[0]
-            item.master_pkey                    = row[1]
-            item.status                         = PaymentStatus(row[2])
-            item.subscription_duration_s        = row[3]
-            item.payment_provider               = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_ms            = row[5]
-            item.expiry_unix_ts_ms              = row[6]
-            item.grace_unix_ts_ms               = row[7]
-            item.refunded_unix_ts_ms            = row[8]
-            item.apple.original_tx_id           = row[9]  if row[9]  else ''
-            item.apple.tx_id                    = row[10] if row[10] else ''
-            item.apple.web_line_order_tx_id     = row[11] if row[11] else ''
-            item.google_payment_token           = row[12] if row[12] else ''
-            item.google_order_id                = row[13] if row[13] else ''
+            item                                    = PaymentRow()
+            item.id                                 = row[0]
+            item.master_pkey                        = row[1]
+            item.status                             = PaymentStatus(row[2])
+            item.plan                               = ProPlanType(row[3])
+            item.payment_provider                   = base.PaymentProvider(row[4])
+            item.redeemed_unix_ts_ms                = row[5] if row[5] else None
+            item.expiry_unix_ts_ms                  = row[6]
+            item.grace_period_duration_ms           = row[7]
+            item.platform_refund_expiry_unix_ts_ms  = row[8]
+            item.refunded_unix_ts_ms                = row[9] if row[9] else None
+            item.apple.original_tx_id               = row[10] if row[10] else ''
+            item.apple.tx_id                        = row[11] if row[11] else ''
+            item.apple.web_line_order_tx_id         = row[12] if row[12] else ''
+            item.google_payment_token               = row[13] if row[13] else ''
+            item.google_order_id                    = row[14] if row[14] else ''
             result.append(item)
     return result;
 
@@ -327,21 +361,22 @@ def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
         _    = tx.cursor.execute('SELECT * FROM payments')
         rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
         for row in rows:
-            item                                = PaymentRow()
-            item.id                             = row[0]
-            item.master_pkey                    = row[1]
-            item.status                         = PaymentStatus(row[2])
-            item.subscription_duration_s        = row[3]
-            item.payment_provider               = base.PaymentProvider(row[4])
-            item.redeemed_unix_ts_ms            = row[5]
-            item.expiry_unix_ts_ms              = row[6]
-            item.grace_unix_ts_ms               = row[7]
-            item.refunded_unix_ts_ms            = row[8]
-            item.apple.original_tx_id           = row[9]  if row[9]  else ''
-            item.apple.tx_id                    = row[10] if row[10] else ''
-            item.apple.web_line_order_tx_id     = row[11] if row[11] else ''
-            item.google_payment_token           = row[12] if row[12] else ''
-            item.google_order_id                = row[13] if row[13] else ''
+            item                                    = PaymentRow()
+            item.id                                 = row[0]
+            item.master_pkey                        = row[1]
+            item.status                             = PaymentStatus(row[2])
+            item.plan                               = ProPlanType(row[3])
+            item.payment_provider                   = base.PaymentProvider(row[4])
+            item.redeemed_unix_ts_ms                = row[5] if row[5] else None
+            item.expiry_unix_ts_ms                  = row[6]
+            item.grace_period_duration_ms           = row[7]
+            item.platform_refund_expiry_unix_ts_ms  = row[8]
+            item.refunded_unix_ts_ms                = row[9] if row[9] else None
+            item.apple.original_tx_id               = row[10] if row[10] else ''
+            item.apple.tx_id                        = row[11] if row[11] else ''
+            item.apple.web_line_order_tx_id         = row[12] if row[12] else ''
+            item.google_payment_token               = row[13] if row[13] else ''
+            item.google_order_id                    = row[14] if row[14] else ''
             result.append(item)
     return result;
 
@@ -352,7 +387,7 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     result      = GetUserAndPayments()
     result.user = get_user_from_sql_tx(tx, master_pkey)
     _ = tx.cursor.execute('''
-        SELECT   expiry_unix_ts_ms, grace_unix_ts_ms
+        SELECT   expiry_unix_ts_ms, grace_period_duration_ms
         FROM     payments
         WHERE    master_pkey = ? AND status = ?
         ORDER BY expiry_unix_ts_ms DESC
@@ -362,8 +397,8 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     row = tx.cursor.fetchone()
     row = typing.cast(tuple[int, int] | None, row)
     if row:
-        result.latest_expiry_unix_ts_ms = row[0]
-        result.latest_grace_unix_ts_ms  = row[1]
+        result.latest_expiry_unix_ts_ms         = row[0]
+        result.latest_grace_period_duration_ms  = row[1]
 
     _ = tx.cursor.execute(f'''
         SELECT   {select_fields}
@@ -546,6 +581,12 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 revocation_ticket      INTEGER NOT NULL  -- Monotonic index incremented when a revocation is added or removed
             );
 
+            CREATE TABLE IF NOT EXISTS user_errors (
+                -- Unique provider id, this is the purchase token on google, and x (TODO: add apple token name) on apple
+                provider_id                 STRING PRIMARY KEY NOT NULL,
+                payment_provider            INTEGER NOT NULL
+            );
+
             CREATE TRIGGER IF NOT EXISTS increment_revocation_ticket_after_insert
             AFTER INSERT ON revocations
             BEGIN
@@ -559,6 +600,8 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 UPDATE runtime
                 SET    revocation_ticket = revocation_ticket + 1;
             END;
+
+            
         '''
 
         assert tx.cursor is not None
@@ -599,10 +642,8 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
         base.verify_payment_provider(it.payment_provider, err)
         if len(it.google_payment_token) != BLAKE2B_DIGEST_SIZE:
             err.msg_list.append(f'Unredeeemed payment #{index} token is not 32 bytes, was {len(it.google_payment_token)}')
-        if it.subscription_duration_s != base.SECONDS_IN_DAY * 30 and \
-           it.subscription_duration_s != base.SECONDS_IN_DAY * 90 and \
-           it.subscription_duration_s != base.SECONDS_IN_DAY * 365:
-               err.msg_list.append(f'Unredeemed payment #{index} had an invalid subscription duration, expected 30, 90 or 365 day duration in seconds, received ({it.subscription_duration_s})')
+        if it.plan == ProPlanType.Nil:
+               err.msg_list.append(f'Unredeemed payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
 
     # NOTE: Wednesday, 27 August 2025 00:00:00, arbitrary date in the past that PRO cannot
     # possibly be before. We should update this to to the PRO release date.
@@ -611,8 +652,8 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     payments: list[PaymentRow] = get_payments_list(sql_conn)
     for index, it in enumerate(payments):
         # NOTE: Check mandatory fields
-        if it.subscription_duration_s == 0:
-            err.msg_list.append(f'{it.status.name} payment #{index} subscription duration is set to 0 but it should not be. It should have been derived from the platform payment provider (e.g. by converting the purchased product ID to a specified duration)')
+        if it.plan == ProPlanType.Nil: 
+            err.msg_list.append(f'{it.status.name} payment #{index} plan is invalid. It should have been derived from the platform payment provider (e.g. by converting the purchased product ID to a plan)')
         if it.payment_provider == base.PaymentProvider.Nil:
             err.msg_list.append(f'{it.status.name} payment #{index} payment provider is set to {it.payment_provider.name} but it should not be. It should have been set by the platform before added to the DB')
 
@@ -660,12 +701,9 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
             if not it.refunded_unix_ts_ms:
                 err.msg_list.append(f'{it.status.name} payment #{index} refunded ts was not set. The payment is refunded so it should be non-zero')
 
-        # NOTE: Verify the subscription duration, it should always be set once
-        # it enters the DB and it should have a duration of a specific amount.
-        if it.subscription_duration_s != base.SECONDS_IN_DAY * 30 and \
-           it.subscription_duration_s != base.SECONDS_IN_DAY * 90 and \
-           it.subscription_duration_s != base.SECONDS_IN_DAY * 365:
-               err.msg_list.append(f'Payment #{index} had an invalid subscription duration, expected 30, 90 or 365 day duration in seconds, received ({it.subscription_duration_s})')
+        # NOTE: Verify the plan, it should always be set once it enters the DB..
+        if it.plan == ProPlanType.Nil:
+               err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
         base.verify_payment_provider(it.payment_provider, err)
 
         # NOTE: Check that the payment's redeemed ts is a reasonable value
@@ -826,11 +864,10 @@ def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
-def update_payment_unix_ts_ms(sql_conn:          sqlite3.Connection,
-                              payment_tx:        PaymentProviderTransaction,
-                              expiry_unix_ts_ms: int,
-                              grace_unix_ts_ms:  int,
-                              err:               base.ErrorSink) -> bool:
+def update_payment_grace_duration_ms(sql_conn:          sqlite3.Connection,
+                                     payment_tx:        PaymentProviderTransaction,
+                                     grace_duration_ms: int,
+                                     err:               base.ErrorSink) -> bool:
     result = False
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
@@ -844,19 +881,17 @@ def update_payment_unix_ts_ms(sql_conn:          sqlite3.Connection,
             case base.PaymentProvider.GooglePlayStore:
                 _ = tx.cursor.execute(f'''
                     UPDATE payments
-                    SET    expiry_unix_ts_ms = ?, grace_unix_ts_ms = ?
+                    SET    grace_period_duration_ms = ?
                     WHERE  google_payment_token = ? AND google_order_id = ?
-                ''', (expiry_unix_ts_ms,
-                      grace_unix_ts_ms,
+                ''', (grace_duration_ms,
                       payment_tx.google_payment_token,
                       payment_tx.google_order_id))
             case base.PaymentProvider.iOSAppStore:
                 _ = tx.cursor.execute(f'''
                     UPDATE payments
-                    SET    expiry_unix_ts_ms = ?, grace_unix_ts_ms = ?
-                    WHERE  apple_original_tx_id = ? ANFD apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-                ''', (expiry_unix_ts_ms,
-                      grace_unix_ts_ms,
+                    SET    grace_period_duration_ms = ?
+                    WHERE  apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                ''', (grace_duration_ms,
                       payment_tx.apple_original_tx_id,
                       payment_tx.apple_tx_id,
                       payment_tx.apple_web_line_order_tx_id))
@@ -867,12 +902,11 @@ def update_payment_unix_ts_ms(sql_conn:          sqlite3.Connection,
         err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
     return result
 
-def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
-                           payment_tx:              PaymentProviderTransaction,
-                           subscription_duration_s: int,
-                           expiry_unix_ts_ms:       int,
-                           grace_unix_ts_ms:        int,
-                           err:                     base.ErrorSink):
+def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
+                           payment_tx:          PaymentProviderTransaction,
+                           plan:                ProPlanType,
+                           expiry_unix_ts_ms:   int,
+                           err:                 base.ErrorSink):
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
         return
@@ -882,6 +916,8 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
             # payments table
+            
+            platform_refund_expiry_ts_ms = base.get_now_ms() + base.MILLISECONDS_IN_DAY * 2
 
             _ = tx.cursor.execute(f'''
                 SELECT 1
@@ -893,20 +929,20 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
 
             record = tx.cursor.fetchone()
             if not record:
-                fields      = ['subscription_duration_s', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'grace_unix_ts_ms']
+                fields      = ['plan', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms']
                 stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
                 _ = tx.cursor.execute(f'''
                     INSERT INTO payments ({stmt_fields})
                     VALUES ({stmt_values})
-                ''', (subscription_duration_s,
+                ''', (int(plan.value),
                       payment_tx.provider.value,
                       payment_tx.google_payment_token,
                       payment_tx.google_order_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
-                      grace_unix_ts_ms))
+                      platform_refund_expiry_ts_ms))
 
         elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
             # NOTE: Insert into the table, IFF, the apple payment doesn't already exist somewhere else.
@@ -926,21 +962,21 @@ def add_unredeemed_payment(sql_conn:                sqlite3.Connection,
 
             record = tx.cursor.fetchone()
             if not record:
-                fields:      list[str] = ['subscription_duration_s', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'grace_unix_ts_ms']
+                fields:      list[str] = ['plan', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms']
                 stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
                 _ = tx.cursor.execute(f'''
                     INSERT INTO payments ({stmt_fields})
                     VALUES ({stmt_values})
-                ''', (subscription_duration_s,
+                ''', (int(plan.value),
                       int(payment_tx.provider.value),
                       payment_tx.apple_original_tx_id,
                       payment_tx.apple_tx_id,
                       payment_tx.apple_web_line_order_tx_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
-                      grace_unix_ts_ms))
+                      0))
 
 def allocate_new_gen_id_if_master_pkey_has_payments_internal(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     result:            AllocatedGenID = AllocatedGenID()
@@ -950,14 +986,14 @@ def allocate_new_gen_id_if_master_pkey_has_payments_internal(tx: base.SQLTransac
     # Get the latest payment that has been redeemed and has an expiry date assigned to it for the
     # master pkey. This is the newest expiry date that we will allocate a generation ID for
     _ = tx.cursor.execute('''
-        SELECT   expiry_unix_ts_ms, grace_unix_ts_ms
+        SELECT   expiry_unix_ts_ms
         FROM     payments
         WHERE    master_pkey = ? AND status = ?
         ORDER BY expiry_unix_ts_ms DESC
         LIMIT    1
     ''', (master_pkey_bytes, int(PaymentStatus.Redeemed.value),))
 
-    row = typing.cast(tuple[int, int], tx.cursor.fetchone())
+    row = typing.cast(tuple[int], tx.cursor.fetchone())
     if row:
         result.found             = True
         result.expiry_unix_ts_ms = row[0]
@@ -1136,10 +1172,12 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         add_unredeemed_payment(sql_conn=sql_conn,
                                payment_tx=internal_payment_tx,
-                               subscription_duration_s=base.SECONDS_IN_DAY * 30,
+                               plan=ProPlanType.OneMonth,
                                expiry_unix_ts_ms=expiry_unix_ts_ms,
-                               grace_unix_ts_ms=grace_unix_ts_ms,
                                err=err)
+        
+        if apply_grace:
+            _ = update_payment_grace_duration_ms(sql_conn, internal_payment_tx, 60 * 1000, err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
@@ -1331,4 +1369,58 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
     return result
+
+def verify_user_error_tx(error_tx: UserErrorTransaction, err: base.ErrorSink):
+    base.verify_payment_provider(error_tx.provider, err)
+    match error_tx.provider:
+        case base.PaymentProvider.GooglePlayStore:
+            verify_google_payment_token_hash(error_tx.google_payment_token, err)
+            if len(error_tx.google_payment_token) == 0:
+                err.msg_list.append(f'Google payment token was not set')
+        case base.PaymentProvider.iOSAppStore:
+            if len(error_tx.apple_original_tx_id) == 0:
+                err.msg_list.append(f'Apple original TX ID was not set')
+        case base.PaymentProvider.Nil:
+            err.msg_list.append(f'Payment provider was set invalidly to nil')
+
+def add_user_error(sql_conn: sqlite3.Connection, error_tx: UserErrorTransaction, err: base.ErrorSink):
+    verify_user_error_tx(error_tx, err)
+    if not err.has():
+        with base.SQLTransaction(sql_conn) as tx:
+            assert tx.cursor is not None
+            match error_tx.provider:
+                case base.PaymentProvider.Nil:
+                    pass
+                case base.PaymentProvider.GooglePlayStore:
+                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
+                                            VALUES (?, ?) ON CONFLICT DO NOTHING''',
+                         (error_tx.google_payment_token,
+                          int(error_tx.provider.value)))
+                case base.PaymentProvider.iOSAppStore:
+                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
+                                            VALUES (?, ?) ON CONFLICT DO NOTHING''', 
+                         (error_tx.apple_original_tx_id,
+                          int(error_tx.provider.value)))
+
+def get_user_error_from_sql_tx(tx: base.SQLTransaction, provider_id: str) -> UserErrorRow:
+    assert tx.cursor is not None
+    _                        = tx.cursor.execute('SELECT * FROM user_errors WHERE provider_id = ?', ((provider_id),))
+    result: UserErrorRow     = UserErrorRow()
+    row                      = typing.cast(tuple[str, int] | None, tx.cursor.fetchone())
+    if row:
+        result.provider_id       = row[0]
+        result.payment_provider  = base.PaymentProvider(row[1])
+    return result;
+
+
+def get_user_error(sql_conn: sqlite3.Connection, provider_id: str) -> UserErrorRow:
+    result: UserErrorRow = UserErrorRow()
+    with base.SQLTransaction(sql_conn) as tx:
+        result = get_user_error_from_sql_tx(tx, provider_id)
+    return result;
+
+def delete_user_errors(sql_conn: sqlite3.Connection, provider: base.PaymentProvider):
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ?;''', (int(provider.value),))
 

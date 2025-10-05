@@ -275,16 +275,20 @@ API
                        User had Session Pro payment(s) that were fully consumed previously and
                        currently don't have an active payment and hence entitlement to Session Pro
                        features.
+      auto_renewing           : 1 byte boolean indicating if the latest pro subscription (if active)
+                                is set to auto-renew at the its expiry time.
       latest_expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the entitlement of Session
                                 Pro is due to expire as defined by the payment with the latest
                                 expiry date associated with it.
-      latest_grace_unix_ts_ms:  8 byte UNIX timestamp indicating when the payment platform will
-                                attempt to auto-renew the Session Pro subscription. During the
-                                period between [latest_grace_unix_ts_ms, latest_expiry_unix_ts_ms]
-                                the user is still entitled to Session Pro and if the subscription
-                                is successfully renewed, the user will retain Session Pro across the
-                                billing cycle boundary and the latest grace period is updated.
-                                Set to 0 if auto-renewal for a subscription is disabled.
+      latest_grace_duration_ms: 8 byte duration integer indicating the grace period duration. This
+                                will be 0 if auto auto-renewing is disabled, but this being zero does
+                                not mean auto-renewing is disabled. This is the amount of time the
+                                payment  platform will attempt to auto-renew the subscription after
+                                it has expired. The user is entitled to Session Pro during this period
+                                until `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients can
+                                request a pro proof for users in a grace period that will expire at the
+                                end of the grace period. If the grace period is not enabled (e.g. the
+                                user has a non-renewing subscription), this value will be set to 0.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                  1 byte integer describing the status of the consumption of the
@@ -313,13 +317,17 @@ API
                                    2 => Apple iOS App Store
         expiry_unix_ts_ms:       8 byte UNIX timestamp indicating when the entitlement of Session
                                  Pro is due to expire.
-        grace_unix_ts_ms:        8 byte UNIX timestamp indicating when the auto-renewing for Session
-                                 Pro is to occur. Set to 0 if auto-renewing is disabled.
+        grace_duration_ms:       8 byte duration integer indicating how long the subscription's
+                                 grace period is. Set to 0 if auto-renewing is disabled.
         redeemed_unix_ts_ms:     8 byte UNIX timestamp indicating when the payment was registered.
                                  This timestamp is rounded up to the next day boundary from the
                                  actual registration date.
-        refunded_unix_ts_ms:     8 byte UNIX timestamp indicating when the payment was refunded. 0
-                                 if it never refunded.
+       
+        platform_refund_expiry_unix_ts_ms:  8 byte unix timestamp indicating when the payment will no
+                                            longer be eligible for a refund via its purchase platform.
+                                            0 if always eligible.
+        refunded_unix_ts_ms:                8 byte UNIX timestamp indicating when the payment was
+                                            refunded. 0 if it never refunded.
         google_payment_token:    When payment provider is Google Play Store, a string which is set
                                  to the platform-specific purchase token for the subscription.
         google_order_id:         When payment provider is Google Play Store, a string which is set
@@ -635,6 +643,8 @@ def get_pro_revocations():
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result
 
+# TODO: we need to add the user_errors table changes to any endpoints that need to report a generic error to a user
+
 @flask_blueprint.route(ROUTE_GET_PRO_STATUS, methods=['POST'])
 def get_pro_payments():
     # Get JSON from request
@@ -681,11 +691,11 @@ def get_pro_payments():
     items:           list[dict[str, str | int]] = []
     user_pro_status: UserProStatus              = UserProStatus.NeverBeenPro
     latest_expiry_unix_ts_ms                    = 0
-    latest_grace_unix_ts_ms                     = 0
+    latest_grace_duration_ms                    = 0
     with open_db_from_flask_request_context(flask.current_app) as db:
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
-            latest_grace_unix_ts_ms              = get_user.latest_grace_unix_ts_ms
+            latest_grace_duration_ms             = get_user.latest_grace_period_duration_ms
             latest_expiry_unix_ts_ms             = get_user.latest_expiry_unix_ts_ms
             has_payments = False
             for row in get_user.payments_it:
@@ -696,18 +706,20 @@ def get_pro_payments():
                     user_pro_status = UserProStatus.Expired
                     has_payments    = True
 
-                status                         = backend.PaymentStatus(row[1])
-                subscription_duration_s: int   = row[2]
-                payment_provider               = base.PaymentProvider(row[3])
-                redeemed_unix_ts_ms:     int   = row[4]
-                expiry_unix_ts_ms:       int   = row[5]
-                grace_unix_ts_ms:        int   = row[6]
-                refunded_unix_ts_ms:     int   = row[7]  if row[7]  else 0
-                apple_original_tx_id:    str   = row[8]  if row[8]  else ''
-                apple_tx_id:             str   = row[9]  if row[9]  else ''
-                apple_web_line_order_id: str   = row[10] if row[10] else ''
-                google_payment_token:    str   = row[11] if row[11] else ''
-                google_order_id:         str   = row[12] if row[12] else ''
+                status                                    = backend.PaymentStatus(row[1])
+                subscription_duration_s:            int   = row[2]
+                payment_provider                          = base.PaymentProvider(row[3])
+                # TODO: this can be None, is this a valid case?
+                redeemed_unix_ts_ms:                int   = row[4]
+                expiry_unix_ts_ms:                  int   = row[5]
+                grace_duration_ms:                  int   = row[6]
+                platform_refund_expiry_unix_ts_ms:  int   = row[7]
+                refunded_unix_ts_ms:                int   = row[8]  if row[8]  else 0
+                apple_original_tx_id:               str   = row[9]  if row[9]  else ''
+                apple_tx_id:                        str   = row[10] if row[10]  else ''
+                apple_web_line_order_id:            str   = row[11] if row[11] else ''
+                google_payment_token:               str   = row[12] if row[12] else ''
+                google_order_id:                    str   = row[13] if row[13] else ''
 
                 # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                 # confidential until the user actually registers the token themselves which they
@@ -721,28 +733,30 @@ def get_pro_payments():
                 if history:
                     if payment_provider == base.PaymentProvider.GooglePlayStore:
                         items.append({
-                            'status':                  int(status.value),
-                            'subscription_duration_s': subscription_duration_s,
-                            'payment_provider':        int(payment_provider.value),
-                            'expiry_unix_ts_ms':       expiry_unix_ts_ms,
-                            'grace_unix_ts_ms':        grace_unix_ts_ms,
-                            'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
-                            'refunded_unix_ts_ms':     refunded_unix_ts_ms,
-                            'google_payment_token':    google_payment_token,
-                            'google_order_id':         google_order_id,
+                            'status':                               int(status.value),
+                            'subscription_duration_s':              subscription_duration_s,
+                            'payment_provider':                     int(payment_provider.value),
+                            'expiry_unix_ts_ms':                    expiry_unix_ts_ms,
+                            'grace_duration_ms':                    grace_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    platform_refund_expiry_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  redeemed_unix_ts_ms,
+                            'refunded_unix_ts_ms':                  refunded_unix_ts_ms,
+                            'google_payment_token':                 google_payment_token,
+                            'google_order_id':                      google_order_id,
                         })
                     elif payment_provider == base.PaymentProvider.iOSAppStore:
                         items.append({
-                            'status':                  int(status.value),
-                            'subscription_duration_s': subscription_duration_s,
-                            'payment_provider':        int(payment_provider.value),
-                            'expiry_unix_ts_ms':       expiry_unix_ts_ms,
-                            'grace_unix_ts_ms':        grace_unix_ts_ms,
-                            'redeemed_unix_ts_ms':     redeemed_unix_ts_ms,
-                            'refunded_unix_ts_ms':     refunded_unix_ts_ms,
-                            'apple_original_tx_id':    apple_original_tx_id,
-                            'apple_tx_id':             apple_tx_id,
-                            'apple_web_line_order_id': apple_web_line_order_id,
+                            'status':                               int(status.value),
+                            'subscription_duration_s':              subscription_duration_s,
+                            'payment_provider':                     int(payment_provider.value),
+                            'expiry_unix_ts_ms':                    expiry_unix_ts_ms,
+                            'grace_duration_ms':                    grace_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    platform_refund_expiry_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  redeemed_unix_ts_ms,
+                            'refunded_unix_ts_ms':                  refunded_unix_ts_ms,
+                            'apple_original_tx_id':                 apple_original_tx_id,
+                            'apple_tx_id':                          apple_tx_id,
+                            'apple_web_line_order_id':              apple_web_line_order_id,
                         })
 
                 # NOTE: Determine pro status if it is a relevant
@@ -755,10 +769,13 @@ def get_pro_payments():
                 if not history and user_pro_status == UserProStatus.Active:
                     break
 
+    auto_renewing = latest_grace_duration_ms > 0
+
     result = make_success_response(dict_result={
         'version':                  0,
         'status':                   int(user_pro_status.value),
-        'latest_grace_unix_ts_ms':  latest_grace_unix_ts_ms,
+        'auto_renewing':            auto_renewing,
+        'latest_grace_duration_ms': latest_grace_duration_ms,
         'latest_expiry_unix_ts_ms': latest_expiry_unix_ts_ms,
         'items':                    items
     })

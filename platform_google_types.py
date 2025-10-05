@@ -1,9 +1,12 @@
 import dataclasses
+import traceback
 import typing
 from enum import IntEnum, StrEnum
-from typing import Optional
+from typing import Optional, override
 
-from google.protobuf.internal.well_known_types import Timestamp
+import google.protobuf.internal.well_known_types as GoogleTypes
+
+from google.protobuf.internal.well_known_types import Duration, Timestamp
 
 import base
 
@@ -18,8 +21,91 @@ class GoogleTimestamp(Timestamp):
             self.FromJsonString(rfc3339_timestamp)
             self.unix_milliseconds = self.ToMilliseconds()
             self.unix_seconds = self.ToSeconds()
+
         except Exception as e:
-            err.msg_list.append(f'Failed to parse timestamp "{rfc3339_timestamp}": {e}')
+            err.msg_list.append(f'Failed to parse timestamp "{rfc3339_timestamp}": {traceback.format_exc()}')
+
+
+# Copied from google.protobuf.internal.well_known_types
+_DURATION_SECONDS_MAX = 315576000000
+
+class GoogleDuration():
+    iso8601: str
+    seconds: int
+    milliseconds: int
+
+    def __init__(self, iso8601_duration: str, err: base.ErrorSink):
+        self.iso8601 = iso8601_duration
+        try:
+            self.seconds = self.FromJsonString(iso8601_duration)
+            if self.seconds > _DURATION_SECONDS_MAX:
+                raise ValueError(f"Duration too long! {self.seconds} > {_DURATION_SECONDS_MAX}")
+            self.milliseconds = self.seconds * 1000
+        except Exception as e:
+            err.msg_list.append(f'Failed to parse duration "{iso8601_duration}: {traceback.format_exc()}"')
+    
+    def FromJsonString(self, value: str) -> int:
+        """Parse a ISO 8601 Duration string format to a Duration.
+        NOTE: this parser is not fully compliant with ISO 8601, it is intended for use
+        with google's protobuf duration value.
+
+        Args:
+          value (str): An ISO 8601 duration string. Example of accepted format: 'P3M'
+
+        Raises:
+          ValueError: On parsing problems.
+        """
+        if not isinstance(value, str):
+          raise ValueError(f'Duration JSON value not a string: {value}')
+
+        if len(value) < 3 or value[0] != 'P':
+            raise ValueError(f'Duration is not correct ISO 8601 format: {value}')
+        
+        seconds_multiplier = 0
+        buffer_units = ''
+        duration_seconds = 0
+        in_time_component = False
+        for c in value:
+            commit = True
+            match c:
+                case 'Y':
+                    seconds_multiplier = base.SECONDS_IN_YEAR
+                case 'M':
+                    if in_time_component:
+                        seconds_multiplier = 60
+                    else:
+                        seconds_multiplier = base.SECONDS_IN_MONTH
+                case 'W':
+                    seconds_multiplier = base.SECONDS_IN_DAY * 7
+                case 'D':
+                    seconds_multiplier = base.SECONDS_IN_DAY
+                case 'P':
+                    seconds_multiplier = 0
+                    commit = False
+                case 'T':
+                    seconds_multiplier = 0
+                    commit = False
+                    in_time_component = True
+                case 'H':
+                    if not in_time_component:
+                        raise ValueError("Attempted to parse a time value outside of an ISO 8601 time component")
+                    seconds_multiplier = 60 * 60
+                case 'S':
+                    if not in_time_component:
+                        raise ValueError("Attempted to parse a time value outside of an ISO 8601 time component")
+                    seconds_multiplier = 1
+                case _:
+                    if not c.isdigit():
+                        raise ValueError(f"Attempted to parse an illegal character: {c}")
+                    buffer_units += c
+                    commit = False
+
+            if commit:
+                    duration_seconds = int(buffer_units) * seconds_multiplier
+                    buffer_units = ''
+                    seconds_multiplier = 0
+
+        return duration_seconds
 
 
 class SubscriptionNotificationType(IntEnum):
@@ -56,7 +142,6 @@ class SubscriptionNotificationType(IntEnum):
     SUBSCRIPTION_PENDING_PURCHASE_CANCELED = 20
     # A subscription's consent period for price step-up has begun or the user has provided consent for the price step-up. This RTDN is sent only for subscriptions in a region where price step-up is required.
     SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED = 22
-
 
 class ProductType(IntEnum):
     """Product types for voided purchases"""
@@ -138,7 +223,7 @@ class SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse:
 @dataclasses.dataclass
 class SubscriptionsV2SubscriptionCanceledStateContextUser:
     # Information provided by the user when they complete the subscription cancellation flow (cancellation reason survey).
-    cancel_survey_result: SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse
+    cancel_survey_result: Optional[SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse]
     # The time at which the subscription was canceled by the user. The user might still have access to the subscription after this time. Use lineItems.expiry_time to determine if a user still has access.
     # Uses RFC 3339, where generated output will always be Z-normalized and use 0, 3, 6 or 9 fractional digits. Offsets other than "Z" are also accepted. Examples: "2014-10-02T15:01:23Z", "2014-10-02T15:01:23.045123456Z" or "2014-10-02T15:01:23+05:30".
     cancel_time: GoogleTimestamp
@@ -380,6 +465,20 @@ class SubscriptionV2Data:
     # User profile associated with purchases made with 'Subscribe with Google'.
     # subscribe_with_google_info:  SubscriptionV2SubscribeWithGoogleInfo
 
+@dataclasses.dataclass
+class Monetizationv3SubscriptionData:
+    """
+    NOTE: only the fields we use are here, the api returns loads of other info we dont need.
+    """
+    base_plans: base.JSONArray
+
+@dataclasses.dataclass
+class SubscriptionProductDetails:
+    # Duration of the subscription.
+    billing_period: GoogleDuration
+    # Duration an auto-renewing (non-canceled) subscriptions entitlement continues after the subscription expires. Usually for billing issues.
+    grace_period: GoogleDuration
+
 
 def json_dict_require_google_money(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
     price_obj = base.json_dict_require_obj(d, key, err)
@@ -392,8 +491,13 @@ def json_dict_require_google_money(d: dict[str, base.JSONValue], key: str, err: 
 
 def json_dict_require_google_timestamp(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
     timestamp_str = base.json_dict_require_str(d, key, err)
-
     return GoogleTimestamp(timestamp_str, err)
+
+
+def json_dict_require_google_duration(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink):
+    duration_str = base.json_dict_require_str(d, key, err)
+    return GoogleDuration(duration_str, err)
+
 
 def json_dict_optional_google_empty_object_bool(d: dict[str, base.JSONValue], key: str, err: base.ErrorSink) -> bool:
     result = False
