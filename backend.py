@@ -73,7 +73,7 @@ class SQLField:
     type: str = ''
 
 SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
-  SQLField('master_pkey',                'BLOB NOT NULL'),     # Session Pro master public key associated with the payment
+  SQLField('master_pkey',                'BLOB'),              # Session Pro master public key associated with the payment
   SQLField('status',                     'INTEGER NOT NULL'),  # Enum cooresponding to `PaymentStatus`
   SQLField('plan',                       'INTEGER NOT NULL'),  # Enum cooresponding to `ProPlanType`
   SQLField('payment_provider',           'INTEGER NOT NULL'),
@@ -289,7 +289,7 @@ class OpenDBAtPath:
 def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
     result = ''
     if schema:
-        result = ',\n'.join([it.name for it in fields]) # Create '<field0> <type0>,\n<field1> <type1>, ...'
+        result = ',\n'.join([f'{it.name} {it.type}' for it in fields]) # Create '<field0> <type0>,\n<field1> <type1>, ...'
     else:
         result = ', '.join([it.name for it in fields])  # Create '<field0>, <field1>, ...'
     return result
@@ -929,7 +929,7 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
 
             record = tx.cursor.fetchone()
             if not record:
-                fields      = ['plan', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms']
+                fields      = ['plan', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms']
                 stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
@@ -942,7 +942,8 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
                       payment_tx.google_order_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
-                      platform_refund_expiry_ts_ms))
+                      platform_refund_expiry_ts_ms,
+                      0))
 
         elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
             # NOTE: Insert into the table, IFF, the apple payment doesn't already exist somewhere else.
@@ -962,7 +963,7 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
 
             record = tx.cursor.fetchone()
             if not record:
-                fields:      list[str] = ['plan', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms']
+                fields:      list[str] = ['plan', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms']
                 stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
                 stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
@@ -976,6 +977,7 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
                       payment_tx.apple_web_line_order_tx_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
+                      0,
                       0))
 
 def allocate_new_gen_id_if_master_pkey_has_payments_internal(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:

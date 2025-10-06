@@ -45,7 +45,7 @@ def test_backend_same_user_stacks_subscription():
     class Scenario:
         google_payment_token:    str                          = ''
         google_order_id:         str                          = ''
-        subscription_duration_s: int                          = 0
+        plan:                    backend.ProPlanType          = backend.ProPlanType.Nil
         proof:                   backend.ProSubscriptionProof = dataclasses.field(default_factory=backend.ProSubscriptionProof)
         payment_provider:        base.PaymentProvider         = base.PaymentProvider.Nil
         expiry_unix_ts_ms:       int                          = 0
@@ -54,14 +54,14 @@ def test_backend_same_user_stacks_subscription():
     scenarios: list[Scenario] = [
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 subscription_duration_s = 30 * base.SECONDS_IN_DAY,
+                 plan                    = backend.ProPlanType.OneMonth,
                  expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
                  grace_unix_ts_ms        = 0,
                  payment_provider        = base.PaymentProvider.GooglePlayStore),
 
         Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 subscription_duration_s = 365 * base.SECONDS_IN_DAY,
+                 plan                    = backend.ProPlanType.TwelveMonth,
                  expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
                  grace_unix_ts_ms        = 0,
                  payment_provider        = base.PaymentProvider.GooglePlayStore)
@@ -77,9 +77,8 @@ def test_backend_same_user_stacks_subscription():
         payment_tx.google_order_id      = it.google_order_id
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                        payment_tx=payment_tx,
-                                       subscription_duration_s=it.subscription_duration_s,
+                                       plan=it.plan,
                                        expiry_unix_ts_ms=it.expiry_unix_ts_ms,
-                                       grace_unix_ts_ms=it.grace_unix_ts_ms,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -92,7 +91,7 @@ def test_backend_same_user_stacks_subscription():
         assert unredeemed_payment_list[0].refunded_unix_ts_ms     == None
         assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].google_order_id         == it.google_order_id
-        assert unredeemed_payment_list[0].subscription_duration_s == it.subscription_duration_s
+        assert unredeemed_payment_list[0].plan                    == it.plan
 
         # Register the payment
         version: int = 0
@@ -133,7 +132,7 @@ def test_backend_same_user_stacks_subscription():
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
+    assert payment_list[0].plan                            == scenarios[0].plan
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
     assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
@@ -144,7 +143,7 @@ def test_backend_same_user_stacks_subscription():
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
+    assert payment_list[1].plan                            == scenarios[1].plan
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
     assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[1].expiry_unix_ts_ms               == scenarios[1].expiry_unix_ts_ms
@@ -166,25 +165,24 @@ def test_backend_same_user_stacks_subscription():
     assert expire_result.revocations                       == 1
     assert expire_result.users                             == 0
 
-    # NOTE: Update the latest payments expiry and grace period
+    # NOTE: Update the latest payments grace period
     payment_tx                                              = backend.PaymentProviderTransaction()
     payment_tx.provider                                     = scenarios[1].payment_provider
     payment_tx.google_payment_token                         = scenarios[1].google_payment_token
     payment_tx.google_order_id                              = scenarios[1].google_order_id
-    new_expiry_unix_ts_ms                                   = scenarios[1].expiry_unix_ts_ms + 1000
-    new_grace_unix_ts_ms                                    = scenarios[1].expiry_unix_ts_ms + 2000
-    updated: bool                                           = backend.update_payment_unix_ts_ms(sql_conn=db.sql_conn, payment_tx=payment_tx, expiry_unix_ts_ms=new_expiry_unix_ts_ms, grace_unix_ts_ms=new_grace_unix_ts_ms, err=err)
+    new_expiry_unix_ts_ms                                   = scenarios[1].expiry_unix_ts_ms
+    new_grace_duration_ms                                   = 10000
+    updated: bool                                           = backend.update_payment_grace_duration_ms(sql_conn=db.sql_conn, payment_tx=payment_tx, grace_duration_ms=new_grace_duration_ms, err=err)
     assert updated
 
     # NOTE: Verify that the new grace and expiry were assigned to the user
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[0].subscription_duration_s         == scenarios[0].subscription_duration_s
+    assert payment_list[0].plan         == scenarios[0].plan
     assert payment_list[0].payment_provider                == scenarios[0].payment_provider
     assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
-    assert payment_list[0].grace_unix_ts_ms                == scenarios[0].grace_unix_ts_ms
     assert payment_list[0].refunded_unix_ts_ms             is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
@@ -192,11 +190,10 @@ def test_backend_same_user_stacks_subscription():
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     assert payment_list[1].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
-    assert payment_list[1].subscription_duration_s         == scenarios[1].subscription_duration_s
+    assert payment_list[1].plan                            == scenarios[1].plan
     assert payment_list[1].payment_provider                == scenarios[1].payment_provider
     assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[1].expiry_unix_ts_ms               == new_expiry_unix_ts_ms
-    assert payment_list[1].grace_unix_ts_ms                == new_grace_unix_ts_ms
     assert payment_list[1].refunded_unix_ts_ms             is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
@@ -207,7 +204,7 @@ def test_backend_same_user_stacks_subscription():
     with base.SQLTransaction(db.sql_conn) as tx:
         get: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
         assert get.latest_expiry_unix_ts_ms == new_expiry_unix_ts_ms
-        assert get.latest_grace_unix_ts_ms  == new_grace_unix_ts_ms
+        assert get.latest_grace_period_duration_ms  == new_grace_duration_ms
 
     _ = backend.verify_db(db.sql_conn, err)
     if len(err.msg_list) > 0:
@@ -246,9 +243,8 @@ def test_server_add_payment_flow():
     payment_tx.google_order_id      = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                    payment_tx=payment_tx,
-                                   subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                   plan=backend.ProPlanType.OneMonth,
                                    expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                                   grace_unix_ts_ms=0,
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
@@ -288,7 +284,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+        result_items                               = base.json_dict_require_array(d=result_json, key='items',  err=err)
         result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
         assert len(err.msg_list) == 0,                                       '{err.msg_list}'
         assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
@@ -437,9 +433,8 @@ def test_server_add_payment_flow():
         new_payment_tx.google_order_id      = os.urandom(len(payment_tx.google_payment_token)).hex()
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                        payment_tx=new_payment_tx,
-                                       subscription_duration_s=30 * base.SECONDS_IN_DAY,
+                                       plan=backend.ProPlanType.OneMonth,
                                        expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                                       grace_unix_ts_ms=0,
                                        err=err)
 
         new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
@@ -535,7 +530,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
-        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items', err=err)
+        result_items                               = base.json_dict_require_array(d=result_json, key='items', err=err)
         result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0
@@ -579,7 +574,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
-        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items', err=err)
+        result_items = base.json_dict_require_array(d=result_json, key='items', err=err)
         result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
@@ -627,7 +622,7 @@ def test_server_add_payment_flow():
 
         # Extract the fields
         result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-        result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+        result_items = base.json_dict_require_array(d=result_json, key='items',  err=err)
         result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
         assert len(err.msg_list) == 0,                                 '{err.msg_list}'
         assert result_status     == server.UserProStatus.Active.value, f'Response was: {json.dumps(response_json, indent=2)}'
@@ -713,7 +708,7 @@ def test_server_add_payment_flow():
             result_json = response_json['result']
 
             # Parse status from response
-            result_items:   list[dict[str, int | str]] = base.json_dict_require_array(d=result_json, key='items',  err=err)
+            result_items= base.json_dict_require_array(d=result_json, key='items',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
 
