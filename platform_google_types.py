@@ -101,7 +101,7 @@ class GoogleDuration():
                     commit = False
 
             if commit:
-                    duration_seconds = int(buffer_units) * seconds_multiplier
+                    duration_seconds += int(buffer_units) * seconds_multiplier
                     buffer_units = ''
                     seconds_multiplier = 0
 

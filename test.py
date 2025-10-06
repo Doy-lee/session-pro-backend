@@ -23,6 +23,7 @@ import time
 import werkzeug
 import dataclasses
 
+from platform_google_types import GoogleDuration
 from vendor import onion_req
 import backend
 import base
@@ -716,3 +717,32 @@ def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
     # maintaining a bleeding edge version of it).
     onion_req.test_onion_request_response_lifecycle()
+
+def test_google_duration_parser():
+    err = base.ErrorSink()
+
+    MINUTE_S = 60
+    HOUR_S = 60 * MINUTE_S
+    DAY_S = 24 * HOUR_S
+
+    test_cases = [
+        ("P1D",         DAY_S), 
+        ("P7D",         7 * DAY_S), 
+        ("P14D",        14 * DAY_S), 
+        ("P30D",        30 * DAY_S), 
+        ("P1M",         30 * DAY_S), 
+        ("P3M",         90 * DAY_S), 
+        ("P12M",        12 * 30 * DAY_S), 
+        ("P1Y",         365 * DAY_S), 
+        ("P1DT1H",      25 * HOUR_S), 
+        ("P1DT1H12M",   25 * HOUR_S + (12 * MINUTE_S)), 
+        ("PT1S",        1),
+        ("PT59S",       59),
+        ("PT50M1S",     50 * MINUTE_S + 1),
+    ]
+
+    for string, seconds in test_cases:
+        dur = GoogleDuration(string, err)
+        assert dur.seconds == seconds, f' {seconds} != {dur.seconds} ({dur.iso8601})'
+        assert dur.seconds * 1000 == dur.milliseconds
+        assert not err.has()
