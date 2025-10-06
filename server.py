@@ -709,8 +709,7 @@ def get_pro_payments():
                 status                                    = backend.PaymentStatus(row[1])
                 subscription_duration_s:            int   = row[2]
                 payment_provider                          = base.PaymentProvider(row[3])
-                # TODO: this can be None, is this a valid case?
-                redeemed_unix_ts_ms:                int   = row[4]
+                redeemed_unix_ts_ms:                int   = row[4]  if row[4] else 0
                 expiry_unix_ts_ms:                  int   = row[5]
                 grace_duration_ms:                  int   = row[6]
                 platform_refund_expiry_unix_ts_ms:  int   = row[7]
