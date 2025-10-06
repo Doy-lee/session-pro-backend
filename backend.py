@@ -591,8 +591,6 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 UPDATE runtime
                 SET    revocation_ticket = revocation_ticket + 1;
             END;
-
-            
         '''
 
         assert tx.cursor is not None
@@ -907,7 +905,6 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
             # payments table
-            
             platform_refund_expiry_ts_ms = base.get_now_ms() + base.MILLISECONDS_IN_DAY * 2
 
             _ = tx.cursor.execute(f'''
