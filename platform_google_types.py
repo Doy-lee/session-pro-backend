@@ -2,11 +2,9 @@ import dataclasses
 import traceback
 import typing
 from enum import IntEnum, StrEnum
-from typing import Optional, override
+from typing import Optional
 
-import google.protobuf.internal.well_known_types as GoogleTypes
-
-from google.protobuf.internal.well_known_types import Duration, Timestamp
+from google.protobuf.internal.well_known_types import Timestamp
 
 import base
 
