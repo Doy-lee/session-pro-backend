@@ -46,8 +46,26 @@ class DecodedNotification:
     tx_info:      AppleJWSTransactionDecodedPayload | None
     renewal_info: AppleJWSRenewalInfoDecodedPayload | None
 
-FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX = '/apple_notifications_v2'
-FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY                = 'session_pro_backend_platform_apple_core'
+FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX: str = '/apple_notifications_v2'
+FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY:                str = 'session_pro_backend_platform_apple_core'
+
+# NOTE: Grace period is disabled on Apple but we set a non-zero grace period. First off
+# we use a grace period of 0 currently to communicate to the caller that the current
+# payment is automatically renewing at the billing cycle.
+#
+# Then if for Apple we set its grace period to 0 then the platforms are going to
+# mistakenly assume that the user does not have an auto-renewing subscription
+# and display the wrong flows. So we set a non-zero grace period for Apple.
+#
+# Whilst it's better to have an independent variable to track whether or not the user
+# has an auto-renewing subscription, if we step back and consider the situation,
+# technically no payment processor/billing cycle is going to bill exactly on the dot due
+# to real-world extenuating situations and so we can opt to grant them a small but
+# reasonable grace period of 1 hour.
+#
+# For now we can opt out of adding yet another variable to track auto-renewing by
+# continuing to use the grace period as originally intended.
+GRACE_PERIOD_DURATION_MS:                            int = 60 * 60 * 1 * 1000
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Apple iOS App Store subscription notifications
@@ -239,7 +257,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                    plan              = pro_plan,
                                                    expiry_unix_ts_ms = tx.expiresDate,
                                                    err               = err)
-
+                    _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
     elif decoded_notification.body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
         # A notification type that, along with its subtype, indicates that the customer made a
         # change to their subscription plan. If the subtype is UPGRADE, the user upgraded their
@@ -316,6 +334,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                        plan              = pro_plan,
                                                        expiry_unix_ts_ms = tx.expiresDate,
                                                        err               = err)
+                        _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
 
     elif decoded_notification.body.notificationType == AppleNotificationV2.OFFER_REDEEMED:
         # A notification type that, along with its subtype, indicates that a customer with an active
@@ -404,6 +423,8 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                        plan              = pro_plan,
                                                        expiry_unix_ts_ms = tx.expiresDate,
                                                        err               = err)
+
+                        _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
 
     elif decoded_notification.body.notificationType == AppleNotificationV2.REFUND or decoded_notification.body.notificationType == AppleNotificationV2.REVOKE:
         # AppleNotificationV2.REFUND
@@ -516,11 +537,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
         if len(err.msg_list) == 0:
             assert tx
             if decoded_notification.body.subtype == AppleSubtype.AUTO_RENEW_DISABLED or decoded_notification.body.subtype == AppleSubtype.AUTO_RENEW_ENABLED:
-                # NOTE: For Apple a decision was made to turn off the grace period/keep it minimal
-                # In reality the timing between the billing cycle and the payment processor
-                # executing is never going to be precisely on the dot. For renewing we will set the
-                # grace period to 1hr to cover this window on behalf of the user.
-                grace_duration_ms: int                                = (60 * 60 * 1) if decoded_notification.body.subtype == AppleSubtype.AUTO_RENEW_ENABLED else 0
+                grace_duration_ms: int                                = GRACE_PERIOD_DURATION_MS if decoded_notification.body.subtype == AppleSubtype.AUTO_RENEW_ENABLED else 0
                 payment_tx:        backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
                 if len(err.msg_list) == 0:
                     _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn,
