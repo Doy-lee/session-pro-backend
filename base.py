@@ -51,6 +51,7 @@ class ErrorSink:
 class SQLTransaction:
     conn:   sqlite3.Connection
     cursor: sqlite3.Cursor | None = None
+    cancel: bool                  = False
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
@@ -64,7 +65,10 @@ class SQLTransaction:
                  traceback: traceback.TracebackException | None):
         if self.cursor:
             self.cursor.close()
-        self.conn.commit() if exc_type is None else self.conn.rollback()
+        if exc_type is not None or self.cancel:
+            self.conn.rollback()
+        else:
+            self.conn.commit()
         return False
 
 @dataclasses.dataclass

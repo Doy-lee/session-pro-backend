@@ -718,37 +718,34 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     result = len(err.msg_list) == 0
     return result
 
-def refund_apple_payment(sql_conn:                   sqlite3.Connection,
-                         apple_original_tx_id:       str,
-                         refund_unix_ts_ms:          int) -> bool:
-    # TODO: Verify that the refund 
-    result = False
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _ = tx.cursor.execute(f'''
-        UPDATE payments
-        SET status = ?, refunded_unix_ts_ms = ?
-        WHERE apple_original_tx_id  = ? AND
-              payment_provider      = ? AND
-              (status               = ? OR status = ?) AND
-              unredeemed_unix_ts_ms = (
-            SELECT MAX(unredeemed_unix_ts_ms)
-            FROM payments
-            WHERE apple_original_tx_id = ? AND payment_provider = ?
-          );
-        ''', (# SET values
-              int(PaymentStatus.Refunded.value),
-              refund_unix_ts_ms,
-              # WHERE values
-              apple_original_tx_id,
-              int(base.PaymentProvider.iOSAppStore.value),
-              # OR status == ?
-              int(PaymentStatus.Unredeemed.value),
-              int(PaymentStatus.Redeemed.value),
-              # WHERE unredeemed_unix_ts = ..
-              apple_original_tx_id,
-              int(base.PaymentProvider.iOSAppStore.value)))
-        result = tx.cursor.rowcount > 0
+def refund_apple_payment(tx:                   base.SQLTransaction,
+                         apple_original_tx_id: str,
+                         refund_unix_ts_ms:    int) -> bool:
+    assert tx.cursor
+    _ = tx.cursor.execute(f'''
+    UPDATE payments
+    SET status = ?, refunded_unix_ts_ms = ?
+    WHERE apple_original_tx_id  = ? AND
+          payment_provider      = ? AND
+          (status               = ? OR status = ?) AND
+          unredeemed_unix_ts_ms = (
+        SELECT MAX(unredeemed_unix_ts_ms)
+        FROM payments
+        WHERE apple_original_tx_id = ? AND payment_provider = ?
+      );
+    ''', (# SET values
+          int(PaymentStatus.Refunded.value),
+          refund_unix_ts_ms,
+          # WHERE values
+          apple_original_tx_id,
+          int(base.PaymentProvider.iOSAppStore.value),
+          # OR status == ?
+          int(PaymentStatus.Unredeemed.value),
+          int(PaymentStatus.Redeemed.value),
+          # WHERE unredeemed_unix_ts = ..
+          apple_original_tx_id,
+          int(base.PaymentProvider.iOSAppStore.value)))
+    result = tx.cursor.rowcount > 0
     return result
 
 def redeem_payment(sql_conn:            sqlite3.Connection,
@@ -848,11 +845,11 @@ def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
-def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
-                                payment_tx:               PaymentProviderTransaction,
-                                grace_period_duration_ms: int  | None,
-                                auto_renewing:            bool | None,
-                                err:                      base.ErrorSink) -> bool:
+def update_payment_renewal_info_tx(tx:                       base.SQLTransaction,
+                                   payment_tx:               PaymentProviderTransaction,
+                                   grace_period_duration_ms: int  | None,
+                                   auto_renewing:            bool | None,
+                                   err:                      base.ErrorSink) -> bool:
     """
     Update a payment's grace period and/or auto renewing flag. Pass in `None` for the arguments
     you want to opt out of updating.
@@ -882,115 +879,141 @@ def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
         sql_execute_args.append(grace_period_duration_ms)
 
     # NOTE: Execute the statement
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        match payment_tx.provider:
-            case base.PaymentProvider.Nil:
-                pass
+    assert tx.cursor is not None
+    match payment_tx.provider:
+        case base.PaymentProvider.Nil:
+            pass
 
-            case base.PaymentProvider.GooglePlayStore:
-                _ = tx.cursor.execute(f'''
-                    UPDATE payments
-                    SET   {sql_set_fields}
-                    WHERE google_payment_token = ? AND google_order_id = ?
-                ''', (*tuple(sql_execute_args), payment_tx.google_payment_token, payment_tx.google_order_id))
+        case base.PaymentProvider.GooglePlayStore:
+            _ = tx.cursor.execute(f'''
+                UPDATE payments
+                SET   {sql_set_fields}
+                WHERE google_payment_token = ? AND google_order_id = ?
+            ''', (*tuple(sql_execute_args), payment_tx.google_payment_token, payment_tx.google_order_id))
 
-            case base.PaymentProvider.iOSAppStore:
-                _ = tx.cursor.execute(f'''
-                    UPDATE payments
-                    SET   {sql_set_fields}
-                    WHERE  apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-                ''', (*tuple(sql_execute_args), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
+        case base.PaymentProvider.iOSAppStore:
+            _ = tx.cursor.execute(f'''
+                UPDATE payments
+                SET   {sql_set_fields}
+                WHERE  apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+            ''', (*tuple(sql_execute_args), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
 
-        result = tx.cursor.rowcount > 0
+    result = tx.cursor.rowcount > 0
 
     if not result:
         payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
         err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider} {payment_id}')
     return result
 
-def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
-                           payment_tx:          PaymentProviderTransaction,
-                           plan:                ProPlanType,
-                           expiry_unix_ts_ms:   int,
-                           unredeemed_unix_ts_ms: int,
-                           platform_refund_expiry_ts_ms: int,
-                           err:                 base.ErrorSink):
+def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
+                                payment_tx:               PaymentProviderTransaction,
+                                grace_period_duration_ms: int  | None,
+                                auto_renewing:            bool | None,
+                                err:                      base.ErrorSink) -> bool:
+
+    result = False
+    with base.SQLTransaction(sql_conn) as sql_tx:
+        result = update_payment_renewal_info_tx(sql_tx, payment_tx, grace_period_duration_ms, auto_renewing, err)
+    return result
+
+def add_unredeemed_payment_tx(tx:                                base.SQLTransaction,
+                              payment_tx:                        PaymentProviderTransaction,
+                              plan:                              ProPlanType,
+                              expiry_unix_ts_ms:                 int,
+                              unredeemed_unix_ts_ms:             int,
+                              platform_refund_expiry_unix_ts_ms: int,
+                              err:                               base.ErrorSink):
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
         return
 
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
-            # payments table
+    assert tx.cursor is not None
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
+        # payments table
+        _ = tx.cursor.execute(f'''
+            SELECT 1
+            FROM payments
+            WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
+        ''', (int(payment_tx.provider.value),
+              payment_tx.google_payment_token,
+              payment_tx.google_order_id))
+
+        record = tx.cursor.fetchone()
+        if not record:
+            fields      = ['plan', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms', 'unredeemed_unix_ts_ms', 'auto_renewing']
+            stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
+            stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
+
             _ = tx.cursor.execute(f'''
+                INSERT INTO payments ({stmt_fields})
+                VALUES ({stmt_values})
+            ''', (int(plan.value),
+                  payment_tx.provider.value,
+                  payment_tx.google_payment_token,
+                  payment_tx.google_order_id,
+                  int(PaymentStatus.Unredeemed.value),
+                  expiry_unix_ts_ms,
+                  platform_refund_expiry_ts_ms,
+                  0, # grace period (updated authoritatively by a Google notification when the user enters grace)
+                  unredeemed_unix_ts_ms,
+                  1, # auto_renewing is enabled by default until notified otherwise by Google
+                  ))
+
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        # NOTE: Insert into the table, IFF, the apple payment doesn't already exist somewhere else.
+        #
+        # For Apple each apple_tx_id is always unique.
+        # apple_web_line_order_tx_id is unique for the payment of the billing
+        # cycle for that subscription and the apple_original_tx_id is reused
+        # across all subscriptions of the same type.
+        _ = tx.cursor.execute(f'''
                 SELECT 1
                 FROM payments
-                WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-            ''', (int(payment_tx.provider.value),
-                  payment_tx.google_payment_token,
-                  payment_tx.google_order_id))
+                WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+        ''', (int(payment_tx.provider.value),
+              payment_tx.apple_original_tx_id,
+              payment_tx.apple_tx_id,
+              payment_tx.apple_web_line_order_tx_id))
 
-            record = tx.cursor.fetchone()
-            if not record:
-                fields      = ['plan', 'payment_provider', 'google_payment_token', 'google_order_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms', 'unredeemed_unix_ts_ms', 'auto_renewing']
-                stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
-                stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
+        record = tx.cursor.fetchone()
+        if not record:
+            fields:      list[str] = ['plan', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms', 'unredeemed_unix_ts_ms', 'auto_renewing']
+            stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
+            stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
-                _ = tx.cursor.execute(f'''
-                    INSERT INTO payments ({stmt_fields})
-                    VALUES ({stmt_values})
-                ''', (int(plan.value),
-                      payment_tx.provider.value,
-                      payment_tx.google_payment_token,
-                      payment_tx.google_order_id,
-                      int(PaymentStatus.Unredeemed.value),
-                      expiry_unix_ts_ms,
-                      platform_refund_expiry_ts_ms,
-                      0, # grace period (updated authoritatively by a Google notification when the user enters grace)
-                      unredeemed_unix_ts_ms,
-                      1, # auto_renewing is enabled by default until notified otherwise by Google
-                      ))
-
-        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-            # NOTE: Insert into the table, IFF, the apple payment doesn't already exist somewhere else.
-            #
-            # For Apple each apple_tx_id is always unique.
-            # apple_web_line_order_tx_id is unique for the payment of the billing
-            # cycle for that subscription and the apple_original_tx_id is reused
-            # across all subscriptions of the same type.
             _ = tx.cursor.execute(f'''
-                    SELECT 1
-                    FROM payments
-                    WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-            ''', (int(payment_tx.provider.value),
+                INSERT INTO payments ({stmt_fields})
+                VALUES ({stmt_values})
+            ''', (int(plan.value),
+                  int(payment_tx.provider.value),
                   payment_tx.apple_original_tx_id,
                   payment_tx.apple_tx_id,
-                  payment_tx.apple_web_line_order_tx_id))
+                  payment_tx.apple_web_line_order_tx_id,
+                  int(PaymentStatus.Unredeemed.value),
+                  expiry_unix_ts_ms,
+                  platform_refund_expiry_unix_ts_ms,
+                  0, # non-null grace_period_duration_ms
+                  unredeemed_unix_ts_ms,
+                  1, # auto_renewing is enabled by default until notified otherwise by Apple
+                  ))
 
-            record = tx.cursor.fetchone()
-            if not record:
-                fields:      list[str] = ['plan', 'payment_provider', 'apple_original_tx_id', 'apple_tx_id', 'apple_web_line_order_tx_id', 'status', 'expiry_unix_ts_ms', 'platform_refund_expiry_unix_ts_ms', 'grace_period_duration_ms', 'unredeemed_unix_ts_ms', 'auto_renewing']
-                stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
-                stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
-
-                _ = tx.cursor.execute(f'''
-                    INSERT INTO payments ({stmt_fields})
-                    VALUES ({stmt_values})
-                ''', (int(plan.value),
-                      int(payment_tx.provider.value),
-                      payment_tx.apple_original_tx_id,
-                      payment_tx.apple_tx_id,
-                      payment_tx.apple_web_line_order_tx_id,
-                      int(PaymentStatus.Unredeemed.value),
-                      expiry_unix_ts_ms,
-                      platform_refund_expiry_ts_ms,
-                      0, # non-null grace_period_duration_ms
-                      unredeemed_unix_ts_ms,
-                      1, # auto_renewing is enabled by default until notified otherwise by Apple
-                      ))
+def add_unredeemed_payment(sql_conn:                          sqlite3.Connection,
+                           payment_tx:                        PaymentProviderTransaction,
+                           plan:                              ProPlanType,
+                           expiry_unix_ts_ms:                 int,
+                           unredeemed_unix_ts_ms:             int,
+                           platform_refund_expiry_unix_ts_ms: int,
+                           err:                               base.ErrorSink):
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        add_unredeemed_payment_tx(tx=tx,
+                                  payment_tx=payment_tx,
+                                  plan=plan,
+                                  expiry_unix_ts_ms=expiry_unix_ts_ms,
+                                  unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
+                                  platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_ts_ms,
+                                  err=err)
 
 def allocate_new_gen_id_if_master_pkey_has_payments_internal(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     result:            AllocatedGenID = AllocatedGenID()
@@ -1179,14 +1202,14 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
-        expiry_unix_ts_ms   = redeemed_unix_ts_ms + (60 * 1000)
-        add_unredeemed_payment(sql_conn              = sql_conn,
-                               payment_tx            = internal_payment_tx,
-                               plan                  = ProPlanType.OneMonth,
-                               unredeemed_unix_ts_ms = expiry_unix_ts_ms - 1,
-                               platform_refund_expiry_ts_ms = 0,
-                               expiry_unix_ts_ms     = expiry_unix_ts_ms,
-                               err                   = err)
+        expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
+        add_unredeemed_payment(sql_conn                          = sql_conn,
+                               payment_tx                        = internal_payment_tx,
+                               plan                              = ProPlanType.OneMonth,
+                               unredeemed_unix_ts_ms             = expiry_unix_ts_ms - 1,
+                               platform_refund_expiry_unix_ts_ms = 0,
+                               expiry_unix_ts_ms                 = expiry_unix_ts_ms,
+                               err                               = err)
 
         # Randomly toggle auto-renewal
         _ = update_payment_renewal_info(sql_conn=sql_conn,
