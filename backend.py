@@ -1179,10 +1179,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
-        # Randomly apply a grace period
-        apply_auto_renew    = bool(random.getrandbits(1))
         expiry_unix_ts_ms   = redeemed_unix_ts_ms + (60 * 1000)
-
         add_unredeemed_payment(sql_conn              = sql_conn,
                                payment_tx            = internal_payment_tx,
                                plan                  = ProPlanType.OneMonth,
@@ -1190,9 +1187,13 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                                platform_refund_expiry_ts_ms = 0,
                                expiry_unix_ts_ms     = expiry_unix_ts_ms,
                                err                   = err)
-        if apply_auto_renew:
-            grace_unix_ts_ms    = expiry_unix_ts_ms + (60 * 1000)
-            _ = update_payment_renewal_info(sql_conn, internal_payment_tx, grace_unix_ts_ms, True, err)
+
+        # Randomly toggle auto-renewal
+        _ = update_payment_renewal_info(sql_conn=sql_conn,
+                                        payment_tx=internal_payment_tx,
+                                        grace_period_duration_ms=(60 * 1000),
+                                        auto_renewing=bool(random.getrandbits(1)),
+                                        err=err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
