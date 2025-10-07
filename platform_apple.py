@@ -860,25 +860,6 @@ def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBod
 
     return result
 
-def maybe_get_apple_jws_renewal_info_from_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> AppleJWSRenewalInfoDecodedPayload | None:
-    raw_tx: str | None = None
-    if require_field(body.data, f'{body.notificationType} notification is missing body\'s data', err):
-        assert isinstance(body.data, AppleData)
-        if require_field(body.data.signedTransactionInfo, f'{body.notificationType} notification is missing body data\'s signedTransactionInfo', err):
-            assert isinstance(body.data.signedTransactionInfo, str)
-            raw_tx = body.data.signedTransactionInfo
-
-    # Parse and verify the raw TX
-    result: AppleJWSRenewalInfoDecodedPayload | None = None
-    if raw_tx:
-        try:
-            result = verifier.verify_and_decode_renewal_info(raw_tx)
-        except AppleVerificationException as e:
-            if err:
-                err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
-
-    return result
-
 def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> backend.PaymentProviderTransaction:
     result = backend.PaymentProviderTransaction()
     if not tx.transactionId:
