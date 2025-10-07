@@ -38,7 +38,7 @@ def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.Erro
             return ProPlanType.Nil
 
 
-def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlanTxFields, err: base.ErrorSink):
+def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlanTxFields, purchase_unix_ts_ms: int, err: base.ErrorSink):
     """
     Add an unredeemed payment to the database.
     """
@@ -61,6 +61,7 @@ def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlan
             payment_tx=tx,
             plan=plan,
             expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
+            unredeemed_unix_ts_ms=purchase_unix_ts_ms,
             err=err,
         )
 
@@ -250,7 +251,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                         err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
+                        add_user_unredeemed_payment(purchase_token, tx_fields, event_time_millis, err)
 
 
             case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:

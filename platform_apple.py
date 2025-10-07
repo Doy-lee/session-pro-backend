@@ -76,6 +76,8 @@ def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> backend.Pr
     match product_id:
         case 'com.getsession.org.pro_sub':
             return backend.ProPlanType.OneMonth
+        case 'com.getsession.org.pro_sub_3_months':
+            return backend.ProPlanType.ThreeMonth
         case _:
             assert False, f'Invalid apple plan_id: {product_id}'
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {product_id}')
@@ -213,7 +215,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
             assert tx
             if require_field(tx.expiresDate,           f'{decoded_notification.body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
                require_field(tx.originalTransactionId, f'{decoded_notification.body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{decoded_notification.body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.purchaseDate,          f'{decoded_notification.body.notificationType} is missing TX purchase date. {print_obj(tx)}',           err) and \
                require_field(tx.transactionId,         f'{decoded_notification.body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
                require_field(tx.transactionReason,     f'{decoded_notification.body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
                require_field(tx.type,                  f'{decoded_notification.body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
@@ -221,7 +223,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                require_field(tx.webOrderLineItemId,    f'{decoded_notification.body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.purchaseDate,          int),                    f'{print_obj(tx)}'
                 assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
                 assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
                 assert isinstance(tx.expiresDate,           int),                    f'{print_obj(tx)}'
@@ -252,12 +254,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                 # NOTE: Process notification
                 if len(err.msg_list) == 0:
-                    backend.add_unredeemed_payment(sql_conn          = sql_conn,
-                                                   payment_tx        = payment_tx,
-                                                   plan              = pro_plan,
-                                                   expiry_unix_ts_ms = tx.expiresDate,
-                                                   err               = err)
-                    _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
+                    backend.add_unredeemed_payment(sql_conn            = sql_conn,
+                                                   payment_tx          = payment_tx,
+                                                   plan                = pro_plan,
+                                                   unredeemed_unix_ts_ms = tx.purchaseDate,
+                                                   expiry_unix_ts_ms   = tx.expiresDate,
+                                                   err                 = err)
+                    _                                                  = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
     elif decoded_notification.body.notificationType == AppleNotificationV2.DID_CHANGE_RENEWAL_PREF:
         # A notification type that, along with its subtype, indicates that the customer made a
         # change to their subscription plan. If the subtype is UPGRADE, the user upgraded their
@@ -281,7 +284,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
             assert tx
             if require_field(tx.expiresDate,           f'{decoded_notification.body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
                require_field(tx.originalTransactionId, f'{decoded_notification.body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{decoded_notification.body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.purchaseDate,          f'{decoded_notification.body.notificationType} is missing TX purchase date. {print_obj(tx)}',           err) and \
                require_field(tx.transactionId,         f'{decoded_notification.body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
                require_field(tx.transactionReason,     f'{decoded_notification.body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
                require_field(tx.type,                  f'{decoded_notification.body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
@@ -289,10 +292,10 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                require_field(tx.webOrderLineItemId,    f'{decoded_notification.body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.purchaseDate,          int),                    f'{print_obj(tx)}'
                 assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
                 assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
-                assert isinstance(tx.expiresDate,           str),                    f'{print_obj(tx)}'
+                assert isinstance(tx.expiresDate,           int),                    f'{print_obj(tx)}'
                 assert isinstance(tx.transactionReason,     AppleTransactionReason), f'{print_obj(tx)}'
                 assert isinstance(tx.type,                  AppleType),              f'{print_obj(tx)}'
                 assert isinstance(tx.productId,             str),                    f'{print_obj(tx)}'
@@ -321,19 +324,26 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         pass
                     elif decoded_notification.body.subtype == AppleSubtype.UPGRADE:
                         # User is upgrading to a better subscription. Upgrade happens immediately, current plan is ended.
-                        # NOTE: The only link we have to the current plan is the original transaction ID, so we use that
-                        # to cancel the old payment and issue a new one.
+                        # NOTE: The only link we have to the current plan is the original
+                        # transaction ID. It doesn't seem guaranteed that the web order line item ID
+                        # is the same in an upgrade (because it's no longer a part of the same
+                        # subscription)
+                        #
+                        # We lookup the latest payment for the original transaction ID and cancel
+                        # that
+                        # TODO: Need to add the unredeemed timestamp to know the latest transaction
+                        # to cancel
                         backend.refund_apple_payment(sql_conn=sql_conn,
-                                                     apple_web_line_order_tx_id=tx.webOrderLineItemId,
                                                      apple_original_tx_id=tx.originalTransactionId,
                                                      refund_unix_ts_ms=unix_ts_ms)
 
-                        # NOTE: Submit/upgrade the payment
-                        backend.add_unredeemed_payment(sql_conn          = sql_conn,
-                                                       payment_tx        = payment_tx,
-                                                       plan              = pro_plan,
-                                                       expiry_unix_ts_ms = tx.expiresDate,
-                                                       err               = err)
+                        # NOTE: Submit the upgraded payment (e.g. the new payment)
+                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
+                                                       payment_tx            = payment_tx,
+                                                       plan                  = pro_plan,
+                                                       expiry_unix_ts_ms     = tx.expiresDate,
+                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
+                                                       err                   = err)
                         _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
 
     elif decoded_notification.body.notificationType == AppleNotificationV2.OFFER_REDEEMED:
@@ -359,7 +369,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
             assert tx
             if require_field(tx.expiresDate,           f'{decoded_notification.body.notificationType} is missing TX expires date. {print_obj(tx)}',            err) and \
                require_field(tx.originalTransactionId, f'{decoded_notification.body.notificationType} is missing TX original transaction ID. {print_obj(tx)}', err) and \
-               require_field(tx.originalPurchaseDate,  f'{decoded_notification.body.notificationType} is missing TX original purchase date. {print_obj(tx)}',  err) and \
+               require_field(tx.purchaseDate,          f'{decoded_notification.body.notificationType} is missing TX purchase date. {print_obj(tx)}',           err) and \
                require_field(tx.transactionId,         f'{decoded_notification.body.notificationType} is missing TX transaction ID. {print_obj(tx)}',          err) and \
                require_field(tx.transactionReason,     f'{decoded_notification.body.notificationType} is missing TX reason. {print_obj(tx)}',                  err) and \
                require_field(tx.type,                  f'{decoded_notification.body.notificationType} is missing TX type. {print_obj(tx)}',                    err) and \
@@ -367,7 +377,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                require_field(tx.webOrderLineItemId,    f'{decoded_notification.body.notificationType} is missing TX web order line item ID. {print_obj(tx)}',  err):
 
                 # NOTE: Assert the types for LSP now that we have checked that they exist
-                assert isinstance(tx.originalPurchaseDate,  int),                    f'{print_obj(tx)}'
+                assert isinstance(tx.purchaseDate,          int),                    f'{print_obj(tx)}'
                 assert isinstance(tx.originalTransactionId, str),                    f'{print_obj(tx)}'
                 assert isinstance(tx.transactionId,         str),                    f'{print_obj(tx)}'
                 assert isinstance(tx.expiresDate,           str),                    f'{print_obj(tx)}'
@@ -389,11 +399,12 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 if len(err.msg_list) == 0:
                     if not decoded_notification.body.subtype:
                         # NOTE: User is redeeming an offer to start(?) a sub. Submit the payment
-                        backend.add_unredeemed_payment(sql_conn          = sql_conn,
-                                                       payment_tx        = payment_tx,
-                                                       plan              = pro_plan,
-                                                       expiry_unix_ts_ms = tx.expiresDate,
-                                                       err               = err)
+                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
+                                                       payment_tx            = payment_tx,
+                                                       plan                  = pro_plan,
+                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
+                                                       expiry_unix_ts_ms     = tx.expiresDate,
+                                                       err                   = err)
 
                     elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
@@ -412,17 +423,19 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         # relevant for the same subscription and product pairing. If you're upgrading
                         # we're moving to a different product .. so the original transaction ID
                         # might not match us to the previous subscription for this user, I think.
-                        backend.refund_apple_payment(sql_conn                   = sql_conn,
-                                                     apple_web_line_order_tx_id = tx.webOrderLineItemId,
-                                                     apple_original_tx_id       = tx.originalTransactionId,
-                                                     refund_unix_ts_ms          = unix_ts_ms)
+                        refunded = backend.refund_apple_payment(sql_conn             = sql_conn,
+                                                                apple_original_tx_id = tx.originalTransactionId,
+                                                                refund_unix_ts_ms    = unix_ts_ms)
+                        # TODO: Handle failed refund
+                        assert refunded
 
                         # NOTE: Submit the 'new' payment
-                        backend.add_unredeemed_payment(sql_conn          = sql_conn,
-                                                       payment_tx        = payment_tx,
-                                                       plan              = pro_plan,
-                                                       expiry_unix_ts_ms = tx.expiresDate,
-                                                       err               = err)
+                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
+                                                       payment_tx            = payment_tx,
+                                                       plan                  = pro_plan,
+                                                       expiry_unix_ts_ms     = tx.expiresDate,
+                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
+                                                       err                   = err)
 
                         _ = backend.update_payment_grace_duration_ms(sql_conn=sql_conn, payment_tx=payment_tx, grace_duration_ms=GRACE_PERIOD_DURATION_MS, err=err)
 
