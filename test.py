@@ -25,7 +25,11 @@ import dataclasses
 import typing
 import enum
 
-from platform_google_types import GoogleDuration
+import env
+from main import flask_app
+from platform_google import handle_notification
+import platform_google_api
+from platform_google_types import GoogleDuration, SubscriptionProductDetails
 from vendor import onion_req
 import backend
 import base
@@ -97,6 +101,7 @@ def test_backend_same_user_stacks_subscription():
                                        plan=it.plan,
                                        unredeemed_unix_ts_ms=unix_ts_ms,
                                        expiry_unix_ts_ms=it.expiry_unix_ts_ms,
+                                       platform_refund_expiry_ts_ms=0,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -274,6 +279,7 @@ def test_server_add_payment_flow():
                                    plan=backend.ProPlanType.OneMonth,
                                    unredeemed_unix_ts_ms=unix_ts_ms,
                                    expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                   platform_refund_expiry_ts_ms=0,
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
@@ -302,7 +308,6 @@ def test_server_add_payment_flow():
         # Parse the JSON from the response
         response_json = json.loads(onion_response.body)
         assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
         # Parse status from response
         assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
         assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
@@ -465,6 +470,7 @@ def test_server_add_payment_flow():
                                        plan=backend.ProPlanType.OneMonth,
                                        unredeemed_unix_ts_ms=unix_ts_ms,
                                        expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                       platform_refund_expiry_ts_ms=0,
                                        err=err)
 
         new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
@@ -833,14 +839,13 @@ def test_platform_apple():
     # Setup DB
     err                       = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True, err=err)
-    assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert db.sql_conn
 
-    # Setup local flask instance
-    flask_app:    flask.Flask     = server.init(testing_mode=True,
-                                                db_path=db.path,
-                                                db_path_is_uri=True,
-                                                server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+    # Setup DB
+    err                       = base.ErrorSink()
+    db: backend.SetupDBResult = backend.setup_db(path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True, err=err)
+
+    assert db.sql_conn
+    
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Initialize the Apple verifier/decoder
@@ -2204,3 +2209,291 @@ def test_platform_apple():
 
         e06_expire_voluntary_decoded_notification                       = platform_apple.DecodedNotification(body=e06_expire_voluntary_body, tx_info=e06_expire_voluntary_tx_info, renewal_info=e06_expire_voluntary_renewal_info)
         platform_apple.handle_notification(decoded_notification = e06_expire_voluntary_decoded_notification, sql_conn=db.sql_conn)
+
+
+def test_google_platform_handle_notification(monkeypatch):
+    # Setup DB
+    err                       = base.ErrorSink()
+    path ="file:test_server_db_google_test?mode=memory&cache=shared" 
+    
+    db: backend.SetupDBResult = backend.setup_db(path=path, uri=True, err=err)
+    
+    env.SESH_PRO_BACKEND_DB_PATH = path
+    env.GOOGLE_APPLICATION_CREDENTIALS = ""
+    
+    assert len(err.msg_list) == 0, f'{err.msg_list}'
+    assert db.sql_conn
+    
+    # Setup local flask instance
+    flask_app:    flask.Flask     = server.init(testing_mode=True,
+                                                db_path=db.path,
+                                                db_path_is_uri=True,
+                                                server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+
+    flask_client: werkzeug.Client = flask_app.test_client()
+    
+    master_key                      = nacl.signing.SigningKey.generate()
+    rotating_key                    = nacl.signing.SigningKey.generate()
+
+    def get_pro_status():
+        # Register an unredeemed payment (by writing the the token to the DB directly)
+        unix_ts_ms: int                 = int(time.time() * 1000)
+        next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+       
+        version:      int   = 0
+        history:      bool  = True
+        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
+        request_body={'version':     version,
+                      'master_pkey': bytes(master_key.verify_key).hex(),
+                      'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                      'unix_ts_ms':  unix_ts_ms,
+                      'history':     history}
+        
+        response: werkzeug.test.TestResponse = flask_client.post(server.FLASK_ROUTE_GET_PRO_STATUS, json=request_body)
+
+        return response.json
+
+    one_month_purchase = (# PURCHASE 1-month
+{'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723091078', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
+{'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
+    one_month_cancel =(# Cancel no reason 1-month
+{'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723188437', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
+{'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-06T03:59:48.074Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
+    one_month_resub =(# Resubscribe after cancel but before expiry
+{'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723199349', 'subscriptionNotification': {'version': '1.0', 'notificationType': 7, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
+{'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
+    one_month_refund =(# Refunded before expiry
+{'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723392088', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
+{'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:11.808Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
+    
+
+    monkeypatch.setattr(
+        "platform_google.google_api_fetch_subscription_details_for_base_plan_id",
+        lambda *args, **kwargs: SubscriptionProductDetails(
+            billing_period=GoogleDuration("P30D", err),
+            grace_period=GoogleDuration("P2D", err)
+        )
+    )
+
+    def test_notification(scenario: tuple[base.JSONObject, base.JSONObject]):
+        err = base.ErrorSink()
+        err_tx = backend.UserErrorTransaction()
+
+        notification, raw_state = scenario
+        current_state = platform_google_api.parse_google_api_fetch_subscription_v2_response(raw_state, err)
+
+        monkeypatch.setattr(
+            "platform_google.google_api_fetch_subscription_v2",
+            lambda *args, **kwargs: current_state
+        )
+
+        event_time_ms_str = notification['eventTimeMillis']
+        assert isinstance(event_time_ms_str, str)
+        event_ms = int(event_time_ms_str)
+        now_ms = event_ms - 100
+
+        purchase_token = None
+        if "subscriptionNotification" in notification:
+            purchase_token = notification["subscriptionNotification"]["purchaseToken"]
+        elif "voidedNotification" in notification:
+            purchase_token = notification["voidedNotification"]["purchaseToken"]
+
+        assert isinstance(purchase_token, str)
+
+        handle_notification(notification, now_ms, err_tx, err)
+        assert not err.has()
+        return current_state, purchase_token, event_ms
+
+    assert len(backend.get_unredeemed_payments_list(db.sql_conn)) == 0
+    
+    # Subscribe 1month
+    current_state, purchase_token, event_ms = test_notification(one_month_purchase)
+    assert current_state is not None
+    order_id = current_state.line_items[0].latest_successful_order_id
+    expiry_time_unix_ms = current_state.line_items[0].expiry_time.unix_milliseconds
+    platform_refund_expiry_unix_ms = event_ms + base.MILLISECONDS_IN_DAY * 2 
+    
+    assert order_id is not None
+    assert purchase_token is not None
+
+    unredeemed_payments = backend.get_unredeemed_payments_list(db.sql_conn)
+    assert len(unredeemed_payments) == 1
+    
+    unredeemed_payment = unredeemed_payments[0]
+    assert isinstance(unredeemed_payment, backend.PaymentRow)
+
+    assert unredeemed_payment.master_pkey == None
+    assert unredeemed_payment.status == backend.PaymentStatus.Unredeemed
+    assert unredeemed_payment.plan == backend.ProPlanType.OneMonth
+    assert unredeemed_payment.payment_provider == base.PaymentProvider.GooglePlayStore
+    assert unredeemed_payment.redeemed_unix_ts_ms == None
+    assert unredeemed_payment.expiry_unix_ts_ms ==expiry_time_unix_ms
+    assert unredeemed_payment.grace_period_duration_ms == 0
+    assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
+    assert unredeemed_payment.refunded_unix_ts_ms == None
+    assert unredeemed_payment.apple == backend.AppleTransaction()
+    assert unredeemed_payment.google_payment_token == purchase_token
+    assert unredeemed_payment.google_order_id == order_id
+    
+    version: int                            = 0
+    add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+    add_pro_payment_tx.provider             = unredeemed_payment.payment_provider
+    add_pro_payment_tx.google_payment_token = purchase_token
+
+    payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
+                                                                    master_pkey=master_key.verify_key,
+                                                                    rotating_pkey=rotating_key.verify_key,
+                                                                    payment_tx=add_pro_payment_tx)
+
+    request_body={
+          'version':              version,
+          'master_pkey':          bytes(master_key.verify_key).hex(),
+          'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+          'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+          'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+          'payment_tx': {
+              'provider':             add_pro_payment_tx.provider.value,
+              'google_payment_token': add_pro_payment_tx.google_payment_token,
+          }
+        }
+    response: werkzeug.test.TestResponse = flask_client.post(server.FLASK_ROUTE_ADD_PRO_PAYMENT, json=request_body)
+
+    unredeemed_payments = backend.get_unredeemed_payments_list(db.sql_conn)
+    assert len(unredeemed_payments) == 0
+
+    payments = backend.get_payments_list(sql_conn=db.sql_conn)
+    assert len(payments) == 1
+
+    payment = payments[0]
+    assert isinstance(payment, backend.PaymentRow)
+    assert payment.master_pkey == bytes(master_key.verify_key)
+    assert payment.status == backend.PaymentStatus.Redeemed
+    assert payment.plan == backend.ProPlanType.OneMonth
+    assert payment.payment_provider == base.PaymentProvider.GooglePlayStore
+    assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms > event_ms and payment.redeemed_unix_ts_ms == base.round_unix_ts_ms_to_next_day(event_ms)
+    assert payment.expiry_unix_ts_ms == unredeemed_payment.expiry_unix_ts_ms
+    assert payment.grace_period_duration_ms == 0
+    assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
+    assert payment.refunded_unix_ts_ms == None
+    assert unredeemed_payment.apple == backend.AppleTransaction()
+    assert unredeemed_payment.google_payment_token == purchase_token
+    assert payment.google_order_id == order_id
+
+    users = backend.get_users_list(sql_conn=db.sql_conn)
+    
+    assert len(users) == 1
+
+    user = users[0]
+    assert isinstance(user, backend.UserRow)
+    assert user.master_pkey == bytes(master_key.verify_key)
+    assert user.gen_index == 0
+    assert user.expiry_unix_ts_ms == unredeemed_payment.expiry_unix_ts_ms
+
+    status = get_pro_status()
+    assert status is not None
+    result = base.json_dict_require_obj(status, "result", err)
+    res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
+    res_items = base.json_dict_require_array(result, "items", err)
+    assert res_auto_renewing == False
+    assert res_latest_expiry_unix_ts == expiry_time_unix_ms
+    assert res_pro_status == server.UserProStatus.Active
+    assert len(res_items) == 1
+    item = res_items[0]
+
+    item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
+    item_order_id = base.json_dict_require_str(item, "google_order_id", err)
+    item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
+    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
+
+    assert item_expiry_unix_ts == expiry_time_unix_ms
+    assert item_order_id == order_id
+    assert item_payment_token == purchase_token
+    assert item_grace_duration_ms == 0
+    assert item_payment_provider == base.PaymentProvider.GooglePlayStore
+    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
+    assert item_refunded_unix_ts_ms == 0
+    assert item_status == backend.PaymentStatus.Redeemed
+
+    # Cancel 1-month
+    current_state, purchase_token, now_ms = test_notification(one_month_cancel)
+
+    status = get_pro_status()
+    assert status is not None
+    result = base.json_dict_require_obj(status, "result", err)
+    res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
+    res_items = base.json_dict_require_array(result, "items", err)
+    assert res_auto_renewing == False
+    assert res_latest_expiry_unix_ts == expiry_time_unix_ms
+    assert res_pro_status == server.UserProStatus.Active
+    assert len(res_items) == 1
+    item = res_items[0]
+
+    item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
+    item_order_id = base.json_dict_require_str(item, "google_order_id", err)
+    item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
+    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
+
+    assert item_expiry_unix_ts == expiry_time_unix_ms
+    assert item_order_id == order_id
+    assert item_payment_token == purchase_token
+    assert item_grace_duration_ms == 0
+    assert item_payment_provider == base.PaymentProvider.GooglePlayStore
+    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
+    assert item_refunded_unix_ts_ms == 0
+    assert item_status == backend.PaymentStatus.Redeemed
+
+    # TODO: get user and assert state
+
+    # Resubscribe 1-month
+    current_state, purchase_token, now_ms = test_notification(one_month_resub)
+
+    status = get_pro_status()
+    assert status is not None
+    result = base.json_dict_require_obj(status, "result", err)
+    res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
+    res_items = base.json_dict_require_array(result, "items", err)
+    assert res_auto_renewing == True
+    assert res_latest_expiry_unix_ts == expiry_time_unix_ms
+    assert res_pro_status == server.UserProStatus.Active
+    assert len(res_items) == 1
+    item = res_items[0]
+
+    item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
+    item_order_id = base.json_dict_require_str(item, "google_order_id", err)
+    item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
+    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
+
+    assert item_expiry_unix_ts == expiry_time_unix_ms
+    assert item_order_id == order_id
+    assert item_payment_token == purchase_token
+    assert item_grace_duration_ms == 0
+    assert item_payment_provider == base.PaymentProvider.GooglePlayStore
+    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
+    assert item_refunded_unix_ts_ms == 0
+    assert item_status == backend.PaymentStatus.Redeemed
+
+    # TODO: get user and assert state

@@ -1,10 +1,11 @@
 import dataclasses
+import typing
 import base
 from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
     json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, \
-    dump_enum_details, obfuscate, get_now_ms, validate_string_list
+    dump_enum_details, obfuscate, validate_string_list
 
 import env
 from googleapiclient.discovery import build
@@ -34,18 +35,8 @@ def create_service():
     service = build('androidpublisher', 'v3', credentials=credentials)
     return service
 
-
-def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
-    """
-    Call the purchases.subscriptionsv2.get endpoint. https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get
-    """
-    service = create_service()
+def parse_google_api_fetch_subscription_v2_response(response: typing.Any, err: base.ErrorSink) -> SubscriptionV2Data | None:
     result = None
-    response = service.purchases().subscriptionsv2().get(
-        packageName=package_name,
-        token=purchase_token
-    ).execute()
-
     if isinstance(response, dict):
         # Delete known PII just in case something logs somewhere
         if "subscribeWithGoogleInfo" in response:
@@ -304,6 +295,21 @@ def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err
     return result
 
 
+def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
+    """
+    Call the purchases.subscriptionsv2.get endpoint. https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get
+    """
+    service = create_service()
+    response = service.purchases().subscriptionsv2().get(
+        packageName=package_name,
+        token=purchase_token
+    ).execute()
+    print(response)
+    print(",")
+
+    return parse_google_api_fetch_subscription_v2_response(response, err)
+
+
 def google_api_fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: base.ErrorSink) -> Monetizationv3SubscriptionData | None:
     """
     Call the Google monetizationv3.subscriptions.get endpoint: https://developers.google.com/android-publisher/api-ref/rest/v3/monetization.subscriptions/get 
@@ -347,7 +353,7 @@ def google_api_fetch_subscription_details_for_base_plan_id(base_plan_id: str, er
 
     assert(subscriptions is not None)
 
-    found_plan = None
+    result = None
     for plan in subscriptions.base_plans:
         assert(plan is not None)
 
@@ -367,14 +373,16 @@ def google_api_fetch_subscription_details_for_base_plan_id(base_plan_id: str, er
         if err.has():
             continue
 
-        found_plan = SubscriptionProductDetails(
+        result = SubscriptionProductDetails(
             billing_period=billing_period,
             grace_period=grace_period,
         )
         break;
 
-    if found_plan is None:
+    if result is None:
         err.msg_list.append(f'Unable to find plan details for plan_id "{base_plan_id}", plan_details was {subscriptions.base_plans}')
+
+    assert result is None if err.has() else isinstance(result, SubscriptionProductDetails)
 
     return result
  
@@ -401,13 +409,16 @@ class SubscriptionPlanTxFields:
     order_id: str
     # Time at which the subscription expires
     expiry_time: GoogleTimestamp
+    # Timestamp in ms when the event occured
+    event_ts_ms: int
 
-def get_subscription_plan_tx_fields(details: SubscriptionV2Data, err: base.ErrorSink) -> SubscriptionPlanTxFields:
+def get_subscription_plan_tx_fields(details: SubscriptionV2Data, event_ts_ms: int, err: base.ErrorSink) -> SubscriptionPlanTxFields:
     line_item = get_line_item(details)
     order_id = get_valid_order_id(details, err)
     return SubscriptionPlanTxFields(
         base_plan_id=line_item.offer_details.base_plan_id,
         order_id=order_id,
         expiry_time=line_item.expiry_time,
+        event_ts_ms=event_ts_ms,
     )
 

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+from time import time
 
 from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
@@ -10,7 +11,7 @@ import backend
 import base
 from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
 from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, \
-    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, dump_enum_details, obfuscate, get_now_ms
+    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, dump_enum_details, obfuscate 
 
 import env
 
@@ -38,7 +39,7 @@ def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.Erro
             return ProPlanType.Nil
 
 
-def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlanTxFields, purchase_unix_ts_ms: int, err: base.ErrorSink):
+def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlanTxFields, err: base.ErrorSink):
     """
     Add an unredeemed payment to the database.
     """
@@ -54,6 +55,8 @@ def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlan
         google_order_id=tx_fields.order_id,
         google_payment_token=purchase_token,
     )
+
+    platform_refund_expiry_ts_ms = tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2
     
     with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
         backend.add_unredeemed_payment(
@@ -61,14 +64,15 @@ def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlan
             payment_tx=tx,
             plan=plan,
             expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
-            unredeemed_unix_ts_ms=purchase_unix_ts_ms,
+            unredeemed_unix_ts_ms=tx_fields.event_ts_ms,
+            platform_refund_expiry_ts_ms=platform_refund_expiry_ts_ms,
             err=err,
         )
 
 
-def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_duration: GoogleDuration, err: base.ErrorSink):
+def enable_payment_auto_renew(purchase_token: str, order_id: str, grace_duration: GoogleDuration, err: base.ErrorSink):
     """
-    Add a grace period duration to an existing payment in the database.
+    Enable the auto_renew flag and add the grace period duration to an existing payment in the database.
 
     Args:
         purchase_token (str)            : Globally unique purchase token for google payments
@@ -76,7 +80,6 @@ def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_durat
         order_id (str)                  : Unique ID of the successful order
         grace_duration (GoogleDuration) : Duration of the grace period
         err: (ErrorSink)                : Error Sink
-
     """
     assert len(order_id) > 0 and len(purchase_token) > 0
     
@@ -87,10 +90,11 @@ def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_durat
     )
     
     with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
-        success = backend.update_payment_grace_duration_ms(
+        success = backend.update_payment_renewal_info(
             sql_conn=db.sql_conn,
             payment_tx=tx,
-            grace_duration_ms=grace_duration.milliseconds,
+            grace_period_duration_ms=grace_duration.milliseconds,
+            auto_renewing=True,
             err=err,
         )
 
@@ -98,7 +102,7 @@ def add_user_grace_period_expiry(purchase_token: str, order_id: str, grace_durat
         err.msg_list.append(f'Failed to add user grace period expiry for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
 
 
-def remove_user_grace_period_expiry(purchase_token: str, order_id: str, err: base.ErrorSink):
+def disable_payment_auto_renew(purchase_token: str, order_id: str, err: base.ErrorSink):
     """
     Remove the grace period duration from an existing payment in the database.
 
@@ -106,7 +110,6 @@ def remove_user_grace_period_expiry(purchase_token: str, order_id: str, err: bas
         purchase_token (str) : Globally unique purchase token for google payments
         order_id (str)       : Unique ID of the successful order
         err (ErrorSink)      : Error Sink
-
     """
     assert len(order_id) > 0 and len(purchase_token) > 0
     
@@ -117,16 +120,16 @@ def remove_user_grace_period_expiry(purchase_token: str, order_id: str, err: bas
     )
     
     with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
-        success = backend.update_payment_grace_duration_ms(
+        success = backend.update_payment_renewal_info(
             sql_conn=db.sql_conn,
             payment_tx=tx,
-            grace_duration_ms=0,
+            grace_period_duration_ms=0,
+            auto_renewing=False,
             err=err,
         )
 
     if not success:
         err.msg_list.append(f'Failed to remove user grace period for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
-
 
 
 def add_user_revocation(order_id: str):
@@ -170,15 +173,15 @@ def handle_notification_error_with_purchase_token(error_tx: UserErrorTransaction
         )
 
 
-def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, err: base.ErrorSink):
+def handle_notification(body: JSONObject, now_ms: int, user_error_tx: UserErrorTransaction, err: base.ErrorSink):
     body_version = json_dict_require_str(body, "version", err)
     # TODO: Do we want any non debug mode behaviour around mismatched version?
     assert body_version == "1.0"
 
+    assert now_ms > 0
+
     package_name = json_dict_require_str(body, "packageName", err)
     event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
-
-    now_ms = get_now_ms()
 
     if package_name != platform_config.google_package_name:
         err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
@@ -239,7 +242,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
         if err.has():
             return
 
-        tx_fields = get_subscription_plan_tx_fields(details, err)
+        tx_fields = get_subscription_plan_tx_fields(details, event_time_millis, err)
 
         match subscription_notification_type:
             case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
@@ -251,7 +254,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                         err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        add_user_unredeemed_payment(purchase_token, tx_fields, event_time_millis, err)
+                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
 
 
             case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
@@ -262,7 +265,8 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                     if tx_fields.expiry_time.unix_milliseconds < now_ms:
                         add_user_revocation(tx_fields.order_id)
                     else:
-                        remove_user_grace_period_expiry(purchase_token, tx_fields.order_id, err)
+                        disable_payment_auto_renew(
+                            purchase_token=purchase_token, order_id=tx_fields.order_id, err=err)
                 
                 #if not err.has():
                 #    add_user_canceled_reason(details, err)
@@ -293,29 +297,34 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
                         err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
+                        add_user_unredeemed_payment(purchase_token, event_time_millis, tx_fields, err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
                 # No entitlement change required
                 pass
 
             case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
-                # No entitlement change required
-                pass
+                if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
+                    err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
+
+                if not err.has():
+                    plan_details = google_api_fetch_subscription_details_for_base_plan_id(tx_fields.base_plan_id, err)
+                
+                    if not err.has():
+                        assert plan_details is not None
+                        enable_payment_auto_renew(purchase_token=purchase_token,
+                                                       order_id=tx_fields.order_id,
+                                                       grace_duration=plan_details.grace_period,
+                                                       err=err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
                 if details.subscription_state != SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
                     err.msg_list.append(f'Subscription state is {dump_enum_details(details.subscription_state)} in a {dump_enum_details(subscription_notification_type)}')
 
                 if not err.has():
-                    plan_details = google_api_fetch_subscription_details_for_base_plan_id(tx_fields.base_plan_id, err)
-                    
-                    if not err.has():
-                        assert plan_details is not None
-                        add_user_grace_period_expiry(purchase_token=purchase_token,
-                                                     order_id=tx_fields.order_id,
-                                                     grace_duration=plan_details.grace_period,
-                                                     err=err)
+                    disable_payment_auto_renew(purchase_token=purchase_token,
+                                                      order_id=tx_fields.order_id,
+                                                      err=err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
                 # No entitlement change required
@@ -359,7 +368,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
 
         if err.has():
             # Purchase token logging is included in the wrapper function
-            err.msg_list.append(f'Failed to handle {dump_enum_details(details.subscription_state)} for order_id {obfuscate(tx_fields.order_id) if len(tx_fields.order_id) > 0 else "N/A"}')
+            err.msg_list.append(f'Failed to handle {dump_enum_details(subscription_notification_type)} for order_id {obfuscate(tx_fields.order_id) if len(tx_fields.order_id) > 0 else "N/A"}')
             return
 
     elif is_voided_notification:
@@ -368,7 +377,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
 
         if err.has():
             return
-
+        return
         user_error_tx.google_payment_token = purchase_token
 
         order_id = json_dict_require_str(voided_purchase, "orderId", err)
@@ -405,7 +414,8 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, e
    
 def handle_notification_wrapped(body: JSONObject, err: base.ErrorSink):
     error_tx = UserErrorTransaction()
-    handle_notification(body, error_tx, err)
+    now_ms = int(time() * 1000)
+    handle_notification(body, now_ms, error_tx, err)
     if err.has() and error_tx.google_payment_token != "":
         err.msg_list.append(f'Failed to process event for purchase token: {obfuscate(error_tx.google_payment_token)}')
         # We need to use an error sink for any internal errors, but we expect the main sink to have errors
@@ -488,4 +498,4 @@ def entry_point():
         future = sub_client.subscribe(subscription=sub_path, callback=callback)
         future.result()
 
-entry_point()
+# entry_point()
