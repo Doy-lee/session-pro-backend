@@ -2376,8 +2376,8 @@ def test_google_platform_handle_notification(monkeypatch):
     assert payment.grace_period_duration_ms == 0
     assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
     assert payment.refunded_unix_ts_ms == None
-    assert unredeemed_payment.apple == backend.AppleTransaction()
-    assert unredeemed_payment.google_payment_token == purchase_token
+    assert payment.apple == backend.AppleTransaction()
+    assert payment.google_payment_token == purchase_token
     assert payment.google_order_id == order_id
 
     users = backend.get_users_list(sql_conn=db.sql_conn)
