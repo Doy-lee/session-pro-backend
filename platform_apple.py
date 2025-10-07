@@ -331,8 +331,10 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
                         # notification which handles this for us.
                         pass
+
                     elif decoded_notification.body.subtype == AppleSubtype.UPGRADE:
                         # User is upgrading to a better subscription. Upgrade happens immediately, current plan is ended.
+
                         # NOTE: The only link we have to the current plan is the original
                         # transaction ID. It doesn't seem guaranteed that the web order line item ID
                         # is the same in an upgrade (because it's no longer a part of the same
@@ -340,7 +342,6 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         #
                         # We lookup the latest payment for the original transaction ID and cancel
                         # that
-                        # TODO: Check the refund process
                         with base.SQLTransaction(sql_conn) as sql_tx:
                             sql_tx.cancel = True
                             refunded: bool = backend.refund_apple_payment(tx                   = sql_tx,
