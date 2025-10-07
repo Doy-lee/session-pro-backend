@@ -839,19 +839,14 @@ def test_platform_apple():
     err                       = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True, err=err)
 
-    # Setup DB
-    err                       = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True, err=err)
-
     assert len(err.msg_list) == 0, f'{err.msg_list}'
     assert db.sql_conn
-    
+
     # Setup local flask instance
     flask_app:    flask.Flask     = server.init(testing_mode=True,
                                                 db_path=db.path,
                                                 db_path_is_uri=True,
                                                 server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
-
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Initialize the Apple verifier/decoder
