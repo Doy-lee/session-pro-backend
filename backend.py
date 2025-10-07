@@ -986,7 +986,7 @@ def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
                       payment_tx.apple_web_line_order_tx_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
-                      0, # TODO: platform_refund_expiry_unix_ts_ms
+                      platform_refund_expiry_ts_ms,
                       0, # non-null grace_period_duration_ms
                       unredeemed_unix_ts_ms,
                       1, # auto_renewing is enabled by default until notified otherwise by Apple

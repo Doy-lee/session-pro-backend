@@ -254,12 +254,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                 # NOTE: Process notification
                 if len(err.msg_list) == 0:
-                    backend.add_unredeemed_payment(sql_conn              = sql_conn,
-                                                   payment_tx            = payment_tx,
-                                                   plan                  = pro_plan,
-                                                   unredeemed_unix_ts_ms = tx.purchaseDate,
-                                                   expiry_unix_ts_ms     = tx.expiresDate,
-                                                   err                   = err)
+                    backend.add_unredeemed_payment(sql_conn                     = sql_conn,
+                                                   payment_tx                   = payment_tx,
+                                                   plan                         = pro_plan,
+                                                   expiry_unix_ts_ms            = tx.expiresDate,
+                                                   unredeemed_unix_ts_ms        = tx.purchaseDate,
+                                                   platform_refund_expiry_ts_ms = 0, # TODO: platform_refund_expiry_ts_ms
+                                                   err                          = err)
 
                     _ = backend.update_payment_renewal_info(sql_conn                 = sql_conn,
                                                             payment_tx               = payment_tx,
@@ -343,12 +344,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                      refund_unix_ts_ms=unix_ts_ms)
 
                         # NOTE: Submit the upgraded payment (e.g. the new payment)
-                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
-                                                       payment_tx            = payment_tx,
-                                                       plan                  = pro_plan,
-                                                       expiry_unix_ts_ms     = tx.expiresDate,
-                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
-                                                       err                   = err)
+                        backend.add_unredeemed_payment(sql_conn                     = sql_conn,
+                                                       payment_tx                   = payment_tx,
+                                                       plan                         = pro_plan,
+                                                       expiry_unix_ts_ms            = tx.expiresDate,
+                                                       unredeemed_unix_ts_ms        = tx.purchaseDate,
+                                                       platform_refund_expiry_ts_ms = 0, # TODO: platform_refund_expiry_ts_ms
+                                                       err                          = err)
 
                         _ = backend.update_payment_renewal_info(sql_conn                 = sql_conn,
                                                                 payment_tx               = payment_tx,
@@ -409,12 +411,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 if len(err.msg_list) == 0:
                     if not decoded_notification.body.subtype:
                         # NOTE: User is redeeming an offer to start(?) a sub. Submit the payment
-                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
-                                                       payment_tx            = payment_tx,
-                                                       plan                  = pro_plan,
-                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
-                                                       expiry_unix_ts_ms     = tx.expiresDate,
-                                                       err                   = err)
+                        backend.add_unredeemed_payment(sql_conn                     = sql_conn,
+                                                       payment_tx                   = payment_tx,
+                                                       plan                         = pro_plan,
+                                                       expiry_unix_ts_ms            = tx.expiresDate,
+                                                       unredeemed_unix_ts_ms        = tx.purchaseDate,
+                                                       platform_refund_expiry_ts_ms = 0, # TODO: platform_refund_expiry_ts_ms
+                                                       err                          = err)
 
                     elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
@@ -440,12 +443,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         assert refunded
 
                         # NOTE: Submit the 'new' payment
-                        backend.add_unredeemed_payment(sql_conn              = sql_conn,
-                                                       payment_tx            = payment_tx,
-                                                       plan                  = pro_plan,
-                                                       expiry_unix_ts_ms     = tx.expiresDate,
-                                                       unredeemed_unix_ts_ms = tx.purchaseDate,
-                                                       err                   = err)
+                        backend.add_unredeemed_payment(sql_conn                     = sql_conn,
+                                                       payment_tx                   = payment_tx,
+                                                       plan                         = pro_plan,
+                                                       expiry_unix_ts_ms            = tx.expiresDate,
+                                                       unredeemed_unix_ts_ms        = tx.purchaseDate,
+                                                       platform_refund_expiry_ts_ms = 0, # TODO: platform_refund_expiry_ts_ms
+                                                       err                          = err)
 
                         _ = backend.update_payment_renewal_info(sql_conn                 = sql_conn,
                                                                 payment_tx               = payment_tx,

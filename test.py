@@ -13,6 +13,7 @@ TODO:
   - Test that modifying the salt breaks verification
 '''
 
+import pprint
 import flask
 import json
 import nacl.signing

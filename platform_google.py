@@ -10,7 +10,7 @@ import google.cloud.pubsub_v1.subscriber.message
 import backend
 import base
 from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
-from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, \
+from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, os_get_boolean_env, \
     safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, dump_enum_details, obfuscate 
 
 import env
@@ -18,7 +18,6 @@ import env
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
-from main import os_get_boolean_env
 from platform_google_api import SubscriptionPlanTxFields, get_line_item, get_subscription_plan_tx_fields, google_api_fetch_subscription_details_for_base_plan_id, google_api_fetch_subscription_v2, get_valid_order_id
 from platform_google_types import GoogleDuration, SubscriptionNotificationType, \
     SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, GoogleTimestamp, SubscriptionsV2SubscriptionStateType
