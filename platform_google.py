@@ -70,18 +70,9 @@ def add_user_unredeemed_payment(purchase_token: str, tx_fields: SubscriptionPlan
         )
 
 
-def enable_payment_auto_renew(purchase_token: str, order_id: str, grace_duration: GoogleDuration, err: base.ErrorSink):
-    """
-    Enable the auto_renew flag and add the grace period duration to an existing payment in the database.
-
-    Args:
-        purchase_token (str)            : Globally unique purchase token for google payments
-        product_id (str)                : Unique product ID of the Google subscription
-        order_id (str)                  : Unique ID of the successful order
-        grace_duration (GoogleDuration) : Duration of the grace period
-        err: (ErrorSink)                : Error Sink
-    """
+def _toggle_payment_auto_renew(purchase_token: str, order_id: str, auto_renewing: bool, grace_period_duration_ms: int, err: base.ErrorSink):
     assert len(order_id) > 0 and len(purchase_token) > 0
+    assert grace_period_duration_ms > 0 if auto_renewing else grace_period_duration_ms == 0
     
     tx = PaymentProviderTransaction(
         provider=base.PaymentProvider.GooglePlayStore,
@@ -93,43 +84,36 @@ def enable_payment_auto_renew(purchase_token: str, order_id: str, grace_duration
         success = backend.update_payment_renewal_info(
             sql_conn=db.sql_conn,
             payment_tx=tx,
-            grace_period_duration_ms=grace_duration.milliseconds,
+            grace_period_duration_ms=grace_period_duration_ms,
             auto_renewing=True,
             err=err,
         )
 
     if not success:
-        err.msg_list.append(f'Failed to add user grace period expiry for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
+        err.msg_list.append(f'Failed to update auto_renew flag and grace period for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
+
+
+def enable_payment_auto_renew(purchase_token: str, order_id: str, grace_duration: GoogleDuration, err: base.ErrorSink):
+    """Enable the auto_renew flag and add the grace period duration to an existing payment in the database."""
+    _toggle_payment_auto_renew(
+        purchase_token=purchase_token,
+        order_id=order_id,
+        auto_renewing=True,
+        grace_period_duration_ms=grace_duration.milliseconds,
+        err=err,
+    )
+
 
 
 def disable_payment_auto_renew(purchase_token: str, order_id: str, err: base.ErrorSink):
-    """
-    Disable the auto_renew flag and remove the grace period duration from an existing payment in the database.
-
-    Args:
-        purchase_token (str) : Globally unique purchase token for google payments
-        order_id (str)       : Unique ID of the successful order
-        err (ErrorSink)      : Error Sink
-    """
-    assert len(order_id) > 0 and len(purchase_token) > 0
-    
-    tx = PaymentProviderTransaction(
-        provider=base.PaymentProvider.GooglePlayStore,
-        google_order_id=order_id,
-        google_payment_token=purchase_token,
+    """Disable the auto_renew flag and remove the grace period duration from an existing payment in the database."""
+    _toggle_payment_auto_renew(
+        purchase_token=purchase_token,
+        order_id=order_id,
+        auto_renewing=False,
+        grace_period_duration_ms=0,
+        err=err,
     )
-    
-    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
-        success = backend.update_payment_renewal_info(
-            sql_conn=db.sql_conn,
-            payment_tx=tx,
-            grace_period_duration_ms=0,
-            auto_renewing=False,
-            err=err,
-        )
-
-    if not success:
-        err.msg_list.append(f'Failed to remove user grace period for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
 
 
 def add_user_revocation(order_id: str):
