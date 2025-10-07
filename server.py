@@ -275,59 +275,62 @@ API
                        User had Session Pro payment(s) that were fully consumed previously and
                        currently don't have an active payment and hence entitlement to Session Pro
                        features.
-      auto_renewing           : 1 byte boolean indicating if the latest pro subscription (if active)
-                                is set to auto-renew at the its expiry time.
-      latest_expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the entitlement of Session
-                                Pro is due to expire as defined by the payment with the latest
-                                expiry date associated with it.
-      latest_grace_duration_ms: 8 byte duration integer indicating the grace period duration. This
-                                will be 0 if auto auto-renewing is disabled, but this being zero does
-                                not mean auto-renewing is disabled. This is the amount of time the
-                                payment  platform will attempt to auto-renew the subscription after
-                                it has expired. The user is entitled to Session Pro during this period
-                                until `expiry_unix_ts_ms` + `grace_period_duration_ms`. Clients can
-                                request a pro proof for users in a grace period that will expire at the
-                                end of the grace period. If the grace period is not enabled (e.g. the
-                                user has a non-renewing subscription), this value will be set to 0.
+      auto_renewing:     1 byte boolean indicating if the latest pro subscription (if active)
+                         is set to auto-renew at the marked expiry time.
+      expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the entitlement of Session
+                         Pro is due to expire as defined by the payment with the latest
+                         expiry date associated with it.
+      grace_duration_ms: 8 byte duration integer indicating the grace period duration indicating
+                         the amount of time the payment platform will attempt to auto-renew the
+                         subscription after it has expired. The user is entitled to Session Pro
+                         during this period, `expiry_unix_ts_ms + grace_period_duration_ms` if
+                         `auto_renewing` is true. Clients can request a proof for users in a grace
+                         period that expires at the end of the grace period. This value is 0 if
+                         `auto_renewing` is false.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
-        status:                  1 byte integer describing the status of the consumption of the
-                                 payment for Session Pro with the following mapping:
-                                   2 => Redeemed
-                                        Payment was recognised by the backend and is being used for
-                                        Session Pro entitlement.
-                                   3 => Expired
-                                        Session Pro entitlement has expired and is no longer being
-                                        provided for this payment
-                                   4 => Refunded
-                                        User has successfully refunded the payment and Session Pro
-                                        entitlement is no longer available
+        status:                   1 byte integer describing the status of the consumption of the
+                                  payment for Session Pro with the following mapping:
+                                    2 => Redeemed
+                                         Payment was recognised by the backend and is being used for
+                                         Session Pro entitlement.
+                                    3 => Expired
+                                         Session Pro entitlement has expired and is no longer being
+                                         provided for this payment
+                                    4 => Refunded
+                                         User has successfully refunded the payment and Session Pro
+                                         entitlement is no longer available
 
-                                 Always check the status before interpreting the fields. It's
-                                 possible to transition from refunded -> redeemed for example if the
-                                 payment provider cancels a refund in which case the refunded
-                                 timestamp is set but the payment is actually being actively
-                                 consumed.
-
-        subscription_duration_s: 4 byte integer indicating the length of the subscription payment in
-                                 seconds.
-        payment_provider:        1 byte integer representing the platform that the payment to be
-                                 registered is coming from with the following mapping:
-                                   1 => Google Play Store
-                                   2 => Apple iOS App Store
-        expiry_unix_ts_ms:       8 byte UNIX timestamp indicating when the entitlement of Session
-                                 Pro is due to expire.
-        grace_duration_ms:       8 byte duration integer indicating how long the subscription's
-                                 grace period is. Set to 0 if auto-renewing is disabled.
-        redeemed_unix_ts_ms:     8 byte UNIX timestamp indicating when the payment was registered.
-                                 This timestamp is rounded up to the next day boundary from the
-                                 actual registration date.
-       
-        platform_refund_expiry_unix_ts_ms:  8 byte unix timestamp indicating when the payment will no
-                                            longer be eligible for a refund via its purchase platform.
-                                            0 if always eligible.
-        refunded_unix_ts_ms:                8 byte UNIX timestamp indicating when the payment was
-                                            refunded. 0 if it never refunded.
+                                  Always check the status before interpreting the fields. It's
+                                  possible to transition from refunded -> redeemed for example if the
+                                  payment provider cancels a refund in which case the refunded
+                                  timestamp is set but the payment is actually being actively
+                                  consumed.
+        plan:                     1 byte integer indicating the Session Pro plan that was purchased
+                                  with the following mapping:
+                                    1 => 1  Month
+                                    2 => 3  Months
+                                    3 => 12 Months
+        payment_provider:         1 byte integer representing the platform that the payment to be
+                                  registered is coming from with the following mapping:
+                                    1 => Google Play Store
+                                    2 => Apple iOS App Store
+        auto_renewing:            1 byte boolean representing if the user had auto-renewing enabled
+                                  to repeat this payment. It additionally indicates that the user is
+                                  to be granted the grace period marked on the payment.
+        unredeemed_unix_ts_ms:    8 byte UNIX timestamp indicating when the payment was executed.
+        redeemed_unix_ts_ms:      8 byte UNIX timestamp indicating when the payment was registered.
+                                  This timestamp is rounded up to the next day boundary from the
+                                  actual registration date.
+        expiry_unix_ts_ms:        8 byte UNIX timestamp indicating when the entitlement of Session
+                                  Pro is due to expire.
+        grace_period_duration_ms: 8 byte duration integer indicating how long the subscription's
+                                  grace period is. Set to 0 if auto-renewing is disabled.
+        platform_refund_expiry_unix_ts_ms: 8 byte unix timestamp indicating when the payment will no
+                                           longer be eligible for a refund via its purchase
+                                           platform.
+        refunded_unix_ts_ms:               8 byte UNIX timestamp indicating when the payment was
+                                           refunded. 0 if it never refunded.
         google_payment_token:    When payment provider is Google Play Store, a string which is set
                                  to the platform-specific purchase token for the subscription.
         google_order_id:         When payment provider is Google Play Store, a string which is set
@@ -687,16 +690,18 @@ def get_pro_payments():
         err.msg_list.append('Signature failed to be verified')
         return make_error_response(status=1, errors=err.msg_list)
 
-    items:           list[dict[str, str | int]] = []
-    user_pro_status: UserProStatus              = UserProStatus.NeverBeenPro
-    latest_expiry_unix_ts_ms                    = 0
-    latest_grace_duration_ms                    = 0
+    items:           list[dict[str, str | int | bool]] = []
+    user_pro_status: UserProStatus                     = UserProStatus.NeverBeenPro
+    auto_renewing                                      = False
+    expiry_unix_ts_ms                                  = 0
+    grace_period_duration_ms                           = 0
     with open_db_from_flask_request_context(flask.current_app) as db:
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
-            latest_grace_duration_ms             = get_user.latest_grace_period_duration_ms
-            latest_expiry_unix_ts_ms             = get_user.latest_expiry_unix_ts_ms
-            has_payments = False
+            grace_period_duration_ms = get_user.grace_period_duration_ms
+            expiry_unix_ts_ms        = get_user.expiry_unix_ts_ms
+            auto_renewing            = get_user.auto_renewing
+            has_payments             = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
                 # initially and every payment we come across, if they have a redeemed payment
@@ -705,60 +710,54 @@ def get_pro_payments():
                     user_pro_status = UserProStatus.Expired
                     has_payments    = True
 
-                status                                    = backend.PaymentStatus(row[1])
-                subscription_duration_s:            int   = row[2]
-                payment_provider                          = base.PaymentProvider(row[3])
-                redeemed_unix_ts_ms:                int   = row[4]  if row[4] else 0
-                expiry_unix_ts_ms:                  int   = row[5]
-                grace_duration_ms:                  int   = row[6]
-                platform_refund_expiry_unix_ts_ms:  int   = row[7]
-                refunded_unix_ts_ms:                int   = row[8]  if row[8]  else 0
-                apple_original_tx_id:               str   = row[9]  if row[9]  else ''
-                apple_tx_id:                        str   = row[10] if row[10]  else ''
-                apple_web_line_order_id:            str   = row[11] if row[11] else ''
-                google_payment_token:               str   = row[12] if row[12] else ''
-                google_order_id:                    str   = row[13] if row[13] else ''
+                faux_row_id                                             = 0
+                row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
+                payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
 
                 # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                 # confidential until the user actually registers the token themselves which they
                 # should witness from the payment provider independently from us so there should be
                 # no need to reveal this to the user until they've confirmed their own receipt of
                 # it.
-                if status == backend.PaymentStatus.Unredeemed:
+                if payment.status == backend.PaymentStatus.Unredeemed:
                     continue
 
                 # NOTE: Collect the payment if history was requested
                 if history:
-                    if payment_provider == base.PaymentProvider.GooglePlayStore:
+                    if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
                         items.append({
-                            'status':                               int(status.value),
-                            'subscription_duration_s':              subscription_duration_s,
-                            'payment_provider':                     int(payment_provider.value),
-                            'expiry_unix_ts_ms':                    expiry_unix_ts_ms,
-                            'grace_duration_ms':                    grace_duration_ms,
-                            'platform_refund_expiry_unix_ts_ms':    platform_refund_expiry_unix_ts_ms,
-                            'redeemed_unix_ts_ms':                  redeemed_unix_ts_ms,
-                            'refunded_unix_ts_ms':                  refunded_unix_ts_ms,
-                            'google_payment_token':                 google_payment_token,
-                            'google_order_id':                      google_order_id,
+                            'status':                               int(payment.status.value),
+                            'plan':                                 int(payment.plan.value),
+                            'payment_provider':                     int(payment.payment_provider.value),
+                            'auto_renewing':                        payment.auto_renewing,
+                            'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                            'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                            'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                            'refunded_unix_ts_ms':                  payment.refunded_unix_ts_ms if payment.refunded_unix_ts_ms else 0,
+                            'google_payment_token':                 payment.google_payment_token,
+                            'google_order_id':                      payment.google_order_id,
                         })
-                    elif payment_provider == base.PaymentProvider.iOSAppStore:
+                    elif payment.payment_provider == base.PaymentProvider.iOSAppStore:
                         items.append({
-                            'status':                               int(status.value),
-                            'subscription_duration_s':              subscription_duration_s,
-                            'payment_provider':                     int(payment_provider.value),
-                            'expiry_unix_ts_ms':                    expiry_unix_ts_ms,
-                            'grace_duration_ms':                    grace_duration_ms,
-                            'platform_refund_expiry_unix_ts_ms':    platform_refund_expiry_unix_ts_ms,
-                            'redeemed_unix_ts_ms':                  redeemed_unix_ts_ms,
-                            'refunded_unix_ts_ms':                  refunded_unix_ts_ms,
-                            'apple_original_tx_id':                 apple_original_tx_id,
-                            'apple_tx_id':                          apple_tx_id,
-                            'apple_web_line_order_id':              apple_web_line_order_id,
+                            'status':                               int(payment.status.value),
+                            'plan':                                 int(payment.plan.value),
+                            'payment_provider':                     int(payment.payment_provider.value),
+                            'auto_renewing':                        payment.auto_renewing,
+                            'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                            'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                            'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                            'refunded_unix_ts_ms':                  payment.refunded_unix_ts_ms if payment.refunded_unix_ts_ms else 0,
+                            'apple_original_tx_id':                 payment.apple.original_tx_id,
+                            'apple_tx_id':                          payment.apple.tx_id,
+                            'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
                         })
 
                 # NOTE: Determine pro status if it is a relevant
-                if status == backend.PaymentStatus.Redeemed:
+                if payment.status == backend.PaymentStatus.Redeemed:
                     user_pro_status = UserProStatus.Active
 
                 # NOTE: If we determine that the user is active and the user didn't request for
@@ -767,14 +766,12 @@ def get_pro_payments():
                 if not history and user_pro_status == UserProStatus.Active:
                     break
 
-    auto_renewing = latest_grace_duration_ms > 0
-
     result = make_success_response(dict_result={
         'version':                  0,
         'status':                   int(user_pro_status.value),
         'auto_renewing':            auto_renewing,
-        'latest_grace_duration_ms': latest_grace_duration_ms,
-        'latest_expiry_unix_ts_ms': latest_expiry_unix_ts_ms,
+        'expiry_unix_ts_ms':        expiry_unix_ts_ms,
+        'grace_period_duration_ms': grace_period_duration_ms if auto_renewing else 0,
         'items':                    items
     })
     return result
