@@ -104,7 +104,7 @@ def enable_payment_auto_renew(purchase_token: str, order_id: str, grace_duration
 
 def disable_payment_auto_renew(purchase_token: str, order_id: str, err: base.ErrorSink):
     """
-    Remove the grace period duration from an existing payment in the database.
+    Disable the auto_renew flag and remove the grace period duration from an existing payment in the database.
 
     Args:
         purchase_token (str) : Globally unique purchase token for google payments
@@ -297,7 +297,7 @@ def handle_notification(body: JSONObject, now_ms: int, user_error_tx: UserErrorT
                         err.msg_list.append(f"Subscription is already expired! expiry_time ({tx_fields.expiry_time.unix_milliseconds}) < {now_ms}")
 
                     if not err.has():
-                        add_user_unredeemed_payment(purchase_token, event_time_millis, tx_fields, err)
+                        add_user_unredeemed_payment(purchase_token, tx_fields, err)
 
             case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
                 # No entitlement change required
