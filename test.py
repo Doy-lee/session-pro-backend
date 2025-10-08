@@ -50,6 +50,49 @@ from appstoreserverlibrary.models.Status                       import Status    
 from appstoreserverlibrary.models.NotificationTypeV2           import NotificationTypeV2           as AppleNotificationTypeV2
 from appstoreserverlibrary.models.InAppOwnershipType           import InAppOwnershipType           as AppleInAppOwnershipType
 
+@dataclasses.dataclass
+class TestingContext:
+    """
+    Sets up a database with the necessary tables and flask instance that you can simulate HTTP
+    requests to, to target the Session Pro Backend routes. This class is designed to be used in a
+    `with` context such that the DB is closed on scope exit.
+
+    For tests, this means you probably want to supply a in-memory URI-style path to make a transient
+    DB that is wiped on scope exit. This means tests have a fresh DB to work with for each `with`
+    context and each chunk of tests to execute.
+    """
+
+    db:           backend.SetupDBResult
+    sql_conn:     sqlite3.Connection
+    flask_app:    flask.Flask
+    flask_client: werkzeug.Client
+
+    def __init__(self, db_path: str, uri: bool):
+        err     = base.ErrorSink()
+        self.db = backend.setup_db(path=db_path, uri=uri, err=err)
+        assert len(err.msg_list) == 0
+
+        self.flask_app   = server.init(testing_mode=True,
+                                       db_path=db_path,
+                                       db_path_is_uri=uri,
+                                       server_x25519_skey=self.db.runtime.backend_key.to_curve25519_private_key())
+        self.flask_client = self.flask_app.test_client()
+
+
+    def __enter__(self):
+        assert self.db.sql_conn
+        self.sql_conn = self.db.sql_conn
+        return self
+
+    def __exit__(self,
+                 exc_type: object | None,
+                 exc_value: object | None,
+                 traceback: traceback.TracebackException | None):
+        assert self.db.sql_conn
+        self.db.sql_conn.close()
+        self.sql_conn.close()
+        return False
+
 def test_backend_same_user_stacks_subscription():
     # Setup DB
     err                       = base.ErrorSink()
@@ -837,39 +880,6 @@ def dump_apple_signed_payloads(core: platform_apple.Core, body: AppleResponseBod
     print(f'{prefix}decoded_notification = platform_apple.DecodedNotification(body={prefix}body, tx_info={prefix}tx_info, renewal_info={prefix}renewal_info)')
     print(f'platform_apple.handle_notification(decoded_notification={prefix}decoded_notification, sql_conn=db.sql_conn)')
 
-@dataclasses.dataclass
-class AppleTestContext:
-    db:           backend.SetupDBResult
-    sql_conn:     sqlite3.Connection
-    flask_app:    flask.Flask
-    flask_client: werkzeug.Client
-
-    def __init__(self, db_path: str, uri: bool):
-        err     = base.ErrorSink()
-        self.db = backend.setup_db(path=db_path, uri=uri, err=err)
-        assert len(err.msg_list) == 0
-
-        self.flask_app   = server.init(testing_mode=True,
-                                       db_path=db_path,
-                                       db_path_is_uri=True,
-                                       server_x25519_skey=self.db.runtime.backend_key.to_curve25519_private_key())
-        self.flask_client = self.flask_app.test_client()
-
-
-    def __enter__(self):
-        assert self.db.sql_conn
-        self.sql_conn = self.db.sql_conn
-        return self
-
-    def __exit__(self,
-                 exc_type: object | None,
-                 exc_value: object | None,
-                 traceback: traceback.TracebackException | None):
-        assert self.db.sql_conn
-        self.db.sql_conn.close()
-        self.sql_conn.close()
-        return False
-
 def test_platform_apple():
 <<<<<<< HEAD
     # Setup DB
@@ -883,7 +893,7 @@ def test_platform_apple():
 >>>>>>> f1bc318 (Add scoped test context to allow resetting of DB)
 
     # NOTE: Did renew notification
-    with AppleTestContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (requires keys to decrypt)
         if 0:
             core:                      platform_apple.Core       = platform_apple.init()
@@ -1071,7 +1081,7 @@ def test_platform_apple():
     #
     # This was done by executing these sequences in the time-frame that a subscription is active for
     # on Apple's sandbox environment.
-    with AppleTestContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
         if 1: # Subscribe notification
             # NOTE: Original payload (requires keys to decrypt)
             if 0:
@@ -1499,7 +1509,7 @@ def test_platform_apple():
     #  - 4 [DID_CHANGE_RENEWAL_PREF]                             Revert to 3 months (cancelling the downgrade to 1wk action)
     #  - 5 [DID_CHANGE_RENEWAL_STATUS, sub: AUTO_RENEW_DISABLED] Disable auto-renew
     #  - 6 [EXPIRED,                   sub: VOLUNTARY]           ??
-    with AppleTestContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
             e00_sub_to_1wk: dict[str, base.JSONValue] = json.loads('''

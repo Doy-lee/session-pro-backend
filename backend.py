@@ -261,6 +261,19 @@ class AllocatedGenID:
 
 @dataclasses.dataclass
 class SetupDBResult:
+    """
+    Class is returned by backend.setup_db() which opens the DB and maintains a connection to the DB
+    via `sql_conn`. Caller must close `sql_conn` if they wish to release the connection from the DB.
+    The setup function creates the tables required to operate the Session Pro Backend.
+
+    Normally you would not return the DB connection as it's easy to accidentally leak the DB
+    connection in this object however we also use this in tests which use an in-memory transient DB
+    If we were to close connection before returning to the user, the DB will be wiped from memory
+    making it useless for tests.
+
+    For the most part the callers of this API (tests and main entry point) explicitly close the DB
+    when they are done with it.
+    """
     path:     str                       = ''
     success:  bool                      = False
     runtime:  RuntimeRow                = dataclasses.field(default_factory=RuntimeRow)
@@ -268,6 +281,15 @@ class SetupDBResult:
 
 @dataclasses.dataclass
 class OpenDBAtPath:
+    """
+    Open a pre-existing DB at the specified path. This class should be used in a `with` context to
+    ensure that the connection established to the database is closed on scope exit, e.g.:
+
+    with OpenDBAtPath(...) as db:
+        # Use db.sql_conn =
+        pass
+    """
+
     sql_conn: sqlite3.Connection
     runtime:  RuntimeRow
     def __init__(self, db_path: str, db_path_is_uri: bool = False):
