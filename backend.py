@@ -976,7 +976,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   payment_tx.google_order_id,
                   int(PaymentStatus.Unredeemed.value),
                   expiry_unix_ts_ms,
-                  platform_refund_expiry_ts_ms,
+                  platform_refund_expiry_unix_ts_ms,
                   0, # grace period (updated authoritatively by a Google notification when the user enters grace)
                   unredeemed_unix_ts_ms,
                   1, # auto_renewing is enabled by default until notified otherwise by Google

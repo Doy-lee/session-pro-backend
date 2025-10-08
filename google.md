@@ -99,7 +99,7 @@ The following is added to the unredeemed payments table:
 - `provider`
 - `expiry_unix_ts_ms`
 - `plan`
-- `platform_refund_expiry_ts_ms`
+- `platform_refund_expiry_unix_ts_ms`
 
 ### Renewals
 

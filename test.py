@@ -150,7 +150,7 @@ def test_backend_same_user_stacks_subscription():
                                        plan=it.plan,
                                        unredeemed_unix_ts_ms=unix_ts_ms,
                                        expiry_unix_ts_ms=it.expiry_unix_ts_ms,
-                                       platform_refund_expiry_ts_ms=0,
+                                       platform_refund_expiry_unix_ts_ms=0,
                                        err=err)
         assert len(err.msg_list) == 0
 
@@ -328,7 +328,7 @@ def test_server_add_payment_flow():
                                    plan=backend.ProPlanType.OneMonth,
                                    unredeemed_unix_ts_ms=unix_ts_ms,
                                    expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                                   platform_refund_expiry_ts_ms=0,
+                                   platform_refund_expiry_unix_ts_ms=0,
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
@@ -519,7 +519,7 @@ def test_server_add_payment_flow():
                                        plan=backend.ProPlanType.OneMonth,
                                        unredeemed_unix_ts_ms=unix_ts_ms,
                                        expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                                       platform_refund_expiry_ts_ms=0,
+                                       platform_refund_expiry_unix_ts_ms=0,
                                        err=err)
 
         new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
@@ -885,16 +885,7 @@ def dump_apple_signed_payloads(core: platform_apple.Core, body: AppleResponseBod
     print(f'platform_apple.handle_notification(decoded_notification={prefix}decoded_notification, sql_conn=db.sql_conn)')
 
 def test_platform_apple():
-<<<<<<< HEAD
-    # Setup DB
-    err                       = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True, err=err)
-
-    assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert db.sql_conn
-=======
     err = base.ErrorSink()
->>>>>>> f1bc318 (Add scoped test context to allow resetting of DB)
 
     # NOTE: Did renew notification
     with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
@@ -2543,7 +2534,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert current_state is not None
     order_id = current_state.line_items[0].latest_successful_order_id
     expiry_time_unix_ms = current_state.line_items[0].expiry_time.unix_milliseconds
-    platform_refund_expiry_unix_ms = event_ms + base.MILLISECONDS_IN_DAY * 2 
+    platform_refund_expiry_unix_ts_ms = event_ms + base.MILLISECONDS_IN_DAY * 2 
     
     assert order_id is not None
     assert purchase_token is not None
@@ -2561,7 +2552,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert unredeemed_payment.redeemed_unix_ts_ms == None
     assert unredeemed_payment.expiry_unix_ts_ms ==expiry_time_unix_ms
     assert unredeemed_payment.grace_period_duration_ms == 0
-    assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
+    assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert unredeemed_payment.refunded_unix_ts_ms == None
     assert unredeemed_payment.apple == backend.AppleTransaction()
     assert unredeemed_payment.google_payment_token == purchase_token
@@ -2606,7 +2597,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms == base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
     assert payment.expiry_unix_ts_ms == unredeemed_payment.expiry_unix_ts_ms
     assert payment.grace_period_duration_ms == 0
-    assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
+    assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert payment.refunded_unix_ts_ms == None
     assert payment.apple == backend.AppleTransaction()
     assert payment.google_payment_token == purchase_token
@@ -2639,7 +2630,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
     item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
-    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
@@ -2649,7 +2640,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_payment_token == purchase_token
     assert item_grace_duration_ms == 0
     assert item_payment_provider == base.PaymentProvider.GooglePlayStore
-    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
     assert item_refunded_unix_ts_ms == 0
     assert item_status == backend.PaymentStatus.Redeemed
@@ -2676,7 +2667,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
     item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
-    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
@@ -2686,7 +2677,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_payment_token == purchase_token
     assert item_grace_duration_ms == 0
     assert item_payment_provider == base.PaymentProvider.GooglePlayStore
-    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
     assert item_refunded_unix_ts_ms == 0
     assert item_status == backend.PaymentStatus.Redeemed
@@ -2713,7 +2704,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
     item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
-    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
@@ -2723,7 +2714,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_payment_token == purchase_token
     assert item_grace_duration_ms == 0
     assert item_payment_provider == base.PaymentProvider.GooglePlayStore
-    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
     assert item_refunded_unix_ts_ms == 0
     assert item_status == backend.PaymentStatus.Redeemed
@@ -2750,7 +2741,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
     item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
-    item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
+    item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
@@ -2760,7 +2751,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_payment_token == purchase_token
     assert item_grace_duration_ms == 0
     assert item_payment_provider == base.PaymentProvider.GooglePlayStore
-    assert item_platform_refund_expiry_ts_ms == platform_refund_expiry_unix_ms
+    assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
     assert item_refunded_unix_ts_ms == 0
     # TODO: this should probably be refunded, but also the one_month_refund event might not actually be a refund, this needs to be verified

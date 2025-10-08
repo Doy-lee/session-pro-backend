@@ -57,7 +57,7 @@ def add_user_unredeemed_payment(tx_fields: SubscriptionPlanTxFields, sql_conn: s
         plan=plan,
         expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
         unredeemed_unix_ts_ms=tx_fields.event_ts_ms,
-        platform_refund_expiry_ts_ms=tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
+        platform_refund_expiry_unix_ts_ms=tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
         err=err,
     )
 
