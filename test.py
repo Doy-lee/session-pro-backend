@@ -2331,7 +2331,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].auto_renewing   == False
 
         # NOTE: A downgrade should be a no-op as it's queued to execute at the end of the billing
-        # cycle
+        # cycle, but it does implicitly mean that auto-renewing is turned back on.
         if 1:
             platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.sql_conn, err=err)
 
@@ -2342,7 +2342,15 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].status                            == backend.PaymentStatus.Unredeemed
             assert unredeemed_payment_list[0].plan                              == backend.ProPlanType.OneMonth
             assert unredeemed_payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert unredeemed_payment_list[0].auto_renewing                     == False
+
+            # NOTE: In this sequence, apparently, auto-renewing should be turned back on. The reason
+            # for this is that since the user downgraded to 1wk plan which takes effect at the end
+            # of the month, they are resuming their subscription with _another week_ after their
+            # current billing cycle ends.
+            #
+            # So the auto-renewing flag on our side should be set true
+            assert unredeemed_payment_list[0].auto_renewing                     == True
+
             assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
@@ -2352,6 +2360,8 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
+
+        # TODO: We need to check that the correct proofs are revoked. This is not done yet in Apple
 
         # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
         # remain on the 1wk plan
@@ -2384,17 +2394,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].status                            == backend.PaymentStatus.Unredeemed
             assert unredeemed_payment_list[0].plan                              == backend.ProPlanType.OneMonth
             assert unredeemed_payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-
-            # NOTE: In this sequence, apparently, auto-renewing should be turned back on. The reason
-            # for this is that since the user downgraded to 1wk plan which takes effect at the end
-            # of the month, they are resuming their subscription with _another week_ after their
-            # current billing cycle ends.
-            #
-            # Since they are continuing, the auto-renewing property is sticky. The user intends to
-            # continue so once they cancel the downgrade, the auto-renewing property stays, so this
-            # flag should be true!
             assert unredeemed_payment_list[0].auto_renewing                     == True
-
             assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate

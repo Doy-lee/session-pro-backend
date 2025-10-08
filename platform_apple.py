@@ -323,9 +323,18 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 if len(err.msg_list) == 0:
                     if not decoded_notification.body.subtype:
                         # NOTE: User is cancelling their downgrade, the downgrade was meant to be
-                        # queued for the end of the month. By virtue of requesting a downgrade (and
-                        # it activating at the end of the billing cycle) they are implicitly
-                        # indicating that they are enabling auto-renewing.
+                        # queued for the end of the month. No-op the current payment for the user is
+                        # still valid
+                        pass
+
+                    elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
+                        # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
+                        # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
+                        # notification which handles this for us.
+                        #
+                        # By virtue of requesting a downgrade (and it activating at the end of the
+                        # billing cycle) they are implicitly indicating that they are enabling
+                        # auto-renewing.
                         #
                         # The way apple works is that the signed transaction info will be the last
                         # transaction that the user made. In this case the TX info has the current
@@ -339,12 +348,6 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                                        auto_renewing            = True,
                                                                        err                      = err)
                             sql_tx.cancel = err.has()
-
-                    elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
-                        # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
-                        # end of billing cycle. This is a no-op, we _should_ get a DID_RENEW
-                        # notification which handles this for us.
-                        pass
 
                     elif decoded_notification.body.subtype == AppleSubtype.UPGRADE:
                         # User is upgrading to a better subscription. Upgrade happens immediately, current plan is ended.
