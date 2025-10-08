@@ -331,7 +331,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
             product_type=product_type,
             refund_type=refund_type,
         )
-        handle_voided_notification(tx, sql_conn, err)
+        handle_voided_notification(tx, err)
 
     elif is_one_time_product_notification:
         err.msg_list.append(f'one time product is not supported!')
@@ -410,4 +410,4 @@ def entry_point():
         future = sub_client.subscribe(subscription=sub_path, callback=callback)
         future.result()
 
-# entry_point()
+#entry_point()
