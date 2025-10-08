@@ -4,7 +4,6 @@ have no dependency on any project files, only, native Python packages. Typically
 functionality from the testing suite and the project but not limited to.
 '''
 import json
-import time
 import traceback
 import sqlite3
 import datetime
@@ -16,7 +15,7 @@ from math import floor
 import env
 import os
 
-class PaymentProvider(enum.Enum):
+class PaymentProvider(enum.IntEnum):
     Nil             = 0
     GooglePlayStore = 1
     iOSAppStore     = 2
@@ -226,9 +225,6 @@ def format_seconds(duration_s: int):
         result += "{}{}m".format(" " if len(result) > 0 else "", minutes)
     result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
     return result
-
-def get_now_ms():
-    return time.time_ns() // 1_000_000
 
 def obfuscate(val: str) -> str:
     """

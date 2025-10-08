@@ -400,7 +400,7 @@ class GetJSONFromFlaskRequest:
     json:    dict[str, base.JSONValue] = dataclasses.field(default_factory=dict)
     err_msg: str                       = ''
 
-class UserProStatus(enum.Enum):
+class UserProStatus(enum.IntEnum):
     NeverBeenPro = 0
     Active       = 1
     Expired      = 2

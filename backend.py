@@ -9,14 +9,13 @@ import datetime
 import enum
 import dataclasses
 import random
-import time
 
 import base
 
 ZERO_BYTES32                 = bytes(32)
 BLAKE2B_DIGEST_SIZE          = 32
 
-class PaymentStatus(enum.Enum):
+class PaymentStatus(enum.IntEnum):
     Nil        = 0
     Unredeemed = 1
     Redeemed   = 2
@@ -907,15 +906,16 @@ def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
 
     if not result:
         payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
-        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
+        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider} {payment_id}')
     return result
 
-def add_unredeemed_payment(sql_conn:              sqlite3.Connection,
-                           payment_tx:            PaymentProviderTransaction,
-                           plan:                  ProPlanType,
-                           expiry_unix_ts_ms:     int,
+def add_unredeemed_payment(sql_conn:            sqlite3.Connection,
+                           payment_tx:          PaymentProviderTransaction,
+                           plan:                ProPlanType,
+                           expiry_unix_ts_ms:   int,
                            unredeemed_unix_ts_ms: int,
-                           err:                   base.ErrorSink):
+                           platform_refund_expiry_ts_ms: int,
+                           err:                 base.ErrorSink):
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
         return
@@ -925,8 +925,6 @@ def add_unredeemed_payment(sql_conn:              sqlite3.Connection,
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
             # payments table
-            platform_refund_expiry_ts_ms = base.get_now_ms() + base.MILLISECONDS_IN_DAY * 2
-
             _ = tx.cursor.execute(f'''
                 SELECT 1
                 FROM payments
@@ -988,7 +986,7 @@ def add_unredeemed_payment(sql_conn:              sqlite3.Connection,
                       payment_tx.apple_web_line_order_tx_id,
                       int(PaymentStatus.Unredeemed.value),
                       expiry_unix_ts_ms,
-                      0, # TODO: platform_refund_expiry_unix_ts_ms
+                      platform_refund_expiry_ts_ms,
                       0, # non-null grace_period_duration_ms
                       unredeemed_unix_ts_ms,
                       1, # auto_renewing is enabled by default until notified otherwise by Apple
@@ -1181,19 +1179,21 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
-        # Randomly apply a grace period
-        apply_grace         = bool(random.getrandbits(1))
         expiry_unix_ts_ms   = redeemed_unix_ts_ms + (60 * 1000)
-        grace_unix_ts_ms    = expiry_unix_ts_ms   + (60 * 1000) if apply_grace else 0
-
         add_unredeemed_payment(sql_conn              = sql_conn,
                                payment_tx            = internal_payment_tx,
                                plan                  = ProPlanType.OneMonth,
                                unredeemed_unix_ts_ms = expiry_unix_ts_ms - 1,
+                               platform_refund_expiry_ts_ms = 0,
                                expiry_unix_ts_ms     = expiry_unix_ts_ms,
                                err                   = err)
-        if apply_grace:
-            _ = update_payment_grace_duration_ms(sql_conn, internal_payment_tx, grace_unix_ts_ms, err)
+
+        # Randomly toggle auto-renewal
+        _ = update_payment_renewal_info(sql_conn=sql_conn,
+                                        payment_tx=internal_payment_tx,
+                                        grace_period_duration_ms=(60 * 1000),
+                                        auto_renewing=bool(random.getrandbits(1)),
+                                        err=err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
@@ -1277,7 +1277,7 @@ def expire_payments_internal(tx: base.SQLTransaction, revocation_or_unix_ts_ms: 
             case base.PaymentProvider.iOSAppStore:
                 tx_field_name = 'apple_tx_id'
 
-        assert len(tx_field_name) == 0
+        assert len(tx_field_name) > 0
         if len(tx_field_name) > 0:
             _ = tx.cursor.execute(f'''
                 UPDATE    payments
