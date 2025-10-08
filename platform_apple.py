@@ -322,9 +322,23 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 # NOTE: Extract components
                 if len(err.msg_list) == 0:
                     if not decoded_notification.body.subtype:
-                        # User is cancelling their upgrade. End the current subscription and revive the old subscription
-                        # TODO: Err, how do I find the 'previous' subscription and re-activate it.
-                        pass
+                        # NOTE: User is cancelling their downgrade, the downgrade was meant to be
+                        # queued for the end of the month. By virtue of requesting a downgrade (and
+                        # it activating at the end of the billing cycle) they are implicitly
+                        # indicating that they are enabling auto-renewing.
+                        #
+                        # The way apple works is that the signed transaction info will be the last
+                        # transaction that the user made. In this case the TX info has the current
+                        # subscription before the downgrade is to take effect, e.g. it has the TX
+                        # info that we need to set auto-renewal back on for
+                        with base.SQLTransaction(sql_conn) as sql_tx:
+                            sql_tx.cancel = True
+                            _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
+                                                                       payment_tx               = payment_tx,
+                                                                       grace_period_duration_ms = None,
+                                                                       auto_renewing            = True,
+                                                                       err                      = err)
+                            sql_tx.cancel = err.has()
 
                     elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
                         # NOTE: User is downgrading to a lesser subscription. Downgrade happens at

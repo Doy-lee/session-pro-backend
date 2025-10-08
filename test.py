@@ -67,19 +67,23 @@ class TestingContext:
     flask_app:    flask.Flask
     flask_client: werkzeug.Client
 
+    db_path:      str  = ''
+    uri:          bool = False
+
     def __init__(self, db_path: str, uri: bool):
+        self.db_path = db_path
+        self.uri     = uri
+
+    def __enter__(self):
         err     = base.ErrorSink()
-        self.db = backend.setup_db(path=db_path, uri=uri, err=err)
+        self.db = backend.setup_db(path=self.db_path, uri=self.uri, err=err)
         assert len(err.msg_list) == 0
 
         self.flask_app   = server.init(testing_mode=True,
-                                       db_path=db_path,
-                                       db_path_is_uri=uri,
+                                       db_path=self.db_path,
+                                       db_path_is_uri=self.uri,
                                        server_x25519_skey=self.db.runtime.backend_key.to_curve25519_private_key())
         self.flask_client = self.flask_app.test_client()
-
-
-    def __enter__(self):
         assert self.db.sql_conn
         self.sql_conn = self.db.sql_conn
         return self
@@ -1502,17 +1506,17 @@ def test_platform_apple():
 
 
     # NOTE: Execute the sequence
-    #  - 0 [SUBSCRIBED,                sub: RESUBSCRIBE]         Subscribe to 1 wk
-    #  - 1 [DID_CHANGE_RENEWAL_PREF,   sub: UPGRADE]             Upgrade to 3 months
+    #  - 0 [SUBSCRIBED,                sub: RESUBSCRIBE]         Subscribe to 3 months
+    #  - 1 [DID_CHANGE_RENEWAL_PREF,   sub: UPGRADE]             "Upgrade" to 1 wk (happens immediately)
     #  - 2 [DID_CHANGE_RENEWAL_STATUS, sub: AUTO_RENEW_DISABLED] Disable auto-renew
-    #  - 3 [DID_CHANGE_RENEWAL_PREF,   sub: DOWNGRADE]           Downgrade to 1 wk
-    #  - 4 [DID_CHANGE_RENEWAL_PREF]                             Revert to 3 months (cancelling the downgrade to 1wk action)
+    #  - 3 [DID_CHANGE_RENEWAL_PREF,   sub: DOWNGRADE]           Queue downgrade to 3 months at end of 1wk billing cycle
+    #  - 4 [DID_CHANGE_RENEWAL_PREF]                             Cancel the downgrade (we are now back at 1wk subscription)
     #  - 5 [DID_CHANGE_RENEWAL_STATUS, sub: AUTO_RENEW_DISABLED] Disable auto-renew
     #  - 6 [EXPIRED,                   sub: VOLUNTARY]           ??
     with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
-            e00_sub_to_1wk: dict[str, base.JSONValue] = json.loads('''
+            e00_sub_to_3_months: dict[str, base.JSONValue] = json.loads('''
             {
             "signedPayload": "eyJhbGciOiJFUzI1NiIsIng1YyI6WyJNSUlFTVRDQ0E3YWdBd0lCQWdJUVI4S0h6ZG41NTRaL1VvcmFkTng5dHpBS0JnZ3Foa2pPUFFRREF6QjFNVVF3UWdZRFZRUURERHRCY0hCc1pTQlhiM0pzWkhkcFpHVWdSR1YyWld4dmNHVnlJRkpsYkdGMGFXOXVjeUJEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURUxNQWtHQTFVRUN3d0NSell4RXpBUkJnTlZCQW9NQ2tGd2NHeGxJRWx1WXk0eEN6QUpCZ05WQkFZVEFsVlRNQjRYRFRJMU1Ea3hPVEU1TkRRMU1Wb1hEVEkzTVRBeE16RTNORGN5TTFvd2daSXhRREErQmdOVkJBTU1OMUJ5YjJRZ1JVTkRJRTFoWXlCQmNIQWdVM1J2Y21VZ1lXNWtJR2xVZFc1bGN5QlRkRzl5WlNCU1pXTmxhWEIwSUZOcFoyNXBibWN4TERBcUJnTlZCQXNNSTBGd2NHeGxJRmR2Y214a2QybGtaU0JFWlhabGJHOXdaWElnVW1Wc1lYUnBiMjV6TVJNd0VRWURWUVFLREFwQmNIQnNaU0JKYm1NdU1Rc3dDUVlEVlFRR0V3SlZVekJaTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEEwSUFCTm5WdmhjdjdpVCs3RXg1dEJNQmdyUXNwSHpJc1hSaTBZeGZlazdsdjh3RW1qL2JIaVd0TndKcWMyQm9IenNRaUVqUDdLRklJS2c0WTh5MC9ueW51QW1qZ2dJSU1JSUNCREFNQmdOVkhSTUJBZjhFQWpBQU1COEdBMVVkSXdRWU1CYUFGRDh2bENOUjAxREptaWc5N2JCODVjK2xrR0taTUhBR0NDc0dBUVVGQndFQkJHUXdZakF0QmdnckJnRUZCUWN3QW9ZaGFIUjBjRG92TDJObGNuUnpMbUZ3Y0d4bExtTnZiUzkzZDJSeVp6WXVaR1Z5TURFR0NDc0dBUVVGQnpBQmhpVm9kSFJ3T2k4dmIyTnpjQzVoY0hCc1pTNWpiMjB2YjJOemNEQXpMWGQzWkhKbk5qQXlNSUlCSGdZRFZSMGdCSUlCRlRDQ0FSRXdnZ0VOQmdvcWhraUc5Mk5rQlFZQk1JSCtNSUhEQmdnckJnRUZCUWNDQWpDQnRneUJzMUpsYkdsaGJtTmxJRzl1SUhSb2FYTWdZMlZ5ZEdsbWFXTmhkR1VnWW5rZ1lXNTVJSEJoY25SNUlHRnpjM1Z0WlhNZ1lXTmpaWEIwWVc1alpTQnZaaUIwYUdVZ2RHaGxiaUJoY0hCc2FXTmhZbXhsSUhOMFlXNWtZWEprSUhSbGNtMXpJR0Z1WkNCamIyNWthWFJwYjI1eklHOW1JSFZ6WlN3Z1kyVnlkR2xtYVdOaGRHVWdjRzlzYVdONUlHRnVaQ0JqWlhKMGFXWnBZMkYwYVc5dUlIQnlZV04wYVdObElITjBZWFJsYldWdWRITXVNRFlHQ0NzR0FRVUZCd0lCRmlwb2RIUndPaTh2ZDNkM0xtRndjR3hsTG1OdmJTOWpaWEowYVdacFkyRjBaV0YxZEdodmNtbDBlUzh3SFFZRFZSME9CQllFRklGaW9HNHdNTVZBMWt1OXpKbUdOUEFWbjNlcU1BNEdBMVVkRHdFQi93UUVBd0lIZ0RBUUJnb3Foa2lHOTJOa0Jnc0JCQUlGQURBS0JnZ3Foa2pPUFFRREF3TnBBREJtQWpFQStxWG5SRUM3aFhJV1ZMc0x4em5qUnBJelBmN1ZIejlWL0NUbTgrTEpsclFlcG5tY1B2R0xOY1g2WFBubGNnTEFBakVBNUlqTlpLZ2c1cFE3OWtuRjRJYlRYZEt2OHZ1dElETVhEbWpQVlQzZEd2RnRzR1J3WE95d1Iya1pDZFNyZmVvdCIsIk1JSURGakNDQXB5Z0F3SUJBZ0lVSXNHaFJ3cDBjMm52VTRZU3ljYWZQVGp6Yk5jd0NnWUlLb1pJemowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN6TVNZd0pBWURWUVFMREIxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVHQTFVRUNnd0tRWEJ3YkdVZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NakV3TXpFM01qQXpOekV3V2hjTk16WXdNekU1TURBd01EQXdXakIxTVVRd1FnWURWUVFERER0QmNIQnNaU0JYYjNKc1pIZHBaR1VnUkdWMlpXeHZjR1Z5SUZKbGJHRjBhVzl1Y3lCRFpYSjBhV1pwWTJGMGFXOXVJRUYxZEdodmNtbDBlVEVMTUFrR0ExVUVDd3dDUnpZeEV6QVJCZ05WQkFvTUNrRndjR3hsSUVsdVl5NHhDekFKQmdOVkJBWVRBbFZUTUhZd0VBWUhLb1pJemowQ0FRWUZLNEVFQUNJRFlnQUVic1FLQzk0UHJsV21aWG5YZ3R4emRWSkw4VDBTR1luZ0RSR3BuZ24zTjZQVDhKTUViN0ZEaTRiQm1QaENuWjMvc3E2UEYvY0djS1hXc0w1dk90ZVJoeUo0NXgzQVNQN2NPQithYW85MGZjcHhTdi9FWkZibmlBYk5nWkdoSWhwSW80SDZNSUgzTUJJR0ExVWRFd0VCL3dRSU1BWUJBZjhDQVFBd0h3WURWUjBqQkJnd0ZvQVV1N0Rlb1ZnemlKcWtpcG5ldnIzcnI5ckxKS3N3UmdZSUt3WUJCUVVIQVFFRU9qQTRNRFlHQ0NzR0FRVUZCekFCaGlwb2RIUndPaTh2YjJOemNDNWhjSEJzWlM1amIyMHZiMk56Y0RBekxXRndjR3hsY205dmRHTmhaek13TndZRFZSMGZCREF3TGpBc29DcWdLSVltYUhSMGNEb3ZMMk55YkM1aGNIQnNaUzVqYjIwdllYQndiR1Z5YjI5MFkyRm5NeTVqY213d0hRWURWUjBPQkJZRUZEOHZsQ05SMDFESm1pZzk3YkI4NWMrbGtHS1pNQTRHQTFVZER3RUIvd1FFQXdJQkJqQVFCZ29xaGtpRzkyTmtCZ0lCQkFJRkFEQUtCZ2dxaGtqT1BRUURBd05vQURCbEFqQkFYaFNxNUl5S29nTUNQdHc0OTBCYUI2NzdDYUVHSlh1ZlFCL0VxWkdkNkNTamlDdE9udU1UYlhWWG14eGN4ZmtDTVFEVFNQeGFyWlh2TnJreFUzVGtVTUkzM3l6dkZWVlJUNHd4V0pDOTk0T3NkY1o0K1JHTnNZRHlSNWdtZHIwbkRHZz0iLCJNSUlDUXpDQ0FjbWdBd0lCQWdJSUxjWDhpTkxGUzVVd0NnWUlLb1pJemowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN6TVNZd0pBWURWUVFMREIxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVHQTFVRUNnd0tRWEJ3YkdVZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NVFF3TkRNd01UZ3hPVEEyV2hjTk16a3dORE13TVRneE9UQTJXakJuTVJzd0dRWURWUVFEREJKQmNIQnNaU0JTYjI5MElFTkJJQzBnUnpNeEpqQWtCZ05WQkFzTUhVRndjR3hsSUVObGNuUnBabWxqWVhScGIyNGdRWFYwYUc5eWFYUjVNUk13RVFZRFZRUUtEQXBCY0hCc1pTQkpibU11TVFzd0NRWURWUVFHRXdKVlV6QjJNQkFHQnlxR1NNNDlBZ0VHQlN1QkJBQWlBMklBQkpqcEx6MUFjcVR0a3lKeWdSTWMzUkNWOGNXalRuSGNGQmJaRHVXbUJTcDNaSHRmVGpqVHV4eEV0WC8xSDdZeVlsM0o2WVJiVHpCUEVWb0EvVmhZREtYMUR5eE5CMGNUZGRxWGw1ZHZNVnp0SzUxN0lEdll1VlRaWHBta09sRUtNYU5DTUVBd0hRWURWUjBPQkJZRUZMdXczcUZZTTRpYXBJcVozcjY5NjYvYXl5U3JNQThHQTFVZEV3RUIvd1FGTUFNQkFmOHdEZ1lEVlIwUEFRSC9CQVFEQWdFR01Bb0dDQ3FHU000OUJBTURBMmdBTUdVQ01RQ0Q2Y0hFRmw0YVhUUVkyZTN2OUd3T0FFWkx1Tit5UmhIRkQvM21lb3locG12T3dnUFVuUFdUeG5TNGF0K3FJeFVDTUcxbWloREsxQTNVVDgyTlF6NjBpbU9sTTI3amJkb1h0MlFmeUZNbStZaGlkRGtMRjF2TFVhZ002QmdENTZLeUtBPT0iXX0.eyJub3RpZmljYXRpb25UeXBlIjoiU1VCU0NSSUJFRCIsInN1YnR5cGUiOiJSRVNVQlNDUklCRSIsIm5vdGlmaWNhdGlvblVVSUQiOiJmZWU2YWRlNi01ODcxLTRlMGYtOWQyZS01ZDYyMjlhMjQwMjciLCJkYXRhIjp7ImFwcEFwcGxlSWQiOjE0NzAxNjg4NjgsImJ1bmRsZUlkIjoiY29tLmxva2ktcHJvamVjdC5sb2tpLW1lc3NlbmdlciIsImJ1bmRsZVZlcnNpb24iOiI2MzciLCJlbnZpcm9ubWVudCI6IlNhbmRib3giLCJzaWduZWRUcmFuc2FjdGlvbkluZm8iOiJleUpoYkdjaU9pSkZVekkxTmlJc0luZzFZeUk2V3lKTlNVbEZUVlJEUTBFM1lXZEJkMGxDUVdkSlVWSTRTMGg2Wkc0MU5UUmFMMVZ2Y21Ga1RuZzVkSHBCUzBKblozRm9hMnBQVUZGUlJFRjZRakZOVlZGM1VXZFpSRlpSVVVSRVJIUkNZMGhDYzFwVFFsaGlNMHB6V2toa2NGcEhWV2RTUjFZeVdsZDRkbU5IVm5sSlJrcHNZa2RHTUdGWE9YVmplVUpFV2xoS01HRlhXbkJaTWtZd1lWYzVkVWxGUmpGa1IyaDJZMjFzTUdWVVJVeE5RV3RIUVRGVlJVTjNkME5TZWxsNFJYcEJVa0puVGxaQ1FXOU5RMnRHZDJOSGVHeEpSV3gxV1hrMGVFTjZRVXBDWjA1V1FrRlpWRUZzVmxSTlFqUllSRlJKTVUxRWEzaFBWRVUxVGtSUk1VMVdiMWhFVkVrelRWUkJlRTE2UlROT1JHTjVUVEZ2ZDJkYVNYaFJSRUVyUW1kT1ZrSkJUVTFPTVVKNVlqSlJaMUpWVGtSSlJURm9XWGxDUW1OSVFXZFZNMUoyWTIxVloxbFhOV3RKUjJ4VlpGYzFiR041UWxSa1J6bDVXbE5DVTFwWFRteGhXRUl3U1VaT2NGb3lOWEJpYldONFRFUkJjVUpuVGxaQ1FYTk5TVEJHZDJOSGVHeEpSbVIyWTIxNGEyUXliR3RhVTBKRldsaGFiR0pIT1hkYVdFbG5WVzFXYzFsWVVuQmlNalY2VFZKTmQwVlJXVVJXVVZGTFJFRndRbU5JUW5OYVUwSktZbTFOZFUxUmMzZERVVmxFVmxGUlIwVjNTbFpWZWtKYVRVSk5SMEo1Y1VkVFRUUTVRV2RGUjBORGNVZFRUVFE1UVhkRlNFRXdTVUZDVG01V2RtaGpkamRwVkNzM1JYZzFkRUpOUW1keVVYTndTSHBKYzFoU2FUQlplR1psYXpkc2RqaDNSVzFxTDJKSWFWZDBUbmRLY1dNeVFtOUllbk5SYVVWcVVEZExSa2xKUzJjMFdUaDVNQzl1ZVc1MVFXMXFaMmRKU1UxSlNVTkNSRUZOUW1kT1ZraFNUVUpCWmpoRlFXcEJRVTFDT0VkQk1WVmtTWGRSV1UxQ1lVRkdSRGgyYkVOT1VqQXhSRXB0YVdjNU4ySkNPRFZqSzJ4clIwdGFUVWhCUjBORGMwZEJVVlZHUW5kRlFrSkhVWGRaYWtGMFFtZG5ja0puUlVaQ1VXTjNRVzlaYUdGSVVqQmpSRzkyVERKT2JHTnVVbnBNYlVaM1kwZDRiRXh0VG5aaVV6a3paREpTZVZwNldYVmFSMVo1VFVSRlIwTkRjMGRCVVZWR1FucEJRbWhwVm05a1NGSjNUMms0ZG1JeVRucGpRelZvWTBoQ2MxcFROV3BpTWpCMllqSk9lbU5FUVhwTVdHUXpXa2hLYms1cVFYbE5TVWxDU0dkWlJGWlNNR2RDU1VsQ1JsUkRRMEZTUlhkblowVk9RbWR2Y1docmFVYzVNazVyUWxGWlFrMUpTQ3ROU1VoRVFtZG5ja0puUlVaQ1VXTkRRV3BEUW5SbmVVSnpNVXBzWWtkc2FHSnRUbXhKUnpsMVNVaFNiMkZZVFdkWk1sWjVaRWRzYldGWFRtaGtSMVZuV1c1cloxbFhOVFZKU0VKb1kyNVNOVWxIUm5wak0xWjBXbGhOWjFsWFRtcGFXRUl3V1ZjMWFscFRRblphYVVJd1lVZFZaMlJIYUd4aWFVSm9ZMGhDYzJGWFRtaFpiWGhzU1VoT01GbFhOV3RaV0VwclNVaFNiR050TVhwSlIwWjFXa05DYW1JeU5XdGhXRkp3WWpJMWVrbEhPVzFKU0ZaNldsTjNaMWt5Vm5sa1IyeHRZVmRPYUdSSFZXZGpSemx6WVZkT05VbEhSblZhUTBKcVdsaEtNR0ZYV25CWk1rWXdZVmM1ZFVsSVFubFpWMDR3WVZkT2JFbElUakJaV0ZKc1lsZFdkV1JJVFhWTlJGbEhRME56UjBGUlZVWkNkMGxDUm1sd2IyUklVbmRQYVRoMlpETmtNMHh0Um5kalIzaHNURzFPZG1KVE9XcGFXRW93WVZkYWNGa3lSakJhVjBZeFpFZG9kbU50YkRCbFV6aDNTRkZaUkZaU01FOUNRbGxGUmtsR2FXOUhOSGROVFZaQk1XdDFPWHBLYlVkT1VFRldiak5sY1UxQk5FZEJNVlZrUkhkRlFpOTNVVVZCZDBsSVowUkJVVUpuYjNGb2EybEhPVEpPYTBKbmMwSkNRVWxHUVVSQlMwSm5aM0ZvYTJwUFVGRlJSRUYzVG5CQlJFSnRRV3BGUVN0eFdHNVNSVU0zYUZoSlYxWk1jMHg0ZW01cVVuQkplbEJtTjFaSWVqbFdMME5VYlRnclRFcHNjbEZsY0c1dFkxQjJSMHhPWTFnMldGQnViR05uVEVGQmFrVkJOVWxxVGxwTFoyYzFjRkUzT1d0dVJqUkpZbFJZWkV0Mk9IWjFkRWxFVFZoRWJXcFFWbFF6WkVkMlJuUnpSMUozV0U5NWQxSXlhMXBEWkZOeVptVnZkQ0lzSWsxSlNVUkdha05EUVhCNVowRjNTVUpCWjBsVlNYTkhhRkozY0RCak1tNTJWVFJaVTNsallXWlFWR3A2WWs1amQwTm5XVWxMYjFwSmVtb3dSVUYzVFhkYWVrVmlUVUpyUjBFeFZVVkJkM2RUVVZoQ2QySkhWV2RWYlRsMlpFTkNSRkZUUVhSSlJXTjZUVk5aZDBwQldVUldVVkZNUkVJeFFtTklRbk5hVTBKRVdsaEtNR0ZYV25CWk1rWXdZVmM1ZFVsRlJqRmtSMmgyWTIxc01HVlVSVlJOUWtWSFFURlZSVU5uZDB0UldFSjNZa2RWWjFOWE5XcE1ha1ZNVFVGclIwRXhWVVZDYUUxRFZsWk5kMGhvWTA1TmFrVjNUWHBGTTAxcVFYcE9la1YzVjJoalRrMTZXWGROZWtVMVRVUkJkMDFFUVhkWGFrSXhUVlZSZDFGbldVUldVVkZFUkVSMFFtTklRbk5hVTBKWVlqTktjMXBJWkhCYVIxVm5Va2RXTWxwWGVIWmpSMVo1U1VaS2JHSkhSakJoVnpsMVkzbENSRnBZU2pCaFYxcHdXVEpHTUdGWE9YVkpSVVl4WkVkb2RtTnRiREJsVkVWTVRVRnJSMEV4VlVWRGQzZERVbnBaZUVWNlFWSkNaMDVXUWtGdlRVTnJSbmRqUjNoc1NVVnNkVmw1TkhoRGVrRktRbWRPVmtKQldWUkJiRlpVVFVoWmQwVkJXVWhMYjFwSmVtb3dRMEZSV1VaTE5FVkZRVU5KUkZsblFVVmljMUZMUXprMFVISnNWMjFhV0c1WVozUjRlbVJXU2t3NFZEQlRSMWx1WjBSU1IzQnVaMjR6VGpaUVZEaEtUVVZpTjBaRWFUUmlRbTFRYUVOdVdqTXZjM0UyVUVZdlkwZGpTMWhYYzB3MWRrOTBaVkpvZVVvME5YZ3pRVk5RTjJOUFFpdGhZVzg1TUdaamNIaFRkaTlGV2taaWJtbEJZazVuV2tkb1NXaHdTVzgwU0RaTlNVZ3pUVUpKUjBFeFZXUkZkMFZDTDNkUlNVMUJXVUpCWmpoRFFWRkJkMGgzV1VSV1VqQnFRa0puZDBadlFWVjFOMFJsYjFabmVtbEtjV3RwY0c1bGRuSXpjbkk1Y2t4S1MzTjNVbWRaU1V0M1dVSkNVVlZJUVZGRlJVOXFRVFJOUkZsSFEwTnpSMEZSVlVaQ2VrRkNhR2x3YjJSSVVuZFBhVGgyWWpKT2VtTkROV2hqU0VKeldsTTFhbUl5TUhaaU1rNTZZMFJCZWt4WFJuZGpSM2hzWTIwNWRtUkhUbWhhZWsxM1RuZFpSRlpTTUdaQ1JFRjNUR3BCYzI5RGNXZExTVmx0WVVoU01HTkViM1pNTWs1NVlrTTFhR05JUW5OYVV6VnFZakl3ZGxsWVFuZGlSMVo1WWpJNU1Ga3lSbTVOZVRWcVkyMTNkMGhSV1VSV1VqQlBRa0paUlVaRU9IWnNRMDVTTURGRVNtMXBaemszWWtJNE5XTXJiR3RIUzFwTlFUUkhRVEZWWkVSM1JVSXZkMUZGUVhkSlFrSnFRVkZDWjI5eGFHdHBSemt5VG10Q1owbENRa0ZKUmtGRVFVdENaMmR4YUd0cVQxQlJVVVJCZDA1dlFVUkNiRUZxUWtGWWFGTnhOVWw1UzI5blRVTlFkSGMwT1RCQ1lVSTJOemREWVVWSFNsaDFabEZDTDBWeFdrZGtOa05UYW1sRGRFOXVkVTFVWWxoV1dHMTRlR040Wm10RFRWRkVWRk5RZUdGeVdsaDJUbkpyZUZVelZHdFZUVWt6TTNsNmRrWldWbEpVTkhkNFYwcERPVGswVDNOa1kxbzBLMUpIVG5OWlJIbFNOV2R0WkhJd2JrUkhaejBpTENKTlNVbERVWHBEUTBGamJXZEJkMGxDUVdkSlNVeGpXRGhwVGt4R1V6VlZkME5uV1VsTGIxcEplbW93UlVGM1RYZGFla1ZpVFVKclIwRXhWVVZCZDNkVFVWaENkMkpIVldkVmJUbDJaRU5DUkZGVFFYUkpSV042VFZOWmQwcEJXVVJXVVZGTVJFSXhRbU5JUW5OYVUwSkVXbGhLTUdGWFduQlpNa1l3WVZjNWRVbEZSakZrUjJoMlkyMXNNR1ZVUlZSTlFrVkhRVEZWUlVObmQwdFJXRUozWWtkVloxTlhOV3BNYWtWTVRVRnJSMEV4VlVWQ2FFMURWbFpOZDBob1kwNU5WRkYzVGtSTmQwMVVaM2hQVkVFeVYyaGpUazE2YTNkT1JFMTNUVlJuZUU5VVFUSlhha0p1VFZKemQwZFJXVVJXVVZGRVJFSktRbU5JUW5OYVUwSlRZakk1TUVsRlRrSkpRekJuVW5wTmVFcHFRV3RDWjA1V1FrRnpUVWhWUm5kalIzaHNTVVZPYkdOdVVuQmFiV3hxV1ZoU2NHSXlOR2RSV0ZZd1lVYzVlV0ZZVWpWTlVrMTNSVkZaUkZaUlVVdEVRWEJDWTBoQ2MxcFRRa3BpYlUxMVRWRnpkME5SV1VSV1VWRkhSWGRLVmxWNlFqSk5Ra0ZIUW5seFIxTk5ORGxCWjBWSFFsTjFRa0pCUVdsQk1rbEJRa3BxY0V4Nk1VRmpjVlIwYTNsS2VXZFNUV016VWtOV09HTlhhbFJ1U0dOR1FtSmFSSFZYYlVKVGNETmFTSFJtVkdwcVZIVjRlRVYwV0M4eFNEZFplVmxzTTBvMldWSmlWSHBDVUVWV2IwRXZWbWhaUkV0WU1VUjVlRTVDTUdOVVpHUnhXR3cxWkhaTlZucDBTelV4TjBsRWRsbDFWbFJhV0hCdGEwOXNSVXROWVU1RFRVVkJkMGhSV1VSV1VqQlBRa0paUlVaTWRYY3pjVVpaVFRScFlYQkpjVm96Y2pZNU5qWXZZWGw1VTNKTlFUaEhRVEZWWkVWM1JVSXZkMUZHVFVGTlFrRm1PSGRFWjFsRVZsSXdVRUZSU0M5Q1FWRkVRV2RGUjAxQmIwZERRM0ZIVTAwME9VSkJUVVJCTW1kQlRVZFZRMDFSUTBRMlkwaEZSbXcwWVZoVVVWa3laVE4yT1VkM1QwRkZXa3gxVGl0NVVtaElSa1F2TTIxbGIzbG9jRzEyVDNkblVGVnVVRmRVZUc1VE5HRjBLM0ZKZUZWRFRVY3hiV2xvUkVzeFFUTlZWRGd5VGxGNk5qQnBiVTlzVFRJM2FtSmtiMWgwTWxGbWVVWk5iU3RaYUdsa1JHdE1SakYyVEZWaFowMDJRbWRFTlRaTGVVdEJQVDBpWFgwLmV5SjBjbUZ1YzJGamRHbHZia2xrSWpvaU1qQXdNREF3TVRBeU56Y3dNVGc1T0NJc0ltOXlhV2RwYm1Gc1ZISmhibk5oWTNScGIyNUpaQ0k2SWpJd01EQXdNREV3TWpRNU9UTXlPVGtpTENKM1pXSlBjbVJsY2t4cGJtVkpkR1Z0U1dRaU9pSXlNREF3TURBd01URXpPRFkwTmpBMUlpd2lZblZ1Wkd4bFNXUWlPaUpqYjIwdWJHOXJhUzF3Y205cVpXTjBMbXh2YTJrdGJXVnpjMlZ1WjJWeUlpd2ljSEp2WkhWamRFbGtJam9pWTI5dExtZGxkSE5sYzNOcGIyNHViM0puTG5CeWIxOXpkV0pmTTE5dGIyNTBhSE1pTENKemRXSnpZM0pwY0hScGIyNUhjbTkxY0Vsa1pXNTBhV1pwWlhJaU9pSXlNVGMxTWpneE5DSXNJbkIxY21Ob1lYTmxSR0YwWlNJNk1UYzFPVGN5TnpjM09EQXdNQ3dpYjNKcFoybHVZV3hRZFhKamFHRnpaVVJoZEdVaU9qRTNOVGt6TURFNE16TXdNREFzSW1WNGNHbHlaWE5FWVhSbElqb3hOelU1TnpJNE16RTRNREF3TENKeGRXRnVkR2wwZVNJNk1Td2lkSGx3WlNJNklrRjFkRzh0VW1WdVpYZGhZbXhsSUZOMVluTmpjbWx3ZEdsdmJpSXNJbWx1UVhCd1QzZHVaWEp6YUdsd1ZIbHdaU0k2SWxCVlVrTklRVk5GUkNJc0luTnBaMjVsWkVSaGRHVWlPakUzTlRrM01qYzNPRFUwTkRVc0ltVnVkbWx5YjI1dFpXNTBJam9pVTJGdVpHSnZlQ0lzSW5SeVlXNXpZV04wYVc5dVVtVmhjMjl1SWpvaVVGVlNRMGhCVTBVaUxDSnpkRzl5WldaeWIyNTBJam9pUVZWVElpd2ljM1J2Y21WbWNtOXVkRWxrSWpvaU1UUXpORFl3SWl3aWNISnBZMlVpT2pVNU9UQXNJbU4xY25KbGJtTjVJam9pUVZWRUlpd2lZWEJ3VkhKaGJuTmhZM1JwYjI1SlpDSTZJamN3TkRnNU56UTJPVGt3TXpNNE16a3hPU0o5LmJNZk8wY1dZQ2FqRlRnNU1tdjJueVVfbEJRZnlQTTlaNXBPd19CNmpPOWp5MXF4YzQ5RGZmVFZmX1pPVTVISC0wNFc3dDNxY3pWaThLa0xlV05iaV9BIiwic2lnbmVkUmVuZXdhbEluZm8iOiJleUpoYkdjaU9pSkZVekkxTmlJc0luZzFZeUk2V3lKTlNVbEZUVlJEUTBFM1lXZEJkMGxDUVdkSlVWSTRTMGg2Wkc0MU5UUmFMMVZ2Y21Ga1RuZzVkSHBCUzBKblozRm9hMnBQVUZGUlJFRjZRakZOVlZGM1VXZFpSRlpSVVVSRVJIUkNZMGhDYzFwVFFsaGlNMHB6V2toa2NGcEhWV2RTUjFZeVdsZDRkbU5IVm5sSlJrcHNZa2RHTUdGWE9YVmplVUpFV2xoS01HRlhXbkJaTWtZd1lWYzVkVWxGUmpGa1IyaDJZMjFzTUdWVVJVeE5RV3RIUVRGVlJVTjNkME5TZWxsNFJYcEJVa0puVGxaQ1FXOU5RMnRHZDJOSGVHeEpSV3gxV1hrMGVFTjZRVXBDWjA1V1FrRlpWRUZzVmxSTlFqUllSRlJKTVUxRWEzaFBWRVUxVGtSUk1VMVdiMWhFVkVrelRWUkJlRTE2UlROT1JHTjVUVEZ2ZDJkYVNYaFJSRUVyUW1kT1ZrSkJUVTFPTVVKNVlqSlJaMUpWVGtSSlJURm9XWGxDUW1OSVFXZFZNMUoyWTIxVloxbFhOV3RKUjJ4VlpGYzFiR041UWxSa1J6bDVXbE5DVTFwWFRteGhXRUl3U1VaT2NGb3lOWEJpYldONFRFUkJjVUpuVGxaQ1FYTk5TVEJHZDJOSGVHeEpSbVIyWTIxNGEyUXliR3RhVTBKRldsaGFiR0pIT1hkYVdFbG5WVzFXYzFsWVVuQmlNalY2VFZKTmQwVlJXVVJXVVZGTFJFRndRbU5JUW5OYVUwSktZbTFOZFUxUmMzZERVVmxFVmxGUlIwVjNTbFpWZWtKYVRVSk5SMEo1Y1VkVFRUUTVRV2RGUjBORGNVZFRUVFE1UVhkRlNFRXdTVUZDVG01V2RtaGpkamRwVkNzM1JYZzFkRUpOUW1keVVYTndTSHBKYzFoU2FUQlplR1psYXpkc2RqaDNSVzFxTDJKSWFWZDBUbmRLY1dNeVFtOUllbk5SYVVWcVVEZExSa2xKUzJjMFdUaDVNQzl1ZVc1MVFXMXFaMmRKU1UxSlNVTkNSRUZOUW1kT1ZraFNUVUpCWmpoRlFXcEJRVTFDT0VkQk1WVmtTWGRSV1UxQ1lVRkdSRGgyYkVOT1VqQXhSRXB0YVdjNU4ySkNPRFZqSzJ4clIwdGFUVWhCUjBORGMwZEJVVlZHUW5kRlFrSkhVWGRaYWtGMFFtZG5ja0puUlVaQ1VXTjNRVzlaYUdGSVVqQmpSRzkyVERKT2JHTnVVbnBNYlVaM1kwZDRiRXh0VG5aaVV6a3paREpTZVZwNldYVmFSMVo1VFVSRlIwTkRjMGRCVVZWR1FucEJRbWhwVm05a1NGSjNUMms0ZG1JeVRucGpRelZvWTBoQ2MxcFROV3BpTWpCMllqSk9lbU5FUVhwTVdHUXpXa2hLYms1cVFYbE5TVWxDU0dkWlJGWlNNR2RDU1VsQ1JsUkRRMEZTUlhkblowVk9RbWR2Y1docmFVYzVNazVyUWxGWlFrMUpTQ3ROU1VoRVFtZG5ja0puUlVaQ1VXTkRRV3BEUW5SbmVVSnpNVXBzWWtkc2FHSnRUbXhKUnpsMVNVaFNiMkZZVFdkWk1sWjVaRWRzYldGWFRtaGtSMVZuV1c1cloxbFhOVFZKU0VKb1kyNVNOVWxIUm5wak0xWjBXbGhOWjFsWFRtcGFXRUl3V1ZjMWFscFRRblphYVVJd1lVZFZaMlJIYUd4aWFVSm9ZMGhDYzJGWFRtaFpiWGhzU1VoT01GbFhOV3RaV0VwclNVaFNiR050TVhwSlIwWjFXa05DYW1JeU5XdGhXRkp3WWpJMWVrbEhPVzFKU0ZaNldsTjNaMWt5Vm5sa1IyeHRZVmRPYUdSSFZXZGpSemx6WVZkT05VbEhSblZhUTBKcVdsaEtNR0ZYV25CWk1rWXdZVmM1ZFVsSVFubFpWMDR3WVZkT2JFbElUakJaV0ZKc1lsZFdkV1JJVFhWTlJGbEhRME56UjBGUlZVWkNkMGxDUm1sd2IyUklVbmRQYVRoMlpETmtNMHh0Um5kalIzaHNURzFPZG1KVE9XcGFXRW93WVZkYWNGa3lSakJhVjBZeFpFZG9kbU50YkRCbFV6aDNTRkZaUkZaU01FOUNRbGxGUmtsR2FXOUhOSGROVFZaQk1XdDFPWHBLYlVkT1VFRldiak5sY1UxQk5FZEJNVlZrUkhkRlFpOTNVVVZCZDBsSVowUkJVVUpuYjNGb2EybEhPVEpPYTBKbmMwSkNRVWxHUVVSQlMwSm5aM0ZvYTJwUFVGRlJSRUYzVG5CQlJFSnRRV3BGUVN0eFdHNVNSVU0zYUZoSlYxWk1jMHg0ZW01cVVuQkplbEJtTjFaSWVqbFdMME5VYlRnclRFcHNjbEZsY0c1dFkxQjJSMHhPWTFnMldGQnViR05uVEVGQmFrVkJOVWxxVGxwTFoyYzFjRkUzT1d0dVJqUkpZbFJZWkV0Mk9IWjFkRWxFVFZoRWJXcFFWbFF6WkVkMlJuUnpSMUozV0U5NWQxSXlhMXBEWkZOeVptVnZkQ0lzSWsxSlNVUkdha05EUVhCNVowRjNTVUpCWjBsVlNYTkhhRkozY0RCak1tNTJWVFJaVTNsallXWlFWR3A2WWs1amQwTm5XVWxMYjFwSmVtb3dSVUYzVFhkYWVrVmlUVUpyUjBFeFZVVkJkM2RUVVZoQ2QySkhWV2RWYlRsMlpFTkNSRkZUUVhSSlJXTjZUVk5aZDBwQldVUldVVkZNUkVJeFFtTklRbk5hVTBKRVdsaEtNR0ZYV25CWk1rWXdZVmM1ZFVsRlJqRmtSMmgyWTIxc01HVlVSVlJOUWtWSFFURlZSVU5uZDB0UldFSjNZa2RWWjFOWE5XcE1ha1ZNVFVGclIwRXhWVVZDYUUxRFZsWk5kMGhvWTA1TmFrVjNUWHBGTTAxcVFYcE9la1YzVjJoalRrMTZXWGROZWtVMVRVUkJkMDFFUVhkWGFrSXhUVlZSZDFGbldVUldVVkZFUkVSMFFtTklRbk5hVTBKWVlqTktjMXBJWkhCYVIxVm5Va2RXTWxwWGVIWmpSMVo1U1VaS2JHSkhSakJoVnpsMVkzbENSRnBZU2pCaFYxcHdXVEpHTUdGWE9YVkpSVVl4WkVkb2RtTnRiREJsVkVWTVRVRnJSMEV4VlVWRGQzZERVbnBaZUVWNlFWSkNaMDVXUWtGdlRVTnJSbmRqUjNoc1NVVnNkVmw1TkhoRGVrRktRbWRPVmtKQldWUkJiRlpVVFVoWmQwVkJXVWhMYjFwSmVtb3dRMEZSV1VaTE5FVkZRVU5KUkZsblFVVmljMUZMUXprMFVISnNWMjFhV0c1WVozUjRlbVJXU2t3NFZEQlRSMWx1WjBSU1IzQnVaMjR6VGpaUVZEaEtUVVZpTjBaRWFUUmlRbTFRYUVOdVdqTXZjM0UyVUVZdlkwZGpTMWhYYzB3MWRrOTBaVkpvZVVvME5YZ3pRVk5RTjJOUFFpdGhZVzg1TUdaamNIaFRkaTlGV2taaWJtbEJZazVuV2tkb1NXaHdTVzgwU0RaTlNVZ3pUVUpKUjBFeFZXUkZkMFZDTDNkUlNVMUJXVUpCWmpoRFFWRkJkMGgzV1VSV1VqQnFRa0puZDBadlFWVjFOMFJsYjFabmVtbEtjV3RwY0c1bGRuSXpjbkk1Y2t4S1MzTjNVbWRaU1V0M1dVSkNVVlZJUVZGRlJVOXFRVFJOUkZsSFEwTnpSMEZSVlVaQ2VrRkNhR2x3YjJSSVVuZFBhVGgyWWpKT2VtTkROV2hqU0VKeldsTTFhbUl5TUhaaU1rNTZZMFJCZWt4WFJuZGpSM2hzWTIwNWRtUkhUbWhhZWsxM1RuZFpSRlpTTUdaQ1JFRjNUR3BCYzI5RGNXZExTVmx0WVVoU01HTkViM1pNTWs1NVlrTTFhR05JUW5OYVV6VnFZakl3ZGxsWVFuZGlSMVo1WWpJNU1Ga3lSbTVOZVRWcVkyMTNkMGhSV1VSV1VqQlBRa0paUlVaRU9IWnNRMDVTTURGRVNtMXBaemszWWtJNE5XTXJiR3RIUzFwTlFUUkhRVEZWWkVSM1JVSXZkMUZGUVhkSlFrSnFRVkZDWjI5eGFHdHBSemt5VG10Q1owbENRa0ZKUmtGRVFVdENaMmR4YUd0cVQxQlJVVVJCZDA1dlFVUkNiRUZxUWtGWWFGTnhOVWw1UzI5blRVTlFkSGMwT1RCQ1lVSTJOemREWVVWSFNsaDFabEZDTDBWeFdrZGtOa05UYW1sRGRFOXVkVTFVWWxoV1dHMTRlR040Wm10RFRWRkVWRk5RZUdGeVdsaDJUbkpyZUZVelZHdFZUVWt6TTNsNmRrWldWbEpVTkhkNFYwcERPVGswVDNOa1kxbzBLMUpIVG5OWlJIbFNOV2R0WkhJd2JrUkhaejBpTENKTlNVbERVWHBEUTBGamJXZEJkMGxDUVdkSlNVeGpXRGhwVGt4R1V6VlZkME5uV1VsTGIxcEplbW93UlVGM1RYZGFla1ZpVFVKclIwRXhWVVZCZDNkVFVWaENkMkpIVldkVmJUbDJaRU5DUkZGVFFYUkpSV042VFZOWmQwcEJXVVJXVVZGTVJFSXhRbU5JUW5OYVUwSkVXbGhLTUdGWFduQlpNa1l3WVZjNWRVbEZSakZrUjJoMlkyMXNNR1ZVUlZSTlFrVkhRVEZWUlVObmQwdFJXRUozWWtkVloxTlhOV3BNYWtWTVRVRnJSMEV4VlVWQ2FFMURWbFpOZDBob1kwNU5WRkYzVGtSTmQwMVVaM2hQVkVFeVYyaGpUazE2YTNkT1JFMTNUVlJuZUU5VVFUSlhha0p1VFZKemQwZFJXVVJXVVZGRVJFSktRbU5JUW5OYVUwSlRZakk1TUVsRlRrSkpRekJuVW5wTmVFcHFRV3RDWjA1V1FrRnpUVWhWUm5kalIzaHNTVVZPYkdOdVVuQmFiV3hxV1ZoU2NHSXlOR2RSV0ZZd1lVYzVlV0ZZVWpWTlVrMTNSVkZaUkZaUlVVdEVRWEJDWTBoQ2MxcFRRa3BpYlUxMVRWRnpkME5SV1VSV1VWRkhSWGRLVmxWNlFqSk5Ra0ZIUW5seFIxTk5ORGxCWjBWSFFsTjFRa0pCUVdsQk1rbEJRa3BxY0V4Nk1VRmpjVlIwYTNsS2VXZFNUV016VWtOV09HTlhhbFJ1U0dOR1FtSmFSSFZYYlVKVGNETmFTSFJtVkdwcVZIVjRlRVYwV0M4eFNEZFplVmxzTTBvMldWSmlWSHBDVUVWV2IwRXZWbWhaUkV0WU1VUjVlRTVDTUdOVVpHUnhXR3cxWkhaTlZucDBTelV4TjBsRWRsbDFWbFJhV0hCdGEwOXNSVXROWVU1RFRVVkJkMGhSV1VSV1VqQlBRa0paUlVaTWRYY3pjVVpaVFRScFlYQkpjVm96Y2pZNU5qWXZZWGw1VTNKTlFUaEhRVEZWWkVWM1JVSXZkMUZHVFVGTlFrRm1PSGRFWjFsRVZsSXdVRUZSU0M5Q1FWRkVRV2RGUjAxQmIwZERRM0ZIVTAwME9VSkJUVVJCTW1kQlRVZFZRMDFSUTBRMlkwaEZSbXcwWVZoVVVWa3laVE4yT1VkM1QwRkZXa3gxVGl0NVVtaElSa1F2TTIxbGIzbG9jRzEyVDNkblVGVnVVRmRVZUc1VE5HRjBLM0ZKZUZWRFRVY3hiV2xvUkVzeFFUTlZWRGd5VGxGNk5qQnBiVTlzVFRJM2FtSmtiMWgwTWxGbWVVWk5iU3RaYUdsa1JHdE1SakYyVEZWaFowMDJRbWRFTlRaTGVVdEJQVDBpWFgwLmV5SnZjbWxuYVc1aGJGUnlZVzV6WVdOMGFXOXVTV1FpT2lJeU1EQXdNREF4TURJME9Ua3pNams1SWl3aVlYVjBiMUpsYm1WM1VISnZaSFZqZEVsa0lqb2lZMjl0TG1kbGRITmxjM05wYjI0dWIzSm5MbkJ5YjE5emRXSmZNMTl0YjI1MGFITWlMQ0p3Y205a2RXTjBTV1FpT2lKamIyMHVaMlYwYzJWemMybHZiaTV2Y21jdWNISnZYM04xWWw4elgyMXZiblJvY3lJc0ltRjFkRzlTWlc1bGQxTjBZWFIxY3lJNk1Td2ljbVZ1WlhkaGJGQnlhV05sSWpvMU9Ua3dMQ0pqZFhKeVpXNWplU0k2SWtGVlJDSXNJbk5wWjI1bFpFUmhkR1VpT2pFM05UazNNamMzT0RVME5EVXNJbVZ1ZG1seWIyNXRaVzUwSWpvaVUyRnVaR0p2ZUNJc0luSmxZMlZ1ZEZOMVluTmpjbWx3ZEdsdmJsTjBZWEowUkdGMFpTSTZNVGMxT1RjeU56YzNPREF3TUN3aWNtVnVaWGRoYkVSaGRHVWlPakUzTlRrM01qZ3pNVGd3TURBc0ltRndjRlJ5WVc1ellXTjBhVzl1U1dRaU9pSTNNRFE0T1RjME5qazVNRE16T0RNNU1Ua2lmUS5zM3l2V2V5S0RWYlpTY2lxUlZScE1CR2twTm5RMTBsRW4tNmpYTDl5UEstWWktbkVrWE9MSXpsNEppNVZ1dEktMmtZMnZabHhqN21WWHUtMnYzTWkwUSIsInN0YXR1cyI6MX0sInZlcnNpb24iOiIyLjAiLCJzaWduZWREYXRlIjoxNzU5NzI3Nzg1NDQ1fQ.AmOrYsJMMAWUwfm43Lc6v--e7TBxPDyXNizWtw-JaxAZT2aWV8aJC90F1c8XiuKCs2F8ZAu5DHK1iLSQ7V5bKQ"
             }
@@ -1554,7 +1558,7 @@ def test_platform_apple():
             }
             ''')
 
-            e00_sub_to_3_months_signed_payload:              str = typing.cast(str, e00_sub_to_1wk['signedPayload'])
+            e00_sub_to_3_months_signed_payload:              str = typing.cast(str, e00_sub_to_3_months['signedPayload'])
             e01_upgrade_to_1wk_signed_payload:               str = typing.cast(str, e01_upgrade_to_1wk['signedPayload'])
             e02_disable_auto_renew_signed_payload:           str = typing.cast(str, e02_disable_auto_renew['signedPayload'])
             e03_queue_downgrade_to_3_months_signed_payload:  str = typing.cast(str, e03_queue_downgrade_to_3_months['signedPayload'])
@@ -2254,7 +2258,6 @@ def test_platform_apple():
 
         # NOTE: Execute and test notifications
         err = base.ErrorSink()
-
         # NOTE: Witness 3 month subscription
         if 1:
             platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
@@ -2325,11 +2328,125 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
 
-        platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           sql_conn=test.sql_conn, err=err)
-        platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.sql_conn, err=err)
-        platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
-        platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification,           sql_conn=test.sql_conn, err=err)
-        platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,             sql_conn=test.sql_conn, err=err)
+            # NOTE: Check that the latest payment is the unredeemed payment
+            assert payment_list[len(payment_list) - 1] == unredeemed_payment_list[0]
+
+        if 1:
+            platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           sql_conn=test.sql_conn, err=err)
+
+            # NOTE: Check the payment was marked not auto-renewing
+            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(test.sql_conn)
+            assert len(unredeemed_payment_list)               == 1
+            assert unredeemed_payment_list[0].auto_renewing   == False
+
+        # NOTE: A downgrade should be a no-op as it's queued to execute at the end of the billing
+        # cycle
+        if 1:
+            platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.sql_conn, err=err)
+
+            # NOTE: Check the new payment has remain unchanged
+            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
+            assert len(unredeemed_payment_list)                                 == 1
+            assert unredeemed_payment_list[0].master_pkey                       == None
+            assert unredeemed_payment_list[0].status                            == backend.PaymentStatus.Unredeemed
+            assert unredeemed_payment_list[0].plan                              == backend.ProPlanType.OneMonth
+            assert unredeemed_payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+            assert unredeemed_payment_list[0].auto_renewing                     == False
+            assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
+            assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
+            assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
+            assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
+
+        # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
+        # remain on the 1wk plan
+        if 1:
+            platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
+
+            # NOTE: Check that the initial 3 month subscription remains refunded (e.g. unchanged)
+            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
+            assert len(payment_list) == 2
+            assert payment_list[0].master_pkey                       == None
+            assert payment_list[0].status                            == backend.PaymentStatus.Refunded
+            assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
+            assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+            assert payment_list[0].auto_renewing                     == True
+            assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
+            assert payment_list[0].redeemed_unix_ts_ms               == None
+            assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
+            assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].refunded_unix_ts_ms               == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
+            assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
+            assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
+            assert payment_list[0].refunded_unix_ts_ms == e01_upgrade_to_1wk_tx_info.purchaseDate
+
+            # NOTE: Check that the 1 week plan remains unchanged
+            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
+            assert len(unredeemed_payment_list)                                 == 1
+            assert unredeemed_payment_list[0].master_pkey                       == None
+            assert unredeemed_payment_list[0].status                            == backend.PaymentStatus.Unredeemed
+            assert unredeemed_payment_list[0].plan                              == backend.ProPlanType.OneMonth
+            assert unredeemed_payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+
+            # NOTE: In this sequence, apparently, auto-renewing should be turned back on. The reason
+            # for this is that since the user downgraded to 1wk plan which takes effect at the end
+            # of the month, they are resuming their subscription with _another week_ after their
+            # current billing cycle ends.
+            #
+            # Since they are continuing, the auto-renewing property is sticky. The user intends to
+            # continue so once they cancel the downgrade, the auto-renewing property stays, so this
+            # flag should be true!
+            assert unredeemed_payment_list[0].auto_renewing                     == True
+
+            assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
+            assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
+            assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
+            assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
+
+        # NOTE: Disable auto renew, flag should be turned false for the 1 week plan payment
+        if 1:
+            platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, sql_conn=test.sql_conn, err=err)
+
+            # NOTE: Check the payment was marked not auto-renewing
+            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(test.sql_conn)
+            assert len(unredeemed_payment_list)               == 1
+            assert unredeemed_payment_list[0].auto_renewing   == False
+
+        # NOTE: Expire the subscription
+        if 1:
+            platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   sql_conn=test.sql_conn, err=err)
+
+            # NOTE: This is a no-op, but in this test we haven't advanced time past the expiry yet
+            # so actually the subscription should still be marked unredeemed in the database hence
+            # check that the 1 week plan remains unchanged
+            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
+            assert len(unredeemed_payment_list)                                 == 1
+            assert unredeemed_payment_list[0].master_pkey                       == None
+            assert unredeemed_payment_list[0].status                            == backend.PaymentStatus.Unredeemed
+            assert unredeemed_payment_list[0].plan                              == backend.ProPlanType.OneMonth
+            assert unredeemed_payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+            assert unredeemed_payment_list[0].auto_renewing                     == False
+            assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
+            assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
+            assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
+            assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
+
         assert not err.has(), err.msg_list
 
 def test_google_platform_handle_notification(monkeypatch):
