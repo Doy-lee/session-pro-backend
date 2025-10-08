@@ -2216,11 +2216,8 @@ def test_platform_apple():
 def test_google_platform_handle_notification(monkeypatch):
     # Setup DB
     err                       = base.ErrorSink()
-    path ="file:test_server_db_google_test?mode=memory&cache=shared" 
+    db: backend.SetupDBResult = backend.setup_db(path="file:test_server_db_google_test?mode=memory&cache=shared", uri=True, err=err)
     
-    db: backend.SetupDBResult = backend.setup_db(path=path, uri=True, err=err)
-    
-    env.SESH_PRO_BACKEND_DB_PATH = path
     env.GOOGLE_APPLICATION_CREDENTIALS = ""
     
     assert len(err.msg_list) == 0, f'{err.msg_list}'
@@ -2302,7 +2299,7 @@ def test_google_platform_handle_notification(monkeypatch):
 
         assert isinstance(purchase_token, str)
 
-        handle_notification(notification, now_ms, err_tx, err)
+        handle_notification(notification, err_tx, db.sql_conn, err)
         assert not err.has()
         return current_state, purchase_token, event_ms
 
@@ -2372,7 +2369,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert payment.status == backend.PaymentStatus.Redeemed
     assert payment.plan == backend.ProPlanType.OneMonth
     assert payment.payment_provider == base.PaymentProvider.GooglePlayStore
-    assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms > event_ms and payment.redeemed_unix_ts_ms == base.round_unix_ts_ms_to_next_day(event_ms)
+    assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms == base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
     assert payment.expiry_unix_ts_ms == unredeemed_payment.expiry_unix_ts_ms
     assert payment.grace_period_duration_ms == 0
     assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ms
@@ -2382,9 +2379,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert payment.google_order_id == order_id
 
     users = backend.get_users_list(sql_conn=db.sql_conn)
-    
     assert len(users) == 1
-
     user = users[0]
     assert isinstance(user, backend.UserRow)
     assert user.master_pkey == bytes(master_key.verify_key)
@@ -2395,10 +2390,11 @@ def test_google_platform_handle_notification(monkeypatch):
     assert status is not None
     result = base.json_dict_require_obj(status, "result", err)
     res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
-    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "expiry_unix_ts_ms", err)
     res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
     res_items = base.json_dict_require_array(result, "items", err)
-    assert res_auto_renewing == False
+    assert not err.has()
+    assert res_auto_renewing == True
     assert res_latest_expiry_unix_ts == expiry_time_unix_ms
     assert res_pro_status == server.UserProStatus.Active
     assert len(res_items) == 1
@@ -2407,13 +2403,13 @@ def test_google_platform_handle_notification(monkeypatch):
     item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
     item_order_id = base.json_dict_require_str(item, "google_order_id", err)
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
-    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
-
+    assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
     assert item_order_id == order_id
     assert item_payment_token == purchase_token
@@ -2431,9 +2427,10 @@ def test_google_platform_handle_notification(monkeypatch):
     assert status is not None
     result = base.json_dict_require_obj(status, "result", err)
     res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
-    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "expiry_unix_ts_ms", err)
     res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
     res_items = base.json_dict_require_array(result, "items", err)
+    assert not err.has()
     assert res_auto_renewing == False
     assert res_latest_expiry_unix_ts == expiry_time_unix_ms
     assert res_pro_status == server.UserProStatus.Active
@@ -2443,13 +2440,13 @@ def test_google_platform_handle_notification(monkeypatch):
     item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
     item_order_id = base.json_dict_require_str(item, "google_order_id", err)
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
-    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
-
+    assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
     assert item_order_id == order_id
     assert item_payment_token == purchase_token
@@ -2469,9 +2466,10 @@ def test_google_platform_handle_notification(monkeypatch):
     assert status is not None
     result = base.json_dict_require_obj(status, "result", err)
     res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
-    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "latest_expiry_unix_ts_ms", err)
+    res_latest_expiry_unix_ts = base.json_dict_require_int(result, "expiry_unix_ts_ms", err)
     res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
     res_items = base.json_dict_require_array(result, "items", err)
+    assert not err.has()
     assert res_auto_renewing == True
     assert res_latest_expiry_unix_ts == expiry_time_unix_ms
     assert res_pro_status == server.UserProStatus.Active
@@ -2481,13 +2479,13 @@ def test_google_platform_handle_notification(monkeypatch):
     item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
     item_order_id = base.json_dict_require_str(item, "google_order_id", err)
     item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
-    item_grace_duration_ms = base.json_dict_require_int(item, "grace_duration_ms", err)
+    item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
     item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
-
+    assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
     assert item_order_id == order_id
     assert item_payment_token == purchase_token

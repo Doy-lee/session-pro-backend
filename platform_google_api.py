@@ -411,14 +411,32 @@ class SubscriptionPlanTxFields:
     expiry_time: GoogleTimestamp
     # Timestamp in ms when the event occured
     event_ts_ms: int
+    purchase_token:str
+    linked_purchase_token: str | None
+    notification: SubscriptionNotificationType
+    subscription_state: SubscriptionsV2SubscriptionStateType
 
-def get_subscription_plan_tx_fields(details: SubscriptionV2Data, event_ts_ms: int, err: base.ErrorSink) -> SubscriptionPlanTxFields:
+def get_subscription_plan_tx_fields(purchase_token: str, details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType, err: base.ErrorSink) -> SubscriptionPlanTxFields:
     line_item = get_line_item(details)
     order_id = get_valid_order_id(details, err)
     return SubscriptionPlanTxFields(
+        purchase_token=purchase_token,
         base_plan_id=line_item.offer_details.base_plan_id,
         order_id=order_id,
         expiry_time=line_item.expiry_time,
         event_ts_ms=event_ts_ms,
+        notification=notification,
+        subscription_state=details.subscription_state,
+        linked_purchase_token=details.linked_purchase_token,
     )
+
+@dataclasses.dataclass
+class VoidedPurchaseTxFields:
+    purchase_token:str
+    # Unique ID of the successful order
+    order_id: str
+    product_type: ProductType
+    refund_type: RefundType
+    # Timestamp in ms when the event occured
+    event_ts_ms: int
 
