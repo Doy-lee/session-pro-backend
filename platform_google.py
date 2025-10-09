@@ -139,22 +139,15 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 """
                 The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
                 for the vast majority of users this function wont make any changes to user entitlement. An example of when a proof will
-                actually be revoked is:
-                1. User subscribes for a 1-month plan, this gives them a proof that expires in 1 month.
-                2. 1 day later the user upgrades to a 3-month plan, this gives them a proof that expires in 4 months (minus 1 day).
-                3. 29 days later (at the end of the 1-month plan), the user's payment method fails trying to pay for the 3-month plan,
-                entering them into a grace period.
-                4. At the end of the grace period, if the user's payment method is still failing, they go into account hold (ON_HOLD).
-
-                Now that the subscription is on hold, the user is no longer entitled to their subscription benefits, but their pro
-                proof is still valid for another approximately 3 months. In this case the proof will be revoked by the backend.
+                actually be revoked if the user enters account hold and for some reason their pro proof expires some time in the future
+                (later than the end of the UTC day). A user enters account hold if their billing method is still failing after their
+                grace period ends.
                 """
                 add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
                 plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
-            
                 if not err.has():
                     assert plan_details is not None
                     set_purchase_grace_period_duration(tx_payment=tx_payment,
@@ -183,12 +176,11 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
                 add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
-                toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
             """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
             for the vast majority of users this function wont make any changes to user entitlement."""
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ON_HOLD:
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
                 add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
