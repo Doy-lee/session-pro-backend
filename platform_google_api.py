@@ -1,7 +1,8 @@
 import dataclasses
 import typing
+from backend import PaymentProviderTransaction
 import base
-from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
+from base import JSONObject, PaymentProvider, handle_not_implemented, json_dict_require_str, json_dict_require_int, json_dict_require_str_coerce_to_int, \
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
     json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, \
@@ -35,7 +36,7 @@ def create_service():
     service = build('androidpublisher', 'v3', credentials=credentials)
     return service
 
-def parse_google_api_fetch_subscription_v2_response(response: typing.Any, err: base.ErrorSink) -> SubscriptionV2Data | None:
+def parse_get_subscription_v2_response(response: typing.Any, err: base.ErrorSink) -> SubscriptionV2Data | None:
     result = None
     if isinstance(response, dict):
         # Delete known PII just in case something logs somewhere
@@ -257,9 +258,8 @@ def parse_google_api_fetch_subscription_v2_response(response: typing.Any, err: b
             is_replacement_cancellation = json_dict_optional_google_empty_object_bool(response, "replacementCancellation", err)
 
             existing_keys = is_user_initiated_cancellation + is_system_initiated_cancellation + is_developer_initiated_cancellation + is_replacement_cancellation
-            if existing_keys == 0:
-                err.msg_list.append(f'No cancellation state for plan')
-            elif existing_keys > 1:
+            # NOTE: can have 0 context, this happens when a subscription is upgraded, downgraded, or crossgraded
+            if existing_keys > 1:
                 err.msg_list.append(f'Multiple cancellation state for plan. This is not possible!')
 
             if not err.has():
@@ -295,7 +295,7 @@ def parse_google_api_fetch_subscription_v2_response(response: typing.Any, err: b
     return result
 
 
-def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
+def fetch_subscription_v2_details(package_name: str, purchase_token: str, err: base.ErrorSink) -> SubscriptionV2Data | None:
     """
     Call the purchases.subscriptionsv2.get endpoint. https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get
     """
@@ -304,13 +304,25 @@ def google_api_fetch_subscription_v2(package_name: str, purchase_token: str, err
         packageName=package_name,
         token=purchase_token
     ).execute()
-    print(response)
-    print(",")
 
-    return parse_google_api_fetch_subscription_v2_response(response, err)
+    return parse_get_subscription_v2_response(response, err)
 
 
-def google_api_fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: base.ErrorSink) -> Monetizationv3SubscriptionData | None:
+def subscription_v1_acknowledge(purchase_token: str, err: base.ErrorSink):
+    """
+    Call the purchases.subscriptionsv1.acknowledge endpoint. https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptions/acknowledge
+    """
+    service = create_service()
+    response = service.purchases().subscriptions().acknowledge(
+        packageName=platform_config.google_package_name,
+        subscriptionId="",
+        token=purchase_token,
+    ).execute()
+    # Google returns an empty string response for a success
+    if response != "":
+        err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {obfuscate(purchase_token)}')
+
+def fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: base.ErrorSink) -> Monetizationv3SubscriptionData | None:
     """
     Call the Google monetizationv3.subscriptions.get endpoint: https://developers.google.com/android-publisher/api-ref/rest/v3/monetization.subscriptions/get 
     """
@@ -336,13 +348,13 @@ def google_api_fetch_monetizationv3_subscriptions_for_product_id(package_name: s
     return result
 
 
-def google_api_fetch_subscription_details_for_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> SubscriptionProductDetails | None:
+def fetch_subscription_details_for_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> SubscriptionProductDetails | None:
     """
     Internally calls the Google monetization v3 api
     """
     result = None
 
-    subscriptions = google_api_fetch_monetizationv3_subscriptions_for_product_id(
+    subscriptions = fetch_monetizationv3_subscriptions_for_product_id(
         package_name=platform_config.google_package_name,
         product_id=platform_config.google_subscription_product_id,
         err=err)
@@ -385,15 +397,15 @@ def google_api_fetch_subscription_details_for_base_plan_id(base_plan_id: str, er
     assert result is None if err.has() else isinstance(result, SubscriptionProductDetails)
 
     return result
- 
-def get_line_item(details: SubscriptionV2Data) -> SubscriptionV2DataLineItem:
+
+def parse_line_item(details: SubscriptionV2Data) -> SubscriptionV2DataLineItem:
     assert len(details.line_items) > 0
     return details.line_items[0]
 
 
-def get_valid_order_id(details: SubscriptionV2Data, err: base.ErrorSink) -> str:
+def parse_valid_order_id(details: SubscriptionV2Data, err: base.ErrorSink) -> str:
     result = ""
-    line_item = get_line_item(details)
+    line_item = parse_line_item(details)
     if line_item.latest_successful_order_id is None:
         err.msg_list.append(f"Order id is None is subscription but was required!")
     else:
@@ -402,32 +414,36 @@ def get_valid_order_id(details: SubscriptionV2Data, err: base.ErrorSink) -> str:
     return result
 
 @dataclasses.dataclass
-class SubscriptionPlanTxFields:
+class SubscriptionPlanEventTransaction:
     # ID of the Google subscription's base plan. Not the product_id.
     base_plan_id: str
-    # Unique ID of the successful order
-    order_id: str
     # Time at which the subscription expires
     expiry_time: GoogleTimestamp
     # Timestamp in ms when the event occured
     event_ts_ms: int
-    purchase_token:str
     linked_purchase_token: str | None
     notification: SubscriptionNotificationType
     subscription_state: SubscriptionsV2SubscriptionStateType
+    purchase_acknowledged: SubscriptionsV2SubscriptionAcknowledgementStateType
 
-def get_subscription_plan_tx_fields(purchase_token: str, details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType, err: base.ErrorSink) -> SubscriptionPlanTxFields:
-    line_item = get_line_item(details)
-    order_id = get_valid_order_id(details, err)
-    return SubscriptionPlanTxFields(
-        purchase_token=purchase_token,
+def parse_subscription_purchase_tx(purchase_token: str, details: SubscriptionV2Data, err: base.ErrorSink):
+    order_id = parse_valid_order_id(details, err)
+    return PaymentProviderTransaction(
+        provider=PaymentProvider.GooglePlayStore,
+        google_payment_token=purchase_token,
+        google_order_id=order_id
+    )
+
+def parse_subscription_plan_event_tx(details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType, err: base.ErrorSink) -> SubscriptionPlanEventTransaction:
+    line_item = parse_line_item(details)
+    return SubscriptionPlanEventTransaction(
         base_plan_id=line_item.offer_details.base_plan_id,
-        order_id=order_id,
         expiry_time=line_item.expiry_time,
         event_ts_ms=event_ts_ms,
         notification=notification,
         subscription_state=details.subscription_state,
         linked_purchase_token=details.linked_purchase_token,
+        purchase_acknowledged=details.acknowledgement_state,
     )
 
 @dataclasses.dataclass

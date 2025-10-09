@@ -2248,7 +2248,6 @@ def test_google_platform_handle_notification(monkeypatch):
 
         return response.json
 
-
     one_month_purchase = (# PURCHASE 1-month
 {'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723091078', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
 {'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
@@ -2264,11 +2263,16 @@ def test_google_platform_handle_notification(monkeypatch):
     
 
     monkeypatch.setattr(
-        "platform_google.google_api_fetch_subscription_details_for_base_plan_id",
+        "platform_google_api.fetch_subscription_details_for_base_plan_id",
         lambda *args, **kwargs: SubscriptionProductDetails(
             billing_period=GoogleDuration("P30D", err),
             grace_period=GoogleDuration("P2D", err)
         )
+    )
+
+    monkeypatch.setattr(
+        "platform_google_api.subscription_v1_acknowledge",
+        lambda *args, **kwargs: None
     )
 
     def test_notification(scenario: tuple[base.JSONObject, base.JSONObject]):
@@ -2276,10 +2280,9 @@ def test_google_platform_handle_notification(monkeypatch):
         err_tx = backend.UserErrorTransaction()
 
         notification, raw_state = scenario
-        current_state = platform_google_api.parse_google_api_fetch_subscription_v2_response(raw_state, err)
-
+        current_state = platform_google_api.parse_get_subscription_v2_response(raw_state, err)
         monkeypatch.setattr(
-            "platform_google.google_api_fetch_subscription_v2",
+            "platform_google_api.fetch_subscription_v2_details",
             lambda *args, **kwargs: current_state
         )
 
