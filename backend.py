@@ -47,6 +47,9 @@ class AddRevocationItem:
     # Platform specific transaction ID to revoke from the payments table. For apple this is the
     # transaction ID, for google this should be the order ID string.
     tx_id:            str                  = ''
+    # Timestamp in ms when the revoke event happens. This is used to determine if the proof
+    # should actually be revoked, or left to expire on its own.
+    revoke_event_ts_ms: int                = 0
 
 @dataclasses.dataclass
 class ProSubscriptionProof:
@@ -1324,15 +1327,20 @@ def expire_payments_internal(tx: base.SQLTransaction, revocation_or_unix_ts_ms: 
 
         assert len(tx_field_name) > 0
         if len(tx_field_name) > 0:
+            """expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an expiry timestamp
+            rounded to the end of the UTC day. So we only actually want to revoke proofs that aren't going to
+            self-expire buy by the end of the day."""
+            revoke_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation_or_unix_ts_ms.revoke_event_ts_ms)
             _ = tx.cursor.execute(f'''
                 UPDATE    payments
                 SET       status = ?
-                WHERE     {tx_field_name} = ?
+                WHERE     {tx_field_name} = ? AND expiry_unix_ts_ms > ?
                 RETURNING master_pkey
             ''', (# SET values
                   int(PaymentStatus.Expired.value),
                   # WHERE values
-                  revocation.tx_id,))
+                  revocation.tx_id,
+                  revoke_ts_ms_next_day))
 
     rows = typing.cast(collections.abc.Iterator[tuple[bytes | None]], tx.cursor)
     for row in rows:
