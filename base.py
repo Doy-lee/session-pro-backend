@@ -51,6 +51,7 @@ class ErrorSink:
 class SQLTransaction:
     conn:   sqlite3.Connection
     cursor: sqlite3.Cursor | None = None
+    cancel: bool                  = False
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
@@ -64,7 +65,10 @@ class SQLTransaction:
                  traceback: traceback.TracebackException | None):
         if self.cursor:
             self.cursor.close()
-        self.conn.commit() if exc_type is None else self.conn.rollback()
+        if exc_type is not None or self.cancel:
+            self.conn.rollback()
+        else:
+            self.conn.commit()
         return False
 
 @dataclasses.dataclass
@@ -140,57 +144,60 @@ def print_unicode_table(rows: list[list[str]]) -> None:
     bottom += '┘'
     print(bottom)
 
-def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
+def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
     table_strings: list[TableStrings] = []
-    with SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _           = tx.cursor.execute('SELECT name FROM sqlite_master WHERE type="table";')
-        tables      = typing.cast(list[tuple[str]], tx.cursor.fetchall())
-        table_names = [table[0] for table in tables]
-        for table_name in table_names:
-            _                       = tx.cursor.execute(f'SELECT * FROM {table_name}')
-            rows                    = tx.cursor.fetchall()
-            column_names: list[str] = [description[0] for description in tx.cursor.description]
+    assert tx.cursor is not None
+    _           = tx.cursor.execute('SELECT name FROM sqlite_master WHERE type="table";')
+    tables      = typing.cast(list[tuple[str]], tx.cursor.fetchall())
+    table_names = [table[0] for table in tables]
+    for table_name in table_names:
+        _                       = tx.cursor.execute(f'SELECT * FROM {table_name}')
+        rows                    = tx.cursor.fetchall()
+        column_names: list[str] = [description[0] for description in tx.cursor.description]
 
-            table_str: TableStrings = TableStrings()
-            table_str.name          = table_name
-            table_str.contents      = [column_names]
+        table_str: TableStrings = TableStrings()
+        table_str.name          = table_name
+        table_str.contents      = [column_names]
 
-            if rows:
-                for row in rows:
-                    content: list[str] = []
-                    for index, value in enumerate(row):
-                        col = column_names[index]
-                        if value is None:
-                            content.append(str(value))
-                        elif isinstance(value, bytes):
-                            content.append(value.hex())
-                        elif col.endswith('unix_ts_ms'):
-                            timestamp = int(value)
-                            date_str  = datetime.datetime.fromtimestamp(timestamp/1000).strftime('%Y-%m-%d')
-                            content.append(f'{timestamp} ({date_str})')
-                        elif col.endswith('_s'):
-                            seconds = int(value)
-                            days    = seconds / SECONDS_IN_DAY
-                            content.append(f'{seconds} ({days:.2f} days)')
-                        elif col == 'payment_provider':
-                            value_int = int(value)
-                            if value_int == PaymentProvider.Nil.value:
-                                content.append(f'Nil ({value_int})')
-                            elif value_int == PaymentProvider.GooglePlayStore.value:
-                                content.append(f'Google Play Store ({value_int})')
-                            elif value_int == PaymentProvider.iOSAppStore.value:
-                                content.append(f'iOS App Store ({value_int})')
-                            else:
-                                content.append(f'Unknown ({value_int})')
+        if rows:
+            for row in rows:
+                content: list[str] = []
+                for index, value in enumerate(row):
+                    col = column_names[index]
+                    if value is None:
+                        content.append(str(value))
+                    elif isinstance(value, bytes):
+                        content.append(value.hex())
+                    elif col.endswith('unix_ts_ms'):
+                        timestamp = int(value)
+                        date_str  = datetime.datetime.fromtimestamp(timestamp/1000).strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
+                        content.append(f'{timestamp} ({date_str})')
+                    elif col.endswith('_s'):
+                        seconds = int(value)
+                        days    = seconds / SECONDS_IN_DAY
+                        content.append(f'{seconds} ({days:.2f} days)')
+                    elif col == 'payment_provider':
+                        value_int = int(value)
+                        if value_int == PaymentProvider.Nil.value:
+                            content.append(f'Nil ({value_int})')
+                        elif value_int == PaymentProvider.GooglePlayStore.value:
+                            content.append(f'Google Play Store ({value_int})')
+                        elif value_int == PaymentProvider.iOSAppStore.value:
+                            content.append(f'iOS App Store ({value_int})')
                         else:
-                            content.append(str(value))
-                    table_str.contents.append(content)
-            table_strings.append(table_str)
+                            content.append(f'Unknown ({value_int})')
+                    else:
+                        content.append(str(value))
+                table_str.contents.append(content)
+        table_strings.append(table_str)
 
     for it in table_strings:
         print(f'Table: {it.name}')
         print_unicode_table(it.contents)
+
+def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
+    with SQLTransaction(sql_conn) as tx:
+        print_db_to_stdout_tx(tx)
 
 def round_unix_ts_ms_to_next_day(unix_ts_ms: int) -> int:
     result: int = (unix_ts_ms + (MILLISECONDS_IN_DAY - 1)) // MILLISECONDS_IN_DAY * MILLISECONDS_IN_DAY

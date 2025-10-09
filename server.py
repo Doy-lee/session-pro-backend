@@ -297,13 +297,13 @@ API
                                     3 => Expired
                                          Session Pro entitlement has expired and is no longer being
                                          provided for this payment
-                                    4 => Refunded
-                                         User has successfully refunded the payment and Session Pro
-                                         entitlement is no longer available
+                                    4 => Revoked
+                                         User has successfully refunded/or had their payment revoked
+                                         and Session Pro entitlement is no longer available
 
                                   Always check the status before interpreting the fields. It's
-                                  possible to transition from refunded -> redeemed for example if the
-                                  payment provider cancels a refund in which case the refunded
+                                  possible to transition from revoked -> redeemed for example if the
+                                  payment provider cancels a refund in which case the revoked
                                   timestamp is set but the payment is actually being actively
                                   consumed.
         plan:                     1 byte integer indicating the Session Pro plan that was purchased
@@ -329,8 +329,8 @@ API
         platform_refund_expiry_unix_ts_ms: 8 byte unix timestamp indicating when the payment will no
                                            longer be eligible for a refund via its purchase
                                            platform.
-        refunded_unix_ts_ms:               8 byte UNIX timestamp indicating when the payment was
-                                           refunded. 0 if it never refunded.
+        revoked_unix_ts_ms:                8 byte UNIX timestamp indicating when the payment was
+                                           revoked. 0 if it never revoked.
         google_payment_token:    When payment provider is Google Play Store, a string which is set
                                  to the platform-specific purchase token for the subscription.
         google_order_id:         When payment provider is Google Play Store, a string which is set
@@ -363,9 +363,10 @@ API
               "subscription_duration_s": 2592000
               "payment_provider": 1,
               "expiry_unix_ts_ms": 1761718134941,
-              "grace_unix_ts_ms": 0,
+              "grace_period_duration_ms": 0,
+              "platform_refund_expiry_unix_ts_ms": 1761718134941,
               "redeemed_unix_ts_ms": 1759190400000,
-              "refunded_unix_ts_ms": 0,
+              "revoked_unix_ts_ms": 0,
               "google_order_id": "993f7d1bbcf4dfda482a8bce4f2b62acfc8c2d3d06b6512dfc981738ddf85562490b016f27b07a17c080c0765ada43f2e4c0618196f667e1174d1b3d67752b86",
               "google_payment_token": "ad8b67960eb91e8e2c0a4e8f191ea77b5ad593508b52ecc36c69c059cab39397fbf1e96142fa7fbcc7391cc3369ad110e3f9cbfccef284a925dcd470a4670aec",
             }
@@ -636,7 +637,7 @@ def get_pro_revocations():
                     assert gen_index < db.runtime.gen_index
                     assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
                     revocation_items.append({
-                        'expiry_unix_ts_ms': expiry_unix_ts_ms,
+                        'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
                         'gen_index_hash':    gen_index_hash.hex(),
                     })
 
@@ -735,7 +736,7 @@ def get_pro_payments():
                             'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
                             'grace_period_duration_ms':             payment.grace_period_duration_ms,
                             'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
-                            'refunded_unix_ts_ms':                  payment.refunded_unix_ts_ms if payment.refunded_unix_ts_ms else 0,
+                            'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
                             'google_payment_token':                 payment.google_payment_token,
                             'google_order_id':                      payment.google_order_id,
                         })
@@ -750,7 +751,7 @@ def get_pro_payments():
                             'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
                             'grace_period_duration_ms':             payment.grace_period_duration_ms,
                             'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
-                            'refunded_unix_ts_ms':                  payment.refunded_unix_ts_ms if payment.refunded_unix_ts_ms else 0,
+                            'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
                             'apple_original_tx_id':                 payment.apple.original_tx_id,
                             'apple_tx_id':                          payment.apple.tx_id,
                             'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,

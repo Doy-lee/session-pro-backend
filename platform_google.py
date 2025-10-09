@@ -44,9 +44,9 @@ def add_user_unredeemed_payment(tx_payment: PaymentProviderTransaction, tx_event
         sql_conn=sql_conn,
         payment_tx=tx_payment,
         plan=plan,
-        expiry_unix_ts_ms=tx_event.expiry_time.unix_milliseconds,
-        unredeemed_unix_ts_ms=tx_event.event_ts_ms,
-        platform_refund_expiry_ts_ms=tx_event.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
+        expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
+        unredeemed_unix_ts_ms=tx_fields.event_ts_ms,
+        platform_refund_expiry_unix_ts_ms=tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
         err=err,
     )
 
@@ -72,13 +72,13 @@ def set_purchase_grace_period_duration(tx_payment: PaymentProviderTransaction, g
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {obfuscate(tx_payment.google_payment_token)} and order_id: {obfuscate(tx_payment.google_order_id)}')
 
 
-def add_user_revocation(order_id: str, event_ts_ms: int, sql_conn: sqlite3.Connection):
+def add_user_revocation(order_id: str, revoke_unix_ts_ms: int, sql_conn: sqlite3.Connection):
     """Revoke a pro proof for an order id in the database."""
     assert len(order_id) > 0
     revocation = AddRevocationItem(
         payment_provider=base.PaymentProvider.GooglePlayStore,
         tx_id=order_id,
-        revoke_event_ts_ms=event_ts_ms,
+        revoke_unix_ts_ms=revoke_unix_ts_ms,
     )
 
     backend.add_revocation(sql_conn=sql_conn, revocation=revocation)
@@ -127,7 +127,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 else:
                     if tx_event.linked_purchase_token is not None:
                         # TODO: this kinda can fail, and if it does we need to log the error. The revoke + grant should also happen in a single sqlite3 transaction
-                        add_user_revocation(order_id=tx_payment.google_order_id, event_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                        add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
                         # err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
 
                     add_user_unredeemed_payment(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
@@ -149,7 +149,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 Now that the subscription is on hold, the user is no longer entitled to their subscription benefits, but their pro
                 proof is still valid for another approximately 3 months. In this case the proof will be revoked by the backend.
                 """
-                add_user_revocation(order_id=tx_payment.google_order_id, event_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
@@ -182,15 +182,14 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
-
-                add_user_revocation(order_id=tx_payment.google_order_id, event_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
                 toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
             """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
             for the vast majority of users this function wont make any changes to user entitlement."""
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ON_HOLD:
-                add_user_revocation(order_id=tx_payment.google_order_id, event_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
             # No entitlement change required
