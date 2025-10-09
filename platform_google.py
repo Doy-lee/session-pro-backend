@@ -44,9 +44,9 @@ def add_user_unredeemed_payment(tx_payment: PaymentProviderTransaction, tx_event
         sql_conn=sql_conn,
         payment_tx=tx_payment,
         plan=plan,
-        expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
-        unredeemed_unix_ts_ms=tx_fields.event_ts_ms,
-        platform_refund_expiry_unix_ts_ms=tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
+        expiry_unix_ts_ms=tx_event.expiry_time.unix_milliseconds,
+        unredeemed_unix_ts_ms=tx_event.event_ts_ms,
+        platform_refund_expiry_unix_ts_ms=tx_event.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
         err=err,
     )
 
