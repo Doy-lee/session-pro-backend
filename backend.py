@@ -20,7 +20,7 @@ class PaymentStatus(enum.IntEnum):
     Unredeemed = 1
     Redeemed   = 2
     Expired    = 3
-    Refunded   = 4
+    Revoked    = 4
 
 class ProPlanType(enum.Enum):
     """
@@ -101,7 +101,7 @@ SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
   # the payment is always eligible for refund through its payment platform this value will be set
   # to 0
   SQLField('platform_refund_expiry_unix_ts_ms', 'INTEGER NOT NULL'),
-  SQLField('refunded_unix_ts_ms',               'INTEGER'),
+  SQLField('revoked_unix_ts_ms',                'INTEGER'),
 
   SQLField('apple_original_tx_id',              'BLOB'),
   SQLField('apple_tx_id',                       'BLOB'),
@@ -130,7 +130,7 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
                                                             int,          # expiry_unix_ts_ms
                                                             int,          # grace_period_duration_ms
                                                             int,          # platform_refund_expiry_unix_ts_ms
-                                                            int | None,   # refunded_unix_ts_ms
+                                                            int | None,   # revoked_unix_ts_ms
                                                             str | None,   # apple_original_tx_id
                                                             str | None,   # apple_tx_id
                                                             str | None,   # apple_web_line_order_tx_id
@@ -178,7 +178,7 @@ class PaymentRow:
     expiry_unix_ts_ms:                  int                  = 0
     grace_period_duration_ms:           int                  = 0
     platform_refund_expiry_unix_ts_ms:  int                  = 0
-    refunded_unix_ts_ms:                int | None           = None
+    revoked_unix_ts_ms:                 int | None           = None
     apple:                              AppleTransaction     = dataclasses.field(default_factory=AppleTransaction)
     google_payment_token:               str                  = ''
     google_order_id:                    str                  = ''
@@ -363,7 +363,7 @@ def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> Payment
     result.expiry_unix_ts_ms                  = row[8]
     result.grace_period_duration_ms           = row[9]
     result.platform_refund_expiry_unix_ts_ms  = row[10]
-    result.refunded_unix_ts_ms                = row[11] if row[11] else None
+    result.revoked_unix_ts_ms                 = row[11] if row[11] else None
     result.apple.original_tx_id               = row[12] if row[12] else ''
     result.apple.tx_id                        = row[13] if row[13] else ''
     result.apple.web_line_order_tx_id         = row[14] if row[14] else ''
@@ -683,16 +683,16 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
                 err.msg_list.append(f'{it.status.name} payment #{index} expired ts was 0. Expiry should be set when payment was unredeemed')
             if it.redeemed_unix_ts_ms:
                 err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was {it.redeemed_unix_ts_ms}. The payment is not redeemed yet so it should be 0')
-            if it.refunded_unix_ts_ms:
-                err.msg_list.append(f'{it.status.name} payment #{index} refunded ts was {it.refunded_unix_ts_ms}. The payment is not refunded yet so it should be 0')
+            if it.revoked_unix_ts_ms:
+                err.msg_list.append(f'{it.status.name} payment #{index} revoked ts was {it.revoked_unix_ts_ms}. The payment is not refunded yet so it should be 0')
 
         elif it.status == PaymentStatus.Redeemed:
             # NOTE: Check that the redeemed ts is set
             if not it.redeemed_unix_ts_ms:
                 err.msg_list.append(f'{it.status.name} payment #{index} redeemed ts was not set. The payment is redeemed so it should be non-zero')
 
-            # NOTE: Check that expired ts was not set. Note refunded could be set as we can cancel a
-            # refund back into a redeemed state
+            # NOTE: Check that expired ts was not set. Note revoked could be set as we can cancel a
+            # revoked back into a redeemed state
             if it.expiry_unix_ts_ms == 0:
                 err.msg_list.append(f'{it.status.name} payment #{index} expired ts was 0. Expiry should be set when payment was unredeemed')
 
@@ -708,12 +708,12 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
                   expiry_date   = datetime.datetime.fromtimestamp(it.expiry_unix_ts_ms/1000).strftime('%Y-%m-%d')
                   err.msg_list.append(f'{it.status.name} payment #{index} was expired ({expiry_date}) before it was activated ({redeemed_date})')
 
-        elif it.status == PaymentStatus.Refunded:
-            # NOTE: Any payment can transition into the refunded state given any status (except for
+        elif it.status == PaymentStatus.Revoked:
+            # NOTE: Any payment can transition into the revoked state given any status (except for
             # nil, which is the invalid state). This means that all fields could be set so only a
             # few checks are needed here.
-            if not it.refunded_unix_ts_ms:
-                err.msg_list.append(f'{it.status.name} payment #{index} refunded ts was not set. The payment is refunded so it should be non-zero')
+            if not it.revoked_unix_ts_ms:
+                err.msg_list.append(f'{it.status.name} payment #{index} revoked ts was not set. The payment is refunded so it should be non-zero')
 
         # NOTE: Verify the plan, it should always be set once it enters the DB..
         if it.plan == ProPlanType.Nil:
@@ -1373,10 +1373,10 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
             # NOTE: Mark the payment as revoked
             _ = tx.cursor.execute(f'''
                 UPDATE payments
-                SET    status = ?, refunded_unix_ts_ms = ?
+                SET    status = ?, revoked_unix_ts_ms = ?
                 WHERE  id     = ?
             ''', (# SET values
-                  int(PaymentStatus.Refunded.value),
+                  int(PaymentStatus.Revoked.value),
                   revocation.revoke_unix_ts_ms,
                   # WHERE values
                   id))

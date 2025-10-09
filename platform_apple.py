@@ -361,10 +361,10 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         # that
                         with base.SQLTransaction(sql_conn) as sql_tx:
                             sql_tx.cancel = True
-                            refunded: bool = backend.add_apple_revocation_tx(tx                   = sql_tx,
+                            revoked: bool = backend.add_apple_revocation_tx(tx                   = sql_tx,
                                                                              apple_original_tx_id = tx.originalTransactionId,
                                                                              revoke_unix_ts_ms    = tx.purchaseDate)
-                            if not refunded:
+                            if not revoked:
                                 err.msg_list.append(f'No matching active payment was available to be revoked. {print_obj(tx)}')
 
                             # NOTE: Submit the upgraded payment (e.g. the new payment)
@@ -463,11 +463,11 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                     # payment and issue a new one.
                     with base.SQLTransaction(sql_conn) as sql_tx:
                         sql_tx.cancel = True
-                        refunded = backend.add_apple_revocation_tx(tx                   = sql_tx,
-                                                                apple_original_tx_id = tx.originalTransactionId,
-                                                                revoke_unix_ts_ms    = tx.purchaseDate)
-                        if not refunded:
-                            err.msg_list.append(f'No matching active payment was available to be refunded. {print_obj(tx)}')
+                        revoked = backend.add_apple_revocation_tx(tx                   = sql_tx,
+                                                                  apple_original_tx_id = tx.originalTransactionId,
+                                                                  revoke_unix_ts_ms    = tx.purchaseDate)
+                        if not revoked:
+                            err.msg_list.append(f'No matching active payment was available to be revoked. {print_obj(tx)}')
 
                         # NOTE: Submit the 'new' payment
                         if not err.has():

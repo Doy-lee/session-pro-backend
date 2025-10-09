@@ -161,7 +161,7 @@ def test_backend_same_user_stacks_subscription():
         assert unredeemed_payment_list[0].unredeemed_unix_ts_ms   == unix_ts_ms
         assert unredeemed_payment_list[0].redeemed_unix_ts_ms     == None
         assert unredeemed_payment_list[0].expiry_unix_ts_ms       == it.expiry_unix_ts_ms
-        assert unredeemed_payment_list[0].refunded_unix_ts_ms     == None
+        assert unredeemed_payment_list[0].revoked_unix_ts_ms      == None
         assert unredeemed_payment_list[0].google_payment_token    == it.google_payment_token
         assert unredeemed_payment_list[0].google_order_id         == it.google_order_id
         assert unredeemed_payment_list[0].plan                    == it.plan
@@ -210,7 +210,7 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[0].auto_renewing                   == True
     assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
-    assert payment_list[0].refunded_unix_ts_ms             is None
+    assert payment_list[0].revoked_unix_ts_ms              is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -222,7 +222,7 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].auto_renewing                   == True
     assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[1].expiry_unix_ts_ms               == scenarios[1].expiry_unix_ts_ms
-    assert payment_list[1].refunded_unix_ts_ms             is None
+    assert payment_list[1].revoked_unix_ts_ms              is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -263,7 +263,7 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[0].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[0].expiry_unix_ts_ms               == scenarios[0].expiry_unix_ts_ms
     assert payment_list[0].grace_period_duration_ms        == scenarios[0].grace_period_duration_ms
-    assert payment_list[0].refunded_unix_ts_ms             is None
+    assert payment_list[0].revoked_unix_ts_ms              is None
     assert payment_list[0].google_payment_token            == scenarios[0].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -276,7 +276,7 @@ def test_backend_same_user_stacks_subscription():
     assert payment_list[1].redeemed_unix_ts_ms             == redeemed_unix_ts_ms
     assert payment_list[1].expiry_unix_ts_ms               == scenarios[1].expiry_unix_ts_ms
     assert payment_list[1].grace_period_duration_ms        == new_grace_duration_ms
-    assert payment_list[1].refunded_unix_ts_ms             is None
+    assert payment_list[1].revoked_unix_ts_ms              is None
     assert payment_list[1].google_payment_token            == scenarios[1].google_payment_token
     assert len(payment_list[0].apple.tx_id)                == 0
     assert len(payment_list[0].apple.original_tx_id)       == 0
@@ -1204,7 +1204,7 @@ def test_platform_apple():
             assert unredeemed_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert unredeemed_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert unredeemed_list[0].apple.tx_id                       == tx_info.transactionId
             assert unredeemed_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -1336,7 +1336,7 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == None
+            assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -1470,7 +1470,7 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == None
+            assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -1490,7 +1490,7 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == None
+            assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -2269,7 +2269,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
@@ -2310,7 +2310,7 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == None
+            assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
@@ -2331,7 +2331,7 @@ def test_platform_apple():
             payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
             assert len(payment_list)                                 == 2
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
-            assert payment_list[0].status                            == backend.PaymentStatus.Refunded
+            assert payment_list[0].status                            == backend.PaymentStatus.Revoked
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
             assert payment_list[0].auto_renewing                     == True
@@ -2340,11 +2340,11 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
-            assert payment_list[0].refunded_unix_ts_ms               == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
 
             # NOTE: The previous payment was revoked, but it won't be in the revocation list because
             # a revocation's start time is rounded to the end of the day. So they won't show up if
@@ -2372,7 +2372,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
@@ -2414,7 +2414,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
@@ -2430,7 +2430,7 @@ def test_platform_apple():
             payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
             assert len(payment_list) == 2
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
-            assert payment_list[0].status                            == backend.PaymentStatus.Refunded
+            assert payment_list[0].status                            == backend.PaymentStatus.Revoked
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
             assert payment_list[0].auto_renewing                     == True
@@ -2439,11 +2439,10 @@ def test_platform_apple():
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert payment_list[0].refunded_unix_ts_ms               == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
-            assert payment_list[0].refunded_unix_ts_ms == e01_upgrade_to_1wk_tx_info.purchaseDate
 
             # NOTE: Check that the 1 week plan remains unchanged
             unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2458,7 +2457,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
@@ -2491,7 +2490,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
-            assert unredeemed_payment_list[0].refunded_unix_ts_ms               == None
+            assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
@@ -2543,7 +2542,7 @@ def test_google_platform_handle_notification(monkeypatch):
     one_month_resub =(# Resubscribe after cancel but before expiry
 {'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723199349', 'subscriptionNotification': {'version': '1.0', 'notificationType': 7, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
 {'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
-    one_month_refund =(# Refunded before expiry
+    one_month_refund =(# Revoked before expiry
 {'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723392088', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
 {'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:11.808Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]})
     
@@ -2611,7 +2610,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert unredeemed_payment.expiry_unix_ts_ms ==expiry_time_unix_ms
     assert unredeemed_payment.grace_period_duration_ms == 0
     assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
-    assert unredeemed_payment.refunded_unix_ts_ms == None
+    assert unredeemed_payment.revoked_unix_ts_ms == None
     assert unredeemed_payment.apple == backend.AppleTransaction()
     assert unredeemed_payment.google_payment_token == purchase_token
     assert unredeemed_payment.google_order_id == order_id
@@ -2656,7 +2655,7 @@ def test_google_platform_handle_notification(monkeypatch):
     assert payment.expiry_unix_ts_ms == unredeemed_payment.expiry_unix_ts_ms
     assert payment.grace_period_duration_ms == 0
     assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
-    assert payment.refunded_unix_ts_ms == None
+    assert payment.revoked_unix_ts_ms == None
     assert payment.apple == backend.AppleTransaction()
     assert payment.google_payment_token == purchase_token
     assert payment.google_order_id == order_id
@@ -2690,7 +2689,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
-    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
     assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
@@ -2727,7 +2726,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
-    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
     assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
@@ -2764,7 +2763,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
-    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
     assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
@@ -2801,7 +2800,7 @@ def test_google_platform_handle_notification(monkeypatch):
     item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
     item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
     item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
-    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "refunded_unix_ts_ms", err)
+    item_refunded_unix_ts_ms = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
     item_status = base.json_dict_require_int_coerce_to_enum(item, "status", backend.PaymentStatus, err)
     assert not err.has()
     assert item_expiry_unix_ts == expiry_time_unix_ms
@@ -2812,4 +2811,4 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
     assert item_refunded_unix_ts_ms == now_ms
-    assert item_status == backend.PaymentStatus.Refunded
+    assert item_status == backend.PaymentStatus.Revoked

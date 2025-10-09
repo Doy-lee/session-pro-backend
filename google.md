@@ -9,7 +9,7 @@ The Google Play store subscriptions have two types of refunds:
 Typically apps direct users to request refunds via Google if is has been less than 48 hours since the purchase,
 then direct users to their own app support channels if its been more than 48 hours since the purchase.
 
-The backend stores a `platform_expiry_ts_ms` timestamp to indicate what time a user's subscription is no
+The backend stores a `platform_refund_expiry_ts_ms` timestamp to indicate what time a user's subscription is no
 longer eligible for a Google refund. After this time user should be directed to app support.
 
 ## Real Time Developer Notifications
