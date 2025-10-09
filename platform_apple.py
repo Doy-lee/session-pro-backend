@@ -527,8 +527,8 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
             # NOTE: Process
             with base.SQLTransaction(sql_conn) as sql_tx:
                 sql_tx.cancel = not backend.add_apple_revocation_tx(tx                   = sql_tx,
-                                                                 apple_original_tx_id = tx.originalTransactionId,
-                                                                 revoke_unix_ts_ms    = tx.purchaseDate)
+                                                                    apple_original_tx_id = tx.originalTransactionId,
+                                                                    revoke_unix_ts_ms    = tx.purchaseDate)
                 if sql_tx.cancel:
                     err.msg_list.append(f'No matching active payment was available to be refunded. {print_obj(tx)}')
 

@@ -637,7 +637,7 @@ def get_pro_revocations():
                     assert gen_index < db.runtime.gen_index
                     assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
                     revocation_items.append({
-                        'expiry_unix_ts_ms': expiry_unix_ts_ms,
+                        'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
                         'gen_index_hash':    gen_index_hash.hex(),
                     })
 
