@@ -90,13 +90,14 @@ def set_purchase_grace_period_duration(purchase_token: str, order_id: str, grace
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
 
 
-def add_user_revocation(order_id: str, sql_conn: sqlite3.Connection):
+def add_user_revocation(order_id: str, revoke_unix_ts_ms: int, sql_conn: sqlite3.Connection):
     """Revoke a pro proof for an order id in the database."""
     assert len(order_id) > 0
 
     revocation = AddRevocationItem(
         payment_provider=base.PaymentProvider.GooglePlayStore,
         tx_id=order_id,
+        revoke_unix_ts_ms=revoke_unix_ts_ms,
     )
 
     backend.add_revocation(
@@ -153,7 +154,7 @@ def handle_subscription_notification(tx: SubscriptionPlanTxFields, sql_conn: sql
             if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
                 if tx.linked_purchase_token is not None:
                     # TODO: this kinda can fail, and if it does we need to log the error. The revoke + grant should also happen in a single sqlite3 transaction
-                    add_user_revocation(tx.order_id, sql_conn)
+                    add_user_revocation(tx.order_id, tx.event_ts_ms, sql_conn)
                     # err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
 
                 add_user_unredeemed_payment(tx, sql_conn, err)
@@ -194,7 +195,7 @@ def handle_subscription_notification(tx: SubscriptionPlanTxFields, sql_conn: sql
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
-                add_user_revocation(tx.order_id, sql_conn)
+                add_user_revocation(tx.order_id, tx.event_ts_ms, sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
             # No entitlement change required

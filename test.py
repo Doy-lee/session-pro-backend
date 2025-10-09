@@ -2248,7 +2248,10 @@ def test_platform_apple():
         e06_expire_voluntary_decoded_notification                       = platform_apple.DecodedNotification(body=e06_expire_voluntary_body, tx_info=e06_expire_voluntary_tx_info, renewal_info=e06_expire_voluntary_renewal_info)
 
         # NOTE: Execute and test notifications
-        err = base.ErrorSink()
+        err          = base.ErrorSink()
+        master_key   = nacl.signing.SigningKey.generate()
+        rotating_key = nacl.signing.SigningKey.generate()
+
         # NOTE: Witness 3 month subscription
         if 1:
             platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
@@ -2271,6 +2274,48 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
 
+            # NOTE: Then redeem the payment
+            version = 0
+            add_pro_payment_tx             = backend.AddProPaymentUserTransaction()
+            add_pro_payment_tx.provider    = base.PaymentProvider.iOSAppStore
+            add_pro_payment_tx.apple_tx_id = unredeemed_payment_list[0].apple.tx_id
+            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
+                                                                            master_pkey=master_key.verify_key,
+                                                                            rotating_pkey=rotating_key.verify_key,
+                                                                            payment_tx=add_pro_payment_tx)
+
+            # NOTE: POST and get response
+            response: werkzeug.test.TestResponse = test.flask_client.post(server.FLASK_ROUTE_ADD_PRO_PAYMENT, json={
+                'version': version,
+                'master_pkey':   bytes(master_key.verify_key).hex(),
+                'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+                'master_sig':    bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                'rotating_sig':  bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                'payment_tx': {
+                    'provider':    add_pro_payment_tx.provider.value,
+                    'apple_tx_id': add_pro_payment_tx.apple_tx_id,
+                }
+            })
+
+            # NOTE: Check payment got redeemed to the DB
+            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.sql_conn)
+            assert len(payment_list)                                 == 1
+            assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
+            assert payment_list[0].status                            == backend.PaymentStatus.Redeemed
+            assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
+            assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+            assert payment_list[0].auto_renewing                     == True
+            assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
+            assert payment_list[0].redeemed_unix_ts_ms               != None
+            assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
+            assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].refunded_unix_ts_ms               == None
+            assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
+            assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
+            assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
+
+
         # NOTE: "Upgrade" to 1 week subscription. Initially when we set up the Apple subscriptions,
         # 1 week was put at the top of the list, this makes it have a higher ranking than the 3
         # month subscription following it. This means that going to a 1 week subscription is
@@ -2284,14 +2329,14 @@ def test_platform_apple():
 
             # NOTE: Check the previous payment was refunded
             payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
-            assert len(payment_list) == 2
-            assert payment_list[0].master_pkey                       == None
+            assert len(payment_list)                                 == 2
+            assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == backend.PaymentStatus.Refunded
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
             assert payment_list[0].auto_renewing                     == True
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
-            assert payment_list[0].redeemed_unix_ts_ms               == None
+            assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
@@ -2299,7 +2344,20 @@ def test_platform_apple():
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
-            assert payment_list[0].refunded_unix_ts_ms == e01_upgrade_to_1wk_tx_info.purchaseDate
+            assert payment_list[0].refunded_unix_ts_ms               == e01_upgrade_to_1wk_tx_info.purchaseDate
+
+            # NOTE: The previous payment was revoked, but it won't be in the revocation list because
+            # a revocation's start time is rounded to the end of the day. So they won't show up if
+            # the proof will expire before the revocation activates.
+            #
+            # In this example in particular, because we are using the apple sandbox testing
+            # environment their timespans for subscriptions are greatly reduced to within the minute
+            # range.
+            #
+            # We will test the other branches by modifying the timestamps, but for the reference
+            # tests that use "real" sandbox data we will go with the flow.
+            revocation_list: list[backend.RevocationRow]              = backend.get_revocations_list(test.sql_conn)
+            assert len(revocation_list)                              == 0
 
             # NOTE: Check the new payment is in the unredeemed queue
             unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2371,13 +2429,13 @@ def test_platform_apple():
             # NOTE: Check that the initial 3 month subscription remains refunded (e.g. unchanged)
             payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
             assert len(payment_list) == 2
-            assert payment_list[0].master_pkey                       == None
+            assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == backend.PaymentStatus.Refunded
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
             assert payment_list[0].auto_renewing                     == True
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
-            assert payment_list[0].redeemed_unix_ts_ms               == None
+            assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
@@ -2753,6 +2811,5 @@ def test_google_platform_handle_notification(monkeypatch):
     assert item_payment_provider == base.PaymentProvider.GooglePlayStore
     assert item_platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
     assert item_redeemed_unix_ts_ms == payment.redeemed_unix_ts_ms
-    assert item_refunded_unix_ts_ms == 0
-    # TODO: this should probably be refunded, but also the one_month_refund event might not actually be a refund, this needs to be verified
-    assert item_status == backend.PaymentStatus.Expired
+    assert item_refunded_unix_ts_ms == now_ms
+    assert item_status == backend.PaymentStatus.Refunded
