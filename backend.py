@@ -1373,7 +1373,7 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
             # NOTE: Mark the payment as revoked
             _ = tx.cursor.execute(f'''
                 UPDATE payments
-                SET    status = ?, revoked_unix_ts_ms = ?
+                SET    status = ?, revoked_unix_ts_ms = ?, auto_renewing = 0
                 WHERE  id     = ?
             ''', (# SET values
                   int(PaymentStatus.Revoked.value),

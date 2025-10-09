@@ -2334,7 +2334,7 @@ def test_platform_apple():
             assert payment_list[0].status                            == backend.PaymentStatus.Revoked
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert payment_list[0].auto_renewing                     == True
+            assert payment_list[0].auto_renewing                     == False
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
@@ -2433,7 +2433,7 @@ def test_platform_apple():
             assert payment_list[0].status                            == backend.PaymentStatus.Revoked
             assert payment_list[0].plan                              == backend.ProPlanType.ThreeMonth
             assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert payment_list[0].auto_renewing                     == True
+            assert payment_list[0].auto_renewing                     == False
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
