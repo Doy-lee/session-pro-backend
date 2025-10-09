@@ -295,8 +295,8 @@ class OpenDBAtPath:
 
     sql_conn: sqlite3.Connection
     runtime:  RuntimeRow
-    def __init__(self, db_path: str, db_path_is_uri: bool = False):
-        self.sql_conn = sqlite3.connect(db_path, uri=db_path_is_uri)
+    def __init__(self, db_path: str, uri: bool = False):
+        self.sql_conn = sqlite3.connect(db_path, uri=uri)
         self.runtime  = get_runtime(self.sql_conn)
 
     def __enter__(self):
@@ -1238,21 +1238,33 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
-        expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
-        add_unredeemed_payment(sql_conn                          = sql_conn,
-                               payment_tx                        = internal_payment_tx,
-                               plan                              = ProPlanType.OneMonth,
-                               unredeemed_unix_ts_ms             = expiry_unix_ts_ms - 1,
-                               platform_refund_expiry_unix_ts_ms = 0,
-                               expiry_unix_ts_ms                 = expiry_unix_ts_ms,
-                               err                               = err)
+        already_exists = False
+        for it in get_unredeemed_payments_list(sql_conn):
+            if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+                if it.google_payment_token == payment_tx.google_payment_token:
+                    already_exists = True
+                elif it.apple.tx_id == payment_tx.apple_tx_id:
+                    already_exists = True
 
-        # Randomly toggle auto-renewal
-        _ = update_payment_renewal_info(sql_conn=sql_conn,
-                                        payment_tx=internal_payment_tx,
-                                        grace_period_duration_ms=(60 * 1000),
-                                        auto_renewing=bool(random.getrandbits(1)),
-                                        err=err)
+            if already_exists:
+                break
+
+        if not already_exists:
+            expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
+            add_unredeemed_payment(sql_conn                          = sql_conn,
+                                   payment_tx                        = internal_payment_tx,
+                                   plan                              = ProPlanType.OneMonth,
+                                   unredeemed_unix_ts_ms             = expiry_unix_ts_ms - 1,
+                                   platform_refund_expiry_unix_ts_ms = 0,
+                                   expiry_unix_ts_ms                 = expiry_unix_ts_ms,
+                                   err                               = err)
+
+            # Randomly toggle auto-renewal
+            _ = update_payment_renewal_info(sql_conn=sql_conn,
+                                            payment_tx=internal_payment_tx,
+                                            grace_period_duration_ms=(60 * 1000),
+                                            auto_renewing=bool(random.getrandbits(1)),
+                                            err=err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version=version,

@@ -43,8 +43,8 @@ class Core:
 @dataclasses.dataclass
 class DecodedNotification:
     body:         AppleResponseBodyV2DecodedPayload
-    tx_info:      AppleJWSTransactionDecodedPayload | None
-    renewal_info: AppleJWSRenewalInfoDecodedPayload | None
+    tx_info:      AppleJWSTransactionDecodedPayload | None = None
+    renewal_info: AppleJWSRenewalInfoDecodedPayload | None = None
 
 FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX: str = '/apple_notifications_v2'
 FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY:                str = 'session_pro_backend_platform_apple_core'
@@ -75,9 +75,9 @@ def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> backend.Pr
     result = backend.ProPlanType.Nil
     match product_id:
         case 'com.getsession.org.pro_sub':
-            return backend.ProPlanType.OneMonth
+            result = backend.ProPlanType.OneMonth
         case 'com.getsession.org.pro_sub_3_months':
-            return backend.ProPlanType.ThreeMonth
+            result = backend.ProPlanType.ThreeMonth
         case _:
             assert False, f'Invalid apple plan_id: {product_id}'
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {product_id}')
@@ -97,7 +97,9 @@ def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bo
             err.msg_list.append(msg)
     return result
 
-def handle_notification(decoded_notification: DecodedNotification, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+def handle_notification(decoded_notification: DecodedNotification, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
+    if err.has():
+        return False
     # NOTE: Exhaustively handle all the notification types defined by Apple:
     #
     #   Notification Types
@@ -739,9 +741,8 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
     else:
         err.msg_list.append(f'Received Apple notification {decoded_notification.body.notificationType} that wasn\'t explicitly handled')
 
-    if len(err.msg_list):
-        err_msg = '\n'.join(err.msg_list)
-        print(f'ERROR: {err_msg}\nPayload was: {print_obj(decoded_notification.body)}')
+    result = len(err.msg_list) > 0
+    return result
 
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
@@ -770,12 +771,21 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         print(f'Failed to parse Apple notification, signed payload was not a string: {type(signed_payload)}')
         flask.abort(500)
 
-    resp = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
+    resp: AppleResponseBodyV2DecodedPayload = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
     with open('sesh_pro_backend_debug.log', 'a') as file:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         _ = file.write(f'{ts}: Decoded Apple notification: {resp}\n')
 
-    flask.abort(500)
+    err                                       = base.ErrorSink()
+    decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
+    with backend.OpenDBAtPath(db_path='path', uri=True) as db:
+        _ = handle_notification(decoded_notification, db.sql_conn, err)
+
+    if err.has():
+        print("ERROR: {'\n'.join(err.msg_list)}")
+        flask.abort(500)
+    else:
+        return flask.Response(status=200)
 
 def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
     try:
@@ -872,22 +882,34 @@ def equip_flask_routes(core: Core, flask: flask.Flask):
     # accessible in routes across concurrent connections.
     flask.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY] = core
 
-def maybe_get_apple_jws_transaction_from_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> AppleJWSTransactionDecodedPayload | None:
-    raw_tx: str | None = None
+def decoded_notification_from_apple_response_body_v2(body: AppleResponseBodyV2DecodedPayload, verifier: AppleSignedDataVerifier, err: base.ErrorSink | None) -> DecodedNotification:
+    result = DecodedNotification(body=body)
+
+    raw_signed_tx_info:      str | None = None
+    raw_signed_renewal_info: str | None = None
     if require_field(body.data, f'{body.notificationType} notification is missing body\'s data', err):
         assert isinstance(body.data, AppleData)
         if require_field(body.data.signedTransactionInfo, f'{body.notificationType} notification is missing body data\'s signedTransactionInfo', err):
             assert isinstance(body.data.signedTransactionInfo, str)
-            raw_tx = body.data.signedTransactionInfo
+            raw_signed_tx_info = body.data.signedTransactionInfo
+        if require_field(body.data.signedRenewalInfo, f'{body.notificationType} notification is missing body data\'s signedRenewalInfo', err):
+            assert isinstance(body.data.signedRenewalInfo, str)
+            raw_signed_renewal_info = body.data.signedRenewalInfo
 
     # Parse and verify the raw TX
-    result: AppleJWSTransactionDecodedPayload | None = None
-    if raw_tx:
+    if raw_signed_tx_info:
         try:
-            result = verifier.verify_and_decode_signed_transaction(raw_tx)
+            result.tx_info = verifier.verify_and_decode_signed_transaction(raw_signed_tx_info)
         except AppleVerificationException as e:
             if err:
-                err.msg_list.append(f'{body.notificationType} notification signed TX data failed to be verified, {e}')
+                err.msg_list.append(f'{body.notificationType} notification signed TX info failed to be verified, {e}')
+
+    if raw_signed_renewal_info:
+        try:
+            result.renewal_info = verifier.verify_and_decode_renewal_info(raw_signed_renewal_info)
+        except AppleVerificationException as e:
+            if err:
+                err.msg_list.append(f'{body.notificationType} notification signed TX renewal info failed to be verified, {e}')
 
     return result
 

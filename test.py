@@ -875,11 +875,15 @@ def dump_apple_signed_payloads(core: platform_apple.Core, body: AppleResponseBod
     print("# NOTE: Signed Payload")
     print(print_python_decl_code_for_apple_obj(body, 0, prefix + "body"))
 
+    err = base.ErrorSink()
+    decoded_notification = platform_apple.decoded_notification_from_apple_response_body_v2(body, core.signed_data_verifier, err)
+    assert not err.has(), err.msg_list
+
     print("# NOTE: Signed Renewal Info")
-    print(print_python_decl_code_for_apple_obj(platform_apple.maybe_get_apple_jws_renewal_info_from_response_body_v2(body, core.signed_data_verifier, None), 0, prefix + 'renewal_info'))
+    print(print_python_decl_code_for_apple_obj(decoded_notification.renewal_info, 0, prefix + 'renewal_info'))
 
     print("# NOTE: Signed Transaction Info")
-    print(print_python_decl_code_for_apple_obj(platform_apple.maybe_get_apple_jws_transaction_from_response_body_v2(body, core.signed_data_verifier, None), 0, prefix + 'tx_info') + "\n")
+    print(print_python_decl_code_for_apple_obj(decoded_notification.tx_info, 0, prefix + 'tx_info') + "\n")
 
     print(f'{prefix}decoded_notification = platform_apple.DecodedNotification(body={prefix}body, tx_info={prefix}tx_info, renewal_info={prefix}renewal_info)')
     print(f'platform_apple.handle_notification(decoded_notification={prefix}decoded_notification, sql_conn=db.sql_conn)')
