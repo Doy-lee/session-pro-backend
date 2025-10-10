@@ -15,7 +15,8 @@ from base import JSONObject, handle_not_implemented, json_dict_require_str, json
 
 import env
 
-from platform_google_api import SubscriptionPlanTxFields, VoidedPurchaseTxFields, get_subscription_plan_tx_fields, google_api_fetch_subscription_details_for_base_plan_id, google_api_fetch_subscription_v2 
+import platform_google_api
+from platform_google_api import SubscriptionPlanEventTransaction, VoidedPurchaseTxFields 
 from platform_google_types import SubscriptionNotificationType, SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, SubscriptionsV2SubscriptionStateType
 
 
@@ -34,76 +35,53 @@ def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.Erro
             return ProPlanType.Nil
 
 
-def add_user_unredeemed_payment(tx_fields: SubscriptionPlanTxFields, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    """
-    Add an unredeemed payment to the database.
-    """
-    plan = get_pro_plan_type_from_google_base_plan_id(tx_fields.base_plan_id, err)
-    
+def add_user_unredeemed_payment(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    plan = get_pro_plan_type_from_google_base_plan_id(tx_event.base_plan_id, err)
     if err.has():
         return
-    
-    assert plan is not None and len(tx_fields.order_id) > 0 and len(tx_fields.purchase_token) > 0
-    
-    tx = PaymentProviderTransaction(
-        provider=base.PaymentProvider.GooglePlayStore,
-        google_order_id=tx_fields.order_id,
-        google_payment_token=tx_fields.purchase_token,
-    )
-
+    assert plan is not None and len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
     backend.add_unredeemed_payment(
         sql_conn=sql_conn,
-        payment_tx=tx,
+        payment_tx=tx_payment,
         plan=plan,
-        expiry_unix_ts_ms=tx_fields.expiry_time.unix_milliseconds,
-        unredeemed_unix_ts_ms=tx_fields.event_ts_ms,
-        platform_refund_expiry_unix_ts_ms=tx_fields.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
+        expiry_unix_ts_ms=tx_event.expiry_time.unix_milliseconds,
+        unredeemed_unix_ts_ms=tx_event.event_ts_ms,
+        platform_refund_expiry_unix_ts_ms=tx_event.event_ts_ms + base.MILLISECONDS_IN_DAY * 2,
         err=err,
     )
 
-def _update_payment_renewal_info(purchase_token: str, order_id: str, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
-    assert len(purchase_token) > 0 and len(order_id) > 0 and not err.has()
-    tx = PaymentProviderTransaction(
-        provider=base.PaymentProvider.GooglePlayStore,
-        google_order_id=order_id,
-        google_payment_token=purchase_token,
-    )
-
+def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
+    assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
     return backend.update_payment_renewal_info(
         sql_conn=sql_conn,
-        payment_tx=tx,
+        payment_tx=tx_payment,
         grace_period_duration_ms=grace_period_duration_ms,
         auto_renewing=auto_renewing,
-
         err=err,
     )
 
 
-def toggle_payment_auto_renew(purchase_token: str, order_id: str, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    success = _update_payment_renewal_info(purchase_token, order_id, auto_renewing, None, sql_conn, err)
+def toggle_payment_auto_renew(tx_payment: PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    success = _update_payment_renewal_info(tx_payment, auto_renewing, None, sql_conn, err)
     if not success:
-        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
+        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {obfuscate(tx_payment.google_payment_token)} and order_id: {obfuscate(tx_payment.google_order_id)}')
 
-def set_purchase_grace_period_duration(purchase_token: str, order_id: str, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    success = _update_payment_renewal_info(purchase_token, order_id, None, grace_period_duration_ms, sql_conn, err)
+def set_purchase_grace_period_duration(tx_payment: PaymentProviderTransaction, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, sql_conn, err)
     if not success:
-        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {obfuscate(purchase_token)} and order_id: {obfuscate(order_id)}')
+        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {obfuscate(tx_payment.google_payment_token)} and order_id: {obfuscate(tx_payment.google_order_id)}')
 
 
 def add_user_revocation(order_id: str, revoke_unix_ts_ms: int, sql_conn: sqlite3.Connection):
     """Revoke a pro proof for an order id in the database."""
     assert len(order_id) > 0
-
     revocation = AddRevocationItem(
         payment_provider=base.PaymentProvider.GooglePlayStore,
         tx_id=order_id,
         revoke_unix_ts_ms=revoke_unix_ts_ms,
     )
 
-    backend.add_revocation(
-        sql_conn=sql_conn,
-        revocation=revocation,
-    )
+    backend.add_revocation(sql_conn=sql_conn, revocation=revocation)
 
 
 def add_user_canceled_reason(details: SubscriptionV2Data, sql_conn: sqlite3.Connection, err: base.ErrorSink):
@@ -111,36 +89,28 @@ def add_user_canceled_reason(details: SubscriptionV2Data, sql_conn: sqlite3.Conn
 
 
 def validate_no_existing_purchase_token_error(purchase_token:str, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    result = backend.get_user_error(
-        sql_conn=sql_conn,
-        provider_id=purchase_token
-    )
-
+    result = backend.get_user_error(sql_conn=sql_conn, provider_id=purchase_token)
     if result.provider_id == purchase_token:
         err.msg_list.append(f"Received RTDN notificaiton for already errored purchase token: {obfuscate(purchase_token)}")
 
 
 def handle_notification_error_with_purchase_token(error_tx: UserErrorTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     error_tx.provider = base.PaymentProvider.GooglePlayStore
-    backend.add_user_error(
-        sql_conn=sql_conn,
-        error_tx=error_tx,
-        err=err
-    )
+    backend.add_user_error(sql_conn=sql_conn, error_tx=error_tx, err=err)
 
 
-def handle_subscription_notification(tx: SubscriptionPlanTxFields, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    match tx.notification:
+def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    match tx_event.notification:
         case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
             # TODO: this needs to be tested, this state happens when you have a successful payment while in grace or account hold, re-activating subscription. It's unclear if a renewed event also happens.
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                add_user_unredeemed_payment(tx, sql_conn, err)
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                add_user_unredeemed_payment(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
                 # TODO: we might need to reset the grace period here, will need to see how the grace recovery works with order ids. 
 
         case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED:
-                toggle_payment_auto_renew(purchase_token=tx.purchase_token, order_id=tx.order_id, auto_renewing=False, sql_conn=sql_conn, err=err)
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED:
+                toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
             """
@@ -151,55 +121,67 @@ def handle_subscription_notification(tx: SubscriptionPlanTxFields, sql_conn: sql
             3. Verify the purchase.
             4. Give the user access to the content. The user account associated with the purchase can be identified with the ExternalAccountIdentifiers object from the subscription resource if identifiers were set at purchase time using setObfuscatedAccountId and setObfuscatedProfileId.
             """
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                if tx.linked_purchase_token is not None:
-                    # TODO: this kinda can fail, and if it does we need to log the error. The revoke + grant should also happen in a single sqlite3 transaction
-                    add_user_revocation(tx.order_id, tx.event_ts_ms, sql_conn)
-                    # err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                if tx_event.purchase_acknowledged == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+                    err.msg_list.append(f'Latest subscription state is already acknowledged')
+                else:
+                    if tx_event.linked_purchase_token is not None:
+                        # TODO: this kinda can fail, and if it does we need to log the error. The revoke + grant should also happen in a single sqlite3 transaction
+                        add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                        # err.msg_list.append(f'Failed to revoke linked purchase token {obfuscate(details.linked_purchase_token)} associated with new purchase token {obfuscate(purchase_token)}')
 
-                add_user_unredeemed_payment(tx, sql_conn, err)
+                    add_user_unredeemed_payment(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
+                    if not err.has():
+                       platform_google_api.subscription_v1_acknowledge(purchase_token=tx_payment.google_payment_token, err=err) 
 
         case SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
-            # No entitlement change required
-            pass
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ON_HOLD:
+                """
+                The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
+                for the vast majority of users this function wont make any changes to user entitlement. An example of when a proof will
+                actually be revoked if the user enters account hold and for some reason their pro proof expires some time in the future
+                (later than the end of the UTC day). A user enters account hold if their billing method is still failing after their
+                grace period ends.
+                """
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
-                plan_details = google_api_fetch_subscription_details_for_base_plan_id(tx.base_plan_id, err)
-            
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
+                plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
                 if not err.has():
                     assert plan_details is not None
-                    set_purchase_grace_period_duration(purchase_token=tx.purchase_token,
-                                                       order_id=tx.order_id,
+                    set_purchase_grace_period_duration(tx_payment=tx_payment,
                                                        grace_period_duration_ms=plan_details.grace_period.milliseconds,
                                                        sql_conn=sql_conn,
                                                        err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                toggle_payment_auto_renew(purchase_token=tx.purchase_token, order_id=tx.order_id, auto_renewing=True, sql_conn=sql_conn, err=err)
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED:
             # No entitlement change required
             pass
 
         case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
-            if tx.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
-                add_user_revocation(tx.order_id, tx.event_ts_ms, sql_conn)
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED:
-            # No entitlement change required
-            pass
+            """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
+            for the vast majority of users this function wont make any changes to user entitlement."""
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
             # No entitlement change required
@@ -214,11 +196,11 @@ def handle_subscription_notification(tx: SubscriptionPlanTxFields, sql_conn: sql
             pass
 
         case _:
-            err.msg_list.append(f'subscription notificationType is invalid: {dump_enum_details(tx.notification)}')
+            err.msg_list.append(f'subscription notificationType is invalid: {dump_enum_details(tx_event.notification)}')
 
     if err.has():
         # Purchase token logging is included in the wrapper function
-        err.msg_list.append(f'Failed to handle {dump_enum_details(tx.notification)} for order_id {obfuscate(tx.order_id) if len(tx.order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {dump_enum_details(tx_event.notification)} for order_id {obfuscate(tx_payment.google_order_id) if len(tx_payment.google_order_id) > 0 else "N/A"}')
         return
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
@@ -226,9 +208,9 @@ def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
         case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
             match tx.refund_type:
                 case RefundType.REFUND_TYPE_FULL_REFUND:
-                    handle_not_implemented(dump_enum_details(tx.refund_type), err)
+                    # TODO: investigate if we need to implement anything here
+                    pass
                 case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
-                    # TODO: we need to check if this is actually unsupported, as far as a i can tell it doesn't relate to subscriptions
                     err.msg_list.append(f'voided purchase refundType {dump_enum_details(tx.refund_type)} is unsupported!')
                 case _:
                     err.msg_list.append(f'voided purchase refundType is not valid: {dump_enum_details(tx.refund_type)}')
@@ -243,17 +225,13 @@ def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
 
 def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     body_version = json_dict_require_str(body, "version", err)
-    # TODO: Do we want any non debug mode behaviour around mismatched version?
-    assert body_version == "1.0"
+    assert body_version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
 
     package_name = json_dict_require_str(body, "packageName", err)
     event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
     if package_name != platform_config.google_package_name:
         err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
-
-    if err.has():
-        return
 
     subscription = json_dict_optional_obj(body, "subscriptionNotification", err)
     one_time_product = json_dict_optional_obj(body, "oneTimeProductNotification", err)
@@ -282,39 +260,24 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
             return
 
         user_error_tx.google_payment_token = purchase_token
-        
         version = json_dict_require_str(subscription, "version",  err)
-        # TODO: Do we want any non debug mode behaviour around mismatched version?
-        assert version == "1.0"
+        assert version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
 
         subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
-        if err.has():
-            return
-
-        assert subscription_notification_type is not None
-        
-        details = google_api_fetch_subscription_v2(package_name, purchase_token, err)
+        details = platform_google_api.fetch_subscription_v2_details(package_name, purchase_token, err)
 
         if err.has():
             err.msg_list.append(f'Parsing subscriptionv2 response for purchase token {obfuscate(purchase_token)} failed')
             return
 
-        assert details is not None
-
-        acknowledgement_state = details.acknowledgement_state
-        if acknowledgement_state == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
-            err.msg_list.append(f'Latest subscription state is already acknowledged')
-
-        if err.has():
-            return
-
-        tx_fields = get_subscription_plan_tx_fields(purchase_token, details, event_time_millis, subscription_notification_type, err)
-        handle_subscription_notification(tx_fields, sql_conn, err)
+        assert details is not None and isinstance(subscription_notification_type, SubscriptionNotificationType)
+        tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=purchase_token, details=details, err=err)
+        tx_event = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type, err)
+        handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
 
     elif is_voided_notification:
         purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
         validate_no_existing_purchase_token_error(purchase_token, sql_conn, err)
-
         if err.has():
             return
 
@@ -324,7 +287,8 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
         product_type = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
         refund_type = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
 
-        assert refund_type is not None and product_type is not None and len(purchase_token) > 0 and len(order_id) > 0
+        assert refund_type is not None and product_type is not None and len(purchase_token) > 0 and len(order_id) > 0 and \
+        isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)
         tx = VoidedPurchaseTxFields(
             purchase_token=purchase_token,
             order_id=order_id,
@@ -341,8 +305,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
         print(f'test payload was: {safe_dump_dict_keys_or_data(body)}')
 
 
-# NOTE: Enforce the presence of platform_config.py and the variables required for Google
-# integration
+# NOTE: Enforce the presence of platform_config.py and the variables required for Google integration
 try:
     import platform_config
     import_error = False
