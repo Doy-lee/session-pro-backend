@@ -13,24 +13,34 @@ import dataclasses
 import logging
 import math
 import typing_extensions
-
-import env
 import os
+
+# NOTE: Constants
+SECONDS_IN_DAY:        int     = 60 * 60 * 24
+MILLISECONDS_IN_DAY:   int     = 60 * 60 * 24 * 1000
+MILLISECONDS_IN_MONTH: int     = MILLISECONDS_IN_DAY * 30
+SECONDS_IN_MONTH:      int     = SECONDS_IN_DAY * 30
+MILLISECONDS_IN_YEAR:  int     = MILLISECONDS_IN_DAY * 365
+SECONDS_IN_YEAR:       int     = SECONDS_IN_DAY * 365
+
+# NOTE: Global variables
+DB_PATH                        = ''
+DB_PATH_IS_URI                 = False
+DEV_BACKEND_MODE               = False
+DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
+UNSAFE_LOGGING                 = False
+
+# NOTE: Restricted type-set, JSON obviously supports much more than this, but
+# our use-case only needs a small subset of it as of current so KISS.
+JSONPrimitive: typing.TypeAlias = str | int | float | bool | None
+JSONValue:     typing.TypeAlias = JSONPrimitive | dict[str, 'JSONValue'] | list['JSONValue']
+JSONObject:    typing.TypeAlias = dict[str, JSONValue]
+JSONArray:     typing.TypeAlias = list[JSONValue]
 
 class PaymentProvider(enum.IntEnum):
     Nil             = 0
     GooglePlayStore = 1
     iOSAppStore     = 2
-
-SECONDS_IN_DAY:      int       = 60 * 60 * 24
-MILLISECONDS_IN_DAY: int       = 60 * 60 * 24 * 1000
-MILLISECONDS_IN_MONTH: int     = MILLISECONDS_IN_DAY * 30
-SECONDS_IN_MONTH: int          = SECONDS_IN_DAY * 30
-MILLISECONDS_IN_YEAR: int      = MILLISECONDS_IN_DAY * 365
-SECONDS_IN_YEAR: int           = SECONDS_IN_DAY * 365
-DEV_BACKEND_MODE:    bool      = False
-DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
-WITH_PLATFORM_APPLE: bool      = False
 
 class LogFormatter(logging.Formatter):
     @typing_extensions.override
@@ -301,55 +311,21 @@ def extract_keys_recursive(d: dict[str, typing.Any]) -> str:
         return "FAILED TO EXTRACT KEYS"
 
 def safe_dump_dict_keys_or_data(d: dict[str, typing.Any] | None) -> str:
-    """
-    Safely dump a dictionary's information to a string for logging.
-
-    If `env.SESH_PRO_BACKEND_UNSAFE_LOGGING` is True, the entire dict
-    data will be dumped.
-    Else a list of top-level keys will be dumped.
-    """
+    """Dump the dict or just the keys if UNSAFE_LOGGING is set"""
     if d is None:
         return "None"
-    
-    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
+    if UNSAFE_LOGGING:
         return json.dumps(d)
-
     return "dictionary w/ keys: {" + extract_keys_recursive(d) + "}"
 
-def safe_dump_arbitrary_value_or_type(v) -> str:
-    """
-    Safely dump a value and its type to a string for logging.
-
-    If `env.SESH_PRO_BACKEND_UNSAFE_LOGGING` is True, the value
-    and type will be dumped.
-    Else just the type will be dumped.
-
-    Args:
-        v: Value to dump.
-
-    Returns:
-        String of value info in the format if unsafe logging:
-        "(type) value"
-        Else:
-        "type"
-    """
-    t = type(v)
-    if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
-        return f'({t}) {v}'
-    else:
-        return str(t)
-
+def safe_dump_arbitrary_value_or_type(v: typing.Any) -> str:  # pyright: ignore[reportAny]
+    """Dump the value or just its type if UNSAFE_LOGGING is set"""
+    result = f'({t}) {v}' if UNSAFE_LOGGING else f'{type(v)}'
+    return result
 
 def safe_get_dict_value_type(d: dict[str, typing.Any], key: str) -> str:
     v = d.get(key)
     return safe_dump_arbitrary_value_or_type(v)
-
-# NOTE: Restricted type-set, JSON obviously supports much more than this, but
-# our use-case only needs a small subset of it as of current so KISS.
-JSONPrimitive: typing.TypeAlias = str | int | float | bool | None
-JSONValue: typing.TypeAlias = JSONPrimitive | dict[str, 'JSONValue'] | list['JSONValue']
-JSONObject: typing.TypeAlias = dict[str, JSONValue]
-JSONArray: typing.TypeAlias = list[JSONValue]
 
 def json_dict_require_str(d: JSONObject, key: str, err: ErrorSink) -> str:
     result = ''

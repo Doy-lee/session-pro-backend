@@ -23,6 +23,13 @@ information from the DB.
 - `main.py`: Entry point of application that setups the basic environment for the
 database and then hands over control flow to Flask to handle HTTP requests.
 
+- `platform_apple.py`: iOS App Store layer that exposes a HTTP route to receive
+  subscription purchases and convert it into a Session Pro Proof.
+
+- `platform_google*.py`: Google Play Store layer that subscribes to Google
+services to witness subscription purchases and convert it into a Session Pro
+Proof.
+
 - `server.py`: HTTP layer that parses client requests and forwards them to backend
 layer and replies a response, if any.
 
@@ -32,23 +39,22 @@ layer and replies a response, if any.
 
 ## Options
 
-Set the following environment variables to customise the behaviour of the
-backend:
+Customise the runtime behaviour of the server by specifying a .INI file via the environment variable
+`SESH_PRO_BACKEND_DB_PATH=<path/to/ini/file.ini>` (due to some UWSGI restrictions).
 
-```
+```ini
+[base]
 # Set the location to store the database of the backend to
-SESH_PRO_BACKEND_DB_PATH=<path/to/db>.db (default: ./backend.db)
+db_path                      = <path/to/db>
 
 # If you wish to use an in-memory database or shared in-memory database (i.e.
 # 'file::memory') this flag must be set. See:
 #
 #   https://www.sqlite.org/inmemorydb.html
-#
-SESH_PRO_BACKEND_DB_PATH_IS_URI=[0|1] (default: 0)
+db_path_is_uri               = false
 
-# Pretty print the contents of the tables in the database to standard out and
-# exit
-SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)
+# Pretty print the contents of the tables in the database to standard out and exit
+print_tables                 = false
 
 # Start the server in developer mode, this is most likely only interesting if
 # you are developing locally. If the the DB hasn't been bootstrapped yet, this
@@ -60,7 +66,72 @@ SESH_PRO_BACKEND_PRINT_TABLES=[0|1] (default: 0)
 #
 # If the DB already exists this won't have any effect as it will not overwrite
 # the existing DB.
-SESH_PRO_BACKEND_DEV=[0|1] (default: 0)
+dev                          = false
+
+# Enable pulling subscription purchases from the iOS App Store. The [apple] section must be
+# configured if this is set
+with_platform_apple          = false
+
+# Enable pulling subscription purchases from the Google Play Store. The [google] section must be
+# configured if this is set
+with_platform_google         = false
+
+# By default the backend is configured to strip personal-identifying information (PII) from the
+# logs. Enabling this preserves all information in those logs. This should not be used in a
+# production use-case.
+unsafe_logging               = false
+
+# NOTE: The [apple] section and its fields are only required if `with_platform_apple` is defined
+[apple]
+
+# Platform specific strings, see:
+# https://github.com/apple/app-store-server-library-python?tab=readme-ov-file#api-usage
+key_id                       = <string: key_id>    # e.g. ABCDEFGHIJ
+issuer_id                    = <string: issuer_id> # e.g. aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+bundle_id                    = <string: bundle_id> # e.g. com.company.my_application
+
+key_path                     = <string: path/to/keys.p8>
+root_cert_path               = <string: path/to/AppleIncRootCertificate.cer>
+root_cert_ca_g2_path         = <string: path/to/AppleRootCA-G2.cer>
+root_cert_ca_g3_path         = <string: path/to/AppleRootCA-G3.cer>
+
+# Run in Apple's Sandbox environment, otherwise production
+sandbox_env                  = true
+
+# This is required if running in production mode (e.g. `sandbox_env` is false) otherwise we are
+# unable to startup Apple's library
+production_app_id            = <int: app_id>
+
+# NOTE: The [google] section and its fields are only required if `with_platform_google` is defined
+[google]
+package_name                 = <string: package_name> # e.g. com.company.my_application
+project_name                 = <string: project_name> # e.g. company-ABCDE
+
+# Name of the Google cloud subscription to listen to
+subscription_name            = session-pro-sub
+
+# Name of the product to handle Google Play notifications from
+subscription_product_id      = session_pro
+
+# Google application credentials .JSON file
+application_credentials_path = <path/to/credentials>.json
+```
+
+A subset of the options specifiable by the .INI file can be overridden using
+environment variables with the exception of `SESH_PRO_BACKEND_INI_PATH` which
+can only be specified as an environment variable.
+
+```
+# Path to load the .INI file and hence the options to customise the runtime behaviour
+SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
+
+# For the following options, see the .INI section for more information
+SESH_PRO_BACKEND_DB_PATH              = [0|1]
+SESH_PRO_BACKEND_DB_PATH_IS_URI       = [0|1]
+SESH_PRO_BACKEND_PRINT_TABLES         = [0|1]
+SESH_PRO_BACKEND_DEV                  = [0|1]
+SESH_PRO_BACKEND_WITH_PLATFORM_APPLE  = [0|1]
+SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE = [0|1]
 ```
 
 ## Build and run

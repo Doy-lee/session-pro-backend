@@ -1,24 +1,39 @@
 import json
 import logging
-import os
 import sqlite3
-import sys
+import threading
+import dataclasses
 
+from google.oauth2 import service_account
 from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
+import googleapiclient.discovery
 
 import backend
 import base
 from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
-from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, os_get_boolean_env, \
-    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, reflect_enum, obfuscate 
-
-import env
+from base import (
+    JSONObject,
+    handle_not_implemented,
+    json_dict_require_str,
+    json_dict_require_str_coerce_to_int,
+    safe_dump_dict_keys_or_data,
+    json_dict_optional_obj,
+    json_dict_require_int_coerce_to_enum,
+    reflect_enum,
+    obfuscate
+)
 
 import platform_google_api
 from platform_google_api import SubscriptionPlanEventTransaction, VoidedPurchaseTxFields 
 from platform_google_types import SubscriptionNotificationType, SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionV2Data, SubscriptionsV2SubscriptionStateType
 
+log = logging.Logger('GOOGLE')
+
+@dataclasses.dataclass
+class ThreadContext:
+    thread:      threading.Thread | None = None
+    kill_thread: bool                    = False
 
 def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> ProPlanType:
     assert base_plan_id.startswith("session-pro")
@@ -230,8 +245,8 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
     package_name = json_dict_require_str(body, "packageName", err)
     event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
-    if package_name != platform_config.google_package_name:
-        err.msg_list.append(f'{package_name} does not match google_package_name ({platform_config.google_package_name}) from the platform_config!')
+    if package_name != platform_google_api.package_name:
+        err.msg_list.append(f'{package_name} does not match google_package_name ({platform_google_api.package_name}) from the platform_config!')
 
     subscription = json_dict_optional_obj(body, "subscriptionNotification", err)
     one_time_product = json_dict_optional_obj(body, "oneTimeProductNotification", err)
@@ -272,7 +287,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
 
         assert details is not None and isinstance(subscription_notification_type, SubscriptionNotificationType)
         tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=purchase_token, details=details, err=err)
-        tx_event = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type, err)
+        tx_event = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type)
         handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
 
     elif is_voided_notification:
@@ -304,34 +319,13 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
     elif is_test_notification:
         print(f'test payload was: {safe_dump_dict_keys_or_data(body)}')
 
-
-# NOTE: Enforce the presence of platform_config.py and the variables required for Google integration
-try:
-    import platform_config
-    import_error = False
-    if not hasattr(platform_config, 'google_package_name') or not isinstance(platform_config.google_package_name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-        print("ERROR: Missing 'google_package_name' string in platform_config.py")
-        import_error = True
-
-    if import_error:
-        raise ImportError
-
-except ImportError:
-    print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
-      ```python
-      import pathlib
-      google_package_name: str      = '<google_package_name>'
-      ```
-    ''')
-    sys.exit(1)
-
 def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
     err = base.ErrorSink()
 
     body = json.loads(message.data)
     if isinstance(body, dict):
         error_tx = UserErrorTransaction()
-        with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
+        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
             handle_notification(body, error_tx, db.sql_conn, err)
             if err.has() and error_tx.google_payment_token != "":
                 # TODO: this logic should probably be inside of handle_notification
@@ -349,29 +343,47 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
         err_msg = '\n'.join(err.msg_list)
         logging.error(f'ERROR: {err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}\n')
     else:
-        print(f'ACK')
-        message.ack()
+        log.info(f'NO ACK')
+        # log.info(f'ACK')
+        # message.ack()
+        pass
 
-def entry_point():
-    # TODO: these env parsers are needed here if used as an entry point, they need to be removed if/when this changes
-    env.GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
+    # NOTE: Start pulling subscriber from Google endpoints with the streaming pull client
+    # By default this starts a thread pool to handle the messages and blocks on the future
+    while context.kill_thread == False:
+        with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
+            sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
+            future   = client.subscribe(subscription=sub_path, callback=callback)
+            while context.kill_thread == False:
+                try:
+                    future.result(timeout=0.5)
+                except TimeoutError:
+                    pass
 
-    if not env.GOOGLE_APPLICATION_CREDENTIALS:
-        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
+def init(sql_conn:                sqlite3.Connection,
+         project_name:            str,
+         package_name:            str,
+         subscription_name:       str,
+         subscription_product_id: str,
+         app_credentials_path:    str) -> ThreadContext:
+    # NOTE: Setup credentials global variable
+    assert platform_google_api.credentials       is None and \
+           platform_google_api.publisher_service is None and \
+           len(platform_google_api.package_name) == 0, \
+            "Initialise was called twice. Google uses callbacks with no way to pass in a per-callback context so it needs global variables"
 
-    if not os.path.exists(env.GOOGLE_APPLICATION_CREDENTIALS):
-        raise FileNotFoundError(f"Service account file not found: {env.GOOGLE_APPLICATION_CREDENTIALS}")
+    platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
+                                                                                            scopes=['https://www.googleapis.com/auth/androidpublisher'])
 
-    env.SESH_PRO_BACKEND_DB_PATH  = os.getenv('SESH_PRO_BACKEND_DB_PATH', './backend.db')
+    platform_google_api.publisher_service       = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)
+    platform_google_api.package_name            = package_name
+    platform_google_api.subscription_product_id = subscription_product_id
 
-    env.SESH_PRO_BACKEND_UNSAFE_LOGGING = os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
+    # NOTE: Flush errors
+    backend.delete_user_errors(sql_conn, base.PaymentProvider.GooglePlayStore)
 
-    with OpenDBAtPath(env.SESH_PRO_BACKEND_DB_PATH) as db:
-        backend.delete_user_errors(db.sql_conn, base.PaymentProvider.GooglePlayStore)
-
-    with pubsub_v1.SubscriberClient() as sub_client:
-        sub_path = sub_client.subscription_path(project='loki-5a81e', subscription='session-pro-sub')
-        future = sub_client.subscribe(subscription=sub_path, callback=callback)
-        future.result()
-
-#entry_point()
+    # NOTE: Setup thread for caller to use
+    result        = ThreadContext()
+    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
+    return result

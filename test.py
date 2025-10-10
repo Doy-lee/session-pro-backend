@@ -2506,8 +2506,6 @@ def test_google_platform_handle_notification(monkeypatch):
     err                       = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path="file:test_server_db_google_test?mode=memory&cache=shared", uri=True, err=err)
     
-    env.GOOGLE_APPLICATION_CREDENTIALS = ""
-    
     assert len(err.msg_list) == 0, f'{err.msg_list}'
     assert db.sql_conn
     

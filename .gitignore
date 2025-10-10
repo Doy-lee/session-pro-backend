@@ -3,3 +3,5 @@ data
 backend.db
 platform_config.py
 .idea
+*.ini
+*.log

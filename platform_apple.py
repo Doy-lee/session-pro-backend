@@ -2,7 +2,6 @@ import flask
 import json
 import typing
 import sqlite3
-import sys
 import dataclasses
 import pprint
 import datetime
@@ -80,8 +79,9 @@ def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> backend.Pr
         case 'com.getsession.org.pro_sub_3_months':
             result = backend.ProPlanType.ThreeMonth
         case _:
-            assert False, f'Invalid apple plan_id: {product_id}'
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {product_id}')
+            assert False, f'Invalid apple plan_id: {product_id}'
+
     return result
 
 def print_obj(obj: typing.Any) -> str:
@@ -803,75 +803,22 @@ def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: Ap
     except AppleAPIException as e:
         log.error(f'Failed to decode test notification: {e}')
 
-def init() -> Core:
-    # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
-    # integration
-    try:
-        import platform_config
-        import_error = False
-        if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing "apple_key_id" string in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing \'apple_issuer_id\' string in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing \'apple_bundle_id\' string in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing \'apple_key_bytes\' bytes in platform_config.py')
-            import_error = True
-
-        if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing \'apple_root_certs\' list of bytes in platform_config.py')
-            import_error = True
-
-        if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
-            log.error('Missing \'apple_root_certs\' list of bytes in platform_config.py')
-            import_error = True
-
-        if import_error:
-            raise ImportError
-
-    except ImportError:
-        log.error(''''platform_config.py' is not present or missing fields. Create and fill it e.g.:
-      ```python
-      import pathlib
-      apple_key_id: str      = '<Private Key ID>'
-      apple_issuer_id: str   = '<Key Issuer ID>'
-      apple_bundle_id: str   = 'com.your_organisation.your_project'
-      apple_key_bytes: bytes = pathlib.Path(f'<path/to/private_key>.p8').read_bytes()
-      apple_root_certs: list[bytes] = [
-          pathlib.Path(f'<path/to/AppleIncRootCertificate.cer>').read_bytes(),
-          pathlib.Path(f'<path/to/AppleRootCA-G2.cer>').read_bytes(),
-          pathlib.Path(f'<path/to/AppleRootCA-G3.cer>').read_bytes(),
-      ]
-      ```
-    ''')
-        sys.exit(1)
-
+def init(key_id: str, issuer_id: str, bundle_id: str, app_id: int | None, key_bytes: bytes, root_certs: list[bytes], sandbox_env: bool) -> Core:
     # NOTE: For version 2 notifications, it retries five times, at 1, 12, 24, 48, and 72 hours after the previous attempt.
     #
     #   https://developer.apple.com/documentation/appstoreservernotifications/responding-to-app-store-server-notifications
+    apple_env                = AppleEnvironment.SANDBOX if sandbox_env else AppleEnvironment.PRODUCTION
+    app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key = key_bytes,
+                                                               key_id      = key_id,
+                                                               issuer_id   = issuer_id,
+                                                               bundle_id   = bundle_id,
+                                                               environment = apple_env)
 
-    app_apple_id: int | None = None
-    apple_env                = AppleEnvironment.SANDBOX
-    if apple_env != AppleEnvironment.SANDBOX:
-        assert app_apple_id is not None, 'App ID must be set in a non-sandbox environment'
-
-    app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key=platform_config.apple_key_bytes,
-                                                               key_id=platform_config.apple_key_id,
-                                                               issuer_id=platform_config.apple_issuer_id,
-                                                               bundle_id=platform_config.apple_bundle_id,
-                                                               environment=apple_env)
-    signed_data_verifier        = AppleSignedDataVerifier     (root_certificates=platform_config.apple_root_certs,
-                                                               enable_online_checks=True,
-                                                               environment=apple_env,
-                                                               bundle_id=platform_config.apple_bundle_id,
-                                                               app_apple_id=app_apple_id)
+    signed_data_verifier        = AppleSignedDataVerifier(root_certificates    = root_certs,
+                                                          enable_online_checks = True,
+                                                          environment          = apple_env,
+                                                          bundle_id            = bundle_id,
+                                                          app_apple_id         = app_id)
 
     result = Core(app_store_server_api_client, signed_data_verifier)
     return result
