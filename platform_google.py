@@ -11,7 +11,7 @@ import backend
 import base
 from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
 from base import JSONObject, handle_not_implemented, json_dict_require_str, json_dict_require_str_coerce_to_int, os_get_boolean_env, \
-    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, dump_enum_details, obfuscate 
+    safe_dump_dict_keys_or_data, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, reflect_enum, obfuscate 
 
 import env
 
@@ -165,13 +165,13 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
             pass
 
         case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {reflect_enum(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_PAUSED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {reflect_enum(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
-            err.msg_list.append(f'Subscription notificationType {dump_enum_details(tx_event.notification)} is unsupported!')
+            err.msg_list.append(f'Subscription notificationType {reflect_enum(tx_event.notification)} is unsupported!')
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
@@ -196,11 +196,11 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
             pass
 
         case _:
-            err.msg_list.append(f'subscription notificationType is invalid: {dump_enum_details(tx_event.notification)}')
+            err.msg_list.append(f'subscription notificationType is invalid: {reflect_enum(tx_event.notification)}')
 
     if err.has():
         # Purchase token logging is included in the wrapper function
-        err.msg_list.append(f'Failed to handle {dump_enum_details(tx_event.notification)} for order_id {obfuscate(tx_payment.google_order_id) if len(tx_payment.google_order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {obfuscate(tx_payment.google_order_id) if len(tx_payment.google_order_id) > 0 else "N/A"}')
         return
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
@@ -211,16 +211,16 @@ def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
                     # TODO: investigate if we need to implement anything here
                     pass
                 case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
-                    err.msg_list.append(f'voided purchase refundType {dump_enum_details(tx.refund_type)} is unsupported!')
+                    err.msg_list.append(f'voided purchase refundType {reflect_enum(tx.refund_type)} is unsupported!')
                 case _:
-                    err.msg_list.append(f'voided purchase refundType is not valid: {dump_enum_details(tx.refund_type)}')
+                    err.msg_list.append(f'voided purchase refundType is not valid: {reflect_enum(tx.refund_type)}')
         case ProductType.PRODUCT_TYPE_ONE_TIME:
-            err.msg_list.append(f'voided purchase productType {dump_enum_details(tx.product_type)} is unsupported!')
+            err.msg_list.append(f'voided purchase productType {reflect_enum(tx.product_type)} is unsupported!')
         case _:
-            err.msg_list.append(f'voided purchase productType is not valid: {dump_enum_details(tx.product_type)}')
+            err.msg_list.append(f'voided purchase productType is not valid: {reflect_enum(tx.product_type)}')
 
     if err.has():
-        err.msg_list.append(f'Failed to handle {dump_enum_details(tx.refund_type) if tx.refund_type is not None else "N/A"} order_id {obfuscate(tx.order_id) if len(tx.order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {reflect_enum(tx.refund_type) if tx.refund_type is not None else "N/A"} order_id {obfuscate(tx.order_id) if len(tx.order_id) > 0 else "N/A"}')
 
 
 def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):

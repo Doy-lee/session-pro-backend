@@ -9,11 +9,13 @@ import datetime
 import enum
 import dataclasses
 import random
+import logging
 
 import base
 
-ZERO_BYTES32                 = bytes(32)
-BLAKE2B_DIGEST_SIZE          = 32
+ZERO_BYTES32        = bytes(32)
+BLAKE2B_DIGEST_SIZE = 32
+log                 = logging.Logger("BACKEND")
 
 class PaymentStatus(enum.IntEnum):
     Nil        = 0
@@ -657,7 +659,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
         if len(it.google_payment_token) != BLAKE2B_DIGEST_SIZE:
             err.msg_list.append(f'Unredeeemed payment #{index} token is not 32 bytes, was {len(it.google_payment_token)}')
         if it.plan == ProPlanType.Nil:
-               err.msg_list.append(f'Unredeemed payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
+               err.msg_list.append(f'Unredeemed payment #{index} had an invalid plan, received ({base.reflect_enum(it.plan)})')
 
     # NOTE: Wednesday, 27 August 2025 00:00:00, arbitrary date in the past that PRO cannot
     # possibly be before. We should update this to to the PRO release date.
@@ -717,7 +719,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
         # NOTE: Verify the plan, it should always be set once it enters the DB..
         if it.plan == ProPlanType.Nil:
-               err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.dump_enum_details(it.plan)})')
+               err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.reflect_enum(it.plan)})')
         base.verify_payment_provider(it.payment_provider, err)
 
         # NOTE: Check that the payment's redeemed ts is a reasonable value
@@ -1236,7 +1238,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             internal_payment_tx.apple_web_line_order_tx_id  = ''
             internal_payment_tx.apple_original_tx_id        = payment_tx.apple_tx_id
 
-        print(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
+        log.info(f'Registering payment in DEV mode: {internal_payment_tx}, redeemed_unix_ts_ms: {redeemed_unix_ts_ms}')
 
         already_exists = False
         for it in get_unredeemed_payments_list(sql_conn):

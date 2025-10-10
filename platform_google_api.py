@@ -6,7 +6,7 @@ from base import JSONObject, PaymentProvider, handle_not_implemented, json_dict_
     safe_dump_dict_keys_or_data, json_dict_require_obj, json_dict_require_array, json_dict_require_bool, \
     json_dict_require_str_coerce_to_enum, json_dict_optional_bool, safe_dump_arbitrary_value_or_type, \
     json_dict_optional_str, json_dict_optional_obj, json_dict_require_int_coerce_to_enum, \
-    dump_enum_details, obfuscate, validate_string_list
+    reflect_enum, obfuscate, validate_string_list
 
 import env
 from googleapiclient.discovery import build

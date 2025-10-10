@@ -22,11 +22,15 @@ import signal
 import types
 import nacl.signing
 import env
+import logging
+import logging.handlers
 
 import base
 import backend
 import server
 import platform_apple
+
+log = logging.Logger('PRO')
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
@@ -56,7 +60,7 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
         # Sleep on CV until sleep time has elapsed, or, we get woken up by SIG handler.
         while sleep_time_s > 0 and not stop_proof_expiry_thread:
             assert sleep_time_s <= base.SECONDS_IN_DAY
-            print(f'Sleeping for {base.format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
+            log.info(f'Sleeping for {base.format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
             with proof_expiry_thread_mutex:
                 _ = proof_expiry_thread_cv.wait(timeout=sleep_time_s)
             sleep_time_s = next_day_unix_ts_s - int(time.time())
@@ -73,16 +77,32 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
             if expire_result.success:
                 if not expire_result.already_done_by_someone_else:
-                    print('Daily pruning for {} completed on {}. Expired payments/revocations/users={}/{}/{}'.format(yesterday_str,
+                    log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users={}/{}/{}'.format(yesterday_str,
                                                                                                                      today_str,
                                                                                                                      expire_result.payments,
                                                                                                                      expire_result.revocations,
                                                                                                                      expire_result.users))
             else:
-                print('Dailing pruning for {} failed due to an unknown DB error'.format(yesterday_str))
+                log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
 def entry_point() -> flask.Flask:
-    # Get arguments from environment
+    if 1: # NOTE: Setup logger
+        console_logger = logging.StreamHandler()
+        file_logger    = logging.handlers.RotatingFileHandler(filename='session_backend_pro.log', maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
+
+        log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+        console_logger.setFormatter(log_formatter)
+        file_logger.setFormatter(log_formatter)
+
+        # NOTE: Equip handlers
+        log.addHandler(console_logger)
+        log.addHandler(file_logger)
+
+        # NOTE: Setup backend logger
+        backend.log.addHandler(console_logger)
+        backend.log.addHandler(file_logger)
+
+    # NOTE: Get arguments from environment
     db_path:             str            = os.getenv('SESH_PRO_BACKEND_DB_PATH',                      './backend.db')
     db_path_is_uri:      bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',      False)
     print_tables:        bool           = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',        False)
@@ -92,63 +112,63 @@ def entry_point() -> flask.Flask:
     # TODO: Move into base or move all the other environment variables into env
     env.SESH_PRO_BACKEND_UNSAFE_LOGGING = base.os_get_boolean_env('SESH_PRO_BACKEND_UNSAFE_LOGGING', False)
 
-    # Ensure the path is setup for writing the database
+    # NOTE: Ensure the path is setup for writing the database
     try:
         pathlib.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        print(f'Failed to create directory for {db_path}: {e}')
+        log.error(f'Failed to create directory for {db_path}: {e}')
         os._exit(1)
 
-    # A developer backend generates a deterministic key for testing purposes
+    # NOTE: A developer backend generates a deterministic key for testing purposes
     backend_key: nacl.signing.SigningKey | None = None
     if dev_backend:
         base.DEV_BACKEND_MODE          = True
         DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
-    # Open the DB (create tables if necessary)
+    # NOTE: Open the DB (create tables if necessary)
     err = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path=str(db_path), uri=db_path_is_uri, err=err, backend_key=backend_key)
     if len(err.msg_list) > 0:
-        print(f"{err.msg_list}")
+        log.error(f"{err.msg_list}")
         os._exit(1)
 
-    # Sanity check dev mode
+    # NOTE: Sanity check dev mode
     if base.DEV_BACKEND_MODE:
         assert db.sql_conn
         runtime_row: backend.RuntimeRow = backend.get_runtime(db.sql_conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
-    # Dump some startup diagnostics
+    # NOTE: Dump some startup diagnostics
     assert db.sql_conn is not None
     info_string: str = backend.db_info_string(sql_conn=db.sql_conn, db_path=db.path, err=err)
     if len(err.msg_list) > 0:
-        print(f"{err.msg_list}")
+        log.error(f"{err.msg_list}")
         os._exit(1)
 
     if dev_backend:
-        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
-        print("### @@@ !!!                  !!! @@@ ###")
-        print("### @@@ !!! Dev Mode Enabled !!! @@@ ###")
-        print("### @@@ !!!                  !!! @@@ ###")
-        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
+        log.info("######################################")
+        log.info("###                                ###")
+        log.info("###        Dev Mode Enabled        ###")
+        log.info("###                                ###")
+        log.info("######################################")
 
-    print(f'Session Pro Backend\n{info_string}')
+    log.info(f'Session Pro Backend\n{info_string}')
 
     if env.SESH_PRO_BACKEND_UNSAFE_LOGGING or with_platform_apple:
-        print(f'  Features:')
+        log.info(f'  Features:')
         if env.SESH_PRO_BACKEND_UNSAFE_LOGGING:
-            print(f'    Unsafe logging enabled (this must NOT be used in production)')
+            log.info(f'    Unsafe logging enabled (this must NOT be used in production)')
         if with_platform_apple:
-            print(f'    Platform: Apple iOS App Store notification handling is enabled')
+            log.info(f'    Platform: Apple iOS App Store notification handling is enabled')
 
     if dev_backend:
-        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
-        print("### @@@ !!!                  !!! @@@ ###")
-        print("### @@@ !!! Dev Mode Enabled !!! @@@ ###")
-        print("### @@@ !!!                  !!! @@@ ###")
-        print("### @@@ !!! $$$$$$$$$$$$$$$$ !!! @@@ ###")
+        log.info("######################################")
+        log.info("###                                ###")
+        log.info("###        Dev Mode Enabled        ###")
+        log.info("###                                ###")
+        log.info("######################################")
 
     # Handle printing of the DB to standard out if requested
     if print_tables:
@@ -227,8 +247,7 @@ def entry_point() -> flask.Flask:
                                       db_path_is_uri=db_path_is_uri,
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
 
-
-    # Enable Apple iOS App Store notifications routes on the server if enabled
+    # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled
     if with_platform_apple:
         base.WITH_PLATFORM_APPLE  = True
         core: platform_apple.Core = platform_apple.init()

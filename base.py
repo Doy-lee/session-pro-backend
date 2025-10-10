@@ -10,7 +10,9 @@ import datetime
 import typing
 import enum
 import dataclasses
-from math import floor
+import logging
+import math
+import typing_extensions
 
 import env
 import os
@@ -29,6 +31,13 @@ SECONDS_IN_YEAR: int           = SECONDS_IN_DAY * 365
 DEV_BACKEND_MODE:    bool      = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 WITH_PLATFORM_APPLE: bool      = False
+
+class LogFormatter(logging.Formatter):
+    @typing_extensions.override
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
+        dt     = datetime.datetime.fromtimestamp(record.created)
+        result = dt.strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
+        return result
 
 @dataclasses.dataclass
 class ErrorSink:
@@ -235,31 +244,19 @@ def format_seconds(duration_s: int):
 
 def obfuscate(val: str) -> str:
     """
-    Obfuscate a string to contain a partial first and last chunk of the
-    original string. If the string is less than 3 characters, the original
-    string is retuned, otherwise the first and last 30% are returned.
-    
-    Args:
-        val (str): String to obfuscate
-    
-    Returns:
-        str: The obfuscated string
+    Obfuscate a string by masking the contents preserving the prefix and suffix. If the string is
+    less than 3 characters, the original string is retuned.
     """
     if len(val) < 3:
         return val
-    n_ends = max(floor(len(val) * 0.3), 1)
+    n_ends = max(math.floor(len(val) * 0.3), 1)
     return f"{val[:n_ends]}…{val[-n_ends:]}"
 
-def dump_enum_details(enum_value: enum.Enum) -> str:
-    """
-    Convert an Enum instance to its string name for logging, including
-    its original value for integer enums.
-    """
+def reflect_enum(enum_value: enum.Enum) -> str:
     name = enum_value.name
     value = None
     if isinstance(enum_value, enum.IntEnum):
         value = enum_value.value
-
     return f'{name} ({value})' if value is not None else name
 
 def _extract_keys_format_value(value):

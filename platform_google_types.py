@@ -2,7 +2,8 @@ import dataclasses
 import traceback
 import typing
 from enum import IntEnum, StrEnum
-from typing import Optional, override
+from typing import Optional
+import typing_extensions
 
 from google.protobuf.internal.well_known_types import Timestamp
 
@@ -23,7 +24,7 @@ class GoogleTimestamp(Timestamp):
         except Exception as e:
             err.msg_list.append(f'Failed to parse timestamp "{rfc3339_timestamp}": {traceback.format_exc()}')
 
-    @override
+    @typing_extensions.override
     def __repr__(self):
         return f"GoogleTimestamp('{self.rfc3339}', unix={self.unix_seconds})"
 
@@ -45,7 +46,7 @@ class GoogleDuration():
         except Exception as e:
             err.msg_list.append(f'Failed to parse duration "{iso8601_duration}: {traceback.format_exc()}"')
 
-    @override
+    @typing_extensions.override
     def __repr__(self):
         return f"GoogleDuration('{self.iso8601}', ms={self.milliseconds})"
 

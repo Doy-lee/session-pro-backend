@@ -1,14 +1,12 @@
 import flask
 import json
 import typing
-import base
-import backend
 import sqlite3
 import sys
-import time
 import dataclasses
 import pprint
-from datetime import datetime
+import datetime
+import logging
 
 from appstoreserverlibrary.models.SendTestNotificationResponse  import SendTestNotificationResponse  as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse import CheckTestNotificationResponse as AppleCheckTestNotificationResponse
@@ -34,6 +32,9 @@ from appstoreserverlibrary.signed_data_verifier import (
 
 import base
 import server
+import backend
+
+log = logging.Logger('APPLE')
 
 @dataclasses.dataclass
 class Core:
@@ -735,11 +736,11 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
          decoded_notification.body.notificationType == AppleNotificationV2.RENEWAL_EXTENSION:
 
          if decoded_notification.body.notificationType == AppleNotificationV2.EXTERNAL_PURCHASE_TOKEN:
-            err.msg_list.append(f'Received Apple notification "{decoded_notification.body.notificationType}", but we do not support 3rd party stores through Apple')
+            err.msg_list.append(f'Received notification "{decoded_notification.body.notificationType}", but we do not support 3rd party stores through Apple')
          elif decoded_notification.body.notificationType == AppleNotificationV2.RENEWAL_EXTENSION or decoded_notification.body.notificationType == AppleNotificationV2.RENEWAL_EXTENDED:
-            err.msg_list.append(f'Received Apple notification "{decoded_notification.body.notificationType}", but we don\'t handle issueing the extension of a subscription renewal (e.g.: to compensate for service outages)')
+            err.msg_list.append(f'Received notification "{decoded_notification.body.notificationType}", but we don\'t handle issuing the extension of a subscription renewal (e.g.: to compensate for service outages)')
     else:
-        err.msg_list.append(f'Received Apple notification {decoded_notification.body.notificationType} that wasn\'t explicitly handled')
+        err.msg_list.append(f'Received notification {decoded_notification.body.notificationType} that wasn\'t explicitly handled')
 
     result = len(err.msg_list) > 0
     return result
@@ -749,13 +750,13 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 def notifications_apple_app_connect_sandbox() -> flask.Response:
     get: server.GetJSONFromFlaskRequest = server.get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        print(f'Failed to parse Apple notification as JSON: {flask.request.data}')
+        log.error(f'Failed to parse notification as JSON: {flask.request.data}')
         flask.abort(500)
 
-    print(f'Received Apple notification: {json.dumps(get.json, indent=1)}')
+    log.debug(f'Received notification: {json.dumps(get.json, indent=1)}')
     with open('sesh_pro_backend_debug.log', 'a') as file:
-        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        _ = file.write(f'{ts}: Received Apple notification: {get.json}\n')
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Received notification: {get.json}\n')
 
     assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
@@ -763,18 +764,18 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     core = typing.cast(Core, flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY])
 
     if 'signedPayload' not in get.json:
-        print(f'Failed to parse Apple notification, signedPayload key was missing: {base.safe_dump_dict_keys_or_data(get.json)}')
+        log.error(f'Failed to parse notification, signedPayload key was missing: {base.safe_dump_dict_keys_or_data(get.json)}')
         flask.abort(500)
 
     signed_payload = get.json['signedPayload']
     if not isinstance(signed_payload, str):
-        print(f'Failed to parse Apple notification, signed payload was not a string: {type(signed_payload)}')
+        log.error(f'Failed to parse notification, signed payload was not a string: {type(signed_payload)}')
         flask.abort(500)
 
     resp: AppleResponseBodyV2DecodedPayload = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
     with open('sesh_pro_backend_debug.log', 'a') as file:
-        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        _ = file.write(f'{ts}: Decoded Apple notification: {resp}\n')
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _ = file.write(f'{ts}: Decoded notification: {resp}\n')
 
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
@@ -782,7 +783,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         _ = handle_notification(decoded_notification, db.sql_conn, err)
 
     if err.has():
-        print("ERROR: {'\n'.join(err.msg_list)}")
+        log.error('Failed to parse notification ' + '\n'.join(err.msg_list))
         flask.abort(500)
     else:
         return flask.Response(status=200)
@@ -790,17 +791,17 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
 def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
     try:
         response_test_notif: AppleSendTestNotificationResponse = client.request_test_notification()
-        print('Send test notif: ', response_test_notif)
+        log.debug('Send test notif: ', response_test_notif)
 
         notification_token = response_test_notif.testNotificationToken
         if notification_token:
             response_check_test_notif: AppleCheckTestNotificationResponse = client.get_test_notification_status(test_notification_token=notification_token)
-            print('Check test notif: ', response_check_test_notif)
+            log.debug('Check test notif: ', response_check_test_notif)
             if response_check_test_notif.signedPayload:
                 decoded_response: AppleResponseBodyV2DecodedPayload = verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
-                print('Decoded test response: ', decoded_response)
+                log.info('Decoded test response: ', decoded_response)
     except AppleAPIException as e:
-        print(e)
+        log.error(f'Failed to decode test notification: {e}')
 
 def init() -> Core:
     # NOTE: Enforce the presence of platform_config.py and the variables required for Apple
@@ -809,34 +810,34 @@ def init() -> Core:
         import platform_config
         import_error = False
         if not hasattr(platform_config, 'apple_key_id') or not isinstance(platform_config.apple_key_id, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing "apple_key_id" string in platform_config.py')
+            log.error('Missing "apple_key_id" string in platform_config.py')
             import_error = True
 
         if not hasattr(platform_config, 'apple_issuer_id')  or not isinstance(platform_config.apple_issuer_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_issuer_id\' string in platform_config.py')
+            log.error('Missing \'apple_issuer_id\' string in platform_config.py')
             import_error = True
 
         if not hasattr(platform_config, 'apple_bundle_id')  or not isinstance(platform_config.apple_bundle_id,  str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_bundle_id\' string in platform_config.py')
+            log.error('Missing \'apple_bundle_id\' string in platform_config.py')
             import_error = True
 
         if not hasattr(platform_config, 'apple_key_bytes')  or not isinstance(platform_config.apple_key_bytes,  bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_key_bytes\' bytes in platform_config.py')
+            log.error('Missing \'apple_key_bytes\' bytes in platform_config.py')
             import_error = True
 
         if not hasattr(platform_config, 'apple_root_certs') or not isinstance(platform_config.apple_root_certs, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            log.error('Missing \'apple_root_certs\' list of bytes in platform_config.py')
             import_error = True
 
         if not all(isinstance(item, bytes) for item in platform_config.apple_root_certs): # pyright: ignore[reportUnnecessaryIsInstance]
-            print('ERROR: Missing \'apple_root_certs\' list of bytes in platform_config.py')
+            log.error('Missing \'apple_root_certs\' list of bytes in platform_config.py')
             import_error = True
 
         if import_error:
             raise ImportError
 
     except ImportError:
-        print('''ERROR: 'platform_config.py' is not present or missing fields. Create and fill it e.g.:
+        log.error(''''platform_config.py' is not present or missing fields. Create and fill it e.g.:
       ```python
       import pathlib
       apple_key_id: str      = '<Private Key ID>'
