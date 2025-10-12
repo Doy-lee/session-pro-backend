@@ -28,7 +28,7 @@ import enum
 import sqlite3
 import traceback
 
-import env
+import platform_google
 from platform_google import handle_notification
 import platform_google_api
 from platform_google_types import GoogleDuration, SubscriptionProductDetails
@@ -2508,6 +2508,13 @@ def test_google_platform_handle_notification(monkeypatch):
     
     assert len(err.msg_list) == 0, f'{err.msg_list}'
     assert db.sql_conn
+
+    _ = platform_google.init(sql_conn                = db.sql_conn,
+                             project_name            = 'loki-5a81e',
+                             package_name            = 'network.loki.messenger',
+                             subscription_name       = 'session-pro-sub',
+                             subscription_product_id = 'session_pro',
+                             app_credentials_path    = None)
     
     # Setup local flask instance
     flask_app:    flask.Flask     = server.init(testing_mode=True,

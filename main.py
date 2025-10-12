@@ -241,6 +241,14 @@ def entry_point() -> flask.Flask:
         backend.log.addHandler(console_logger)
         backend.log.addHandler(file_logger)
 
+        # NOTE: Setup google logger
+        platform_google.log.addHandler(console_logger)
+        platform_google.log.addHandler(file_logger)
+
+        # NOTE: Setup apple logger
+        platform_apple.log.addHandler(console_logger)
+        platform_apple.log.addHandler(file_logger)
+
     # NOTE: Parse arguments from .INI if present and environment variables, then setup global variables
     err = base.ErrorSink()
     parsed_args: ParsedArgs  = parse_args(err);

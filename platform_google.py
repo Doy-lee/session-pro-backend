@@ -246,7 +246,7 @@ def handle_notification(body: JSONObject, user_error_tx: UserErrorTransaction, s
     event_time_millis = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
     if package_name != platform_google_api.package_name:
-        err.msg_list.append(f'{package_name} does not match google_package_name ({platform_google_api.package_name}) from the platform_config!')
+        err.msg_list.append(f'{package_name} does not match google_package_name ({platform_google_api.package_name}) from the .INI file!')
 
     subscription = json_dict_optional_obj(body, "subscriptionNotification", err)
     one_time_product = json_dict_optional_obj(body, "oneTimeProductNotification", err)
@@ -366,17 +366,18 @@ def init(sql_conn:                sqlite3.Connection,
          package_name:            str,
          subscription_name:       str,
          subscription_product_id: str,
-         app_credentials_path:    str) -> ThreadContext:
+         app_credentials_path:    str | None) -> ThreadContext:
     # NOTE: Setup credentials global variable
     assert platform_google_api.credentials       is None and \
            platform_google_api.publisher_service is None and \
            len(platform_google_api.package_name) == 0, \
             "Initialise was called twice. Google uses callbacks with no way to pass in a per-callback context so it needs global variables"
 
-    platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
-                                                                                            scopes=['https://www.googleapis.com/auth/androidpublisher'])
+    if app_credentials_path:
+        platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
+                                                                                                scopes=['https://www.googleapis.com/auth/androidpublisher'])
+        platform_google_api.publisher_service = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)
 
-    platform_google_api.publisher_service       = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)
     platform_google_api.package_name            = package_name
     platform_google_api.subscription_product_id = subscription_product_id
 
