@@ -779,7 +779,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
 
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
-    with backend.OpenDBAtPath(db_path='path', uri=True) as db:
+    with server.open_db_from_flask_request_context(flask.current_app) as db:
         _ = handle_notification(decoded_notification, db.sql_conn, err)
 
     if err.has():
