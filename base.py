@@ -137,6 +137,11 @@ def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
             err.msg_list.append(f'{label} was not valid hex: {e}')
     return result
 
+def readable_unix_ts_ms(unix_ts_ms: int) -> str:
+    date_str = datetime.datetime.fromtimestamp(unix_ts_ms/1000.0).strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
+    result   = f'{unix_ts_ms} ({date_str})'
+    return result
+
 def print_unicode_table(rows: list[list[str]]) -> None:
     # Calculate maximum width for each column
     col_widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
@@ -206,9 +211,7 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
                     elif isinstance(value, bytes):
                         content.append(value.hex())
                     elif col.endswith('unix_ts_ms'):
-                        timestamp = int(value)
-                        date_str  = datetime.datetime.fromtimestamp(timestamp/1000).strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
-                        content.append(f'{timestamp} ({date_str})')
+                        content.append(readable_unix_ts_ms(int(value)))
                     elif col.endswith('_s'):
                         seconds = int(value)
                         days    = seconds / SECONDS_IN_DAY
