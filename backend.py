@@ -386,10 +386,13 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     _ = tx.cursor.execute('''
         SELECT   expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing
         FROM     payments
-        WHERE    master_pkey = ? AND status = ?
+        WHERE    master_pkey = ? AND status >= ? AND status <= ?
         ORDER BY expiry_unix_ts_ms DESC
         LIMIT    1
-    ''', (bytes(master_pkey), int(base.PaymentStatus.Redeemed.value),))
+    ''', (bytes(master_pkey),
+          int(base.PaymentStatus.Redeemed.value),
+          int(base.PaymentStatus.Revoked.value),
+          ))
 
     row = tx.cursor.fetchone()
     row = typing.cast(tuple[int, int, int] | None, row)
@@ -1321,12 +1324,15 @@ def expire_by_unix_ts_ms(tx: base.SQLTransaction, unix_ts_ms: int) -> set[nacl.s
     _ = tx.cursor.execute(f'''
         UPDATE    payments
         SET       status = ?
-        WHERE     ? >= expiry_unix_ts_ms
+        WHERE     ? >= expiry_unix_ts_ms AND (status = ? OR status = ?)
         RETURNING master_pkey
     ''', (# SET values
           int(base.PaymentStatus.Expired.value),
           # WHERE values
-          unix_ts_ms,))
+          unix_ts_ms,
+          int(base.PaymentStatus.Unredeemed.value),
+          int(base.PaymentStatus.Redeemed.value),
+          ))
 
     result: set[nacl.signing.VerifyKey] = set()
     rows = typing.cast(collections.abc.Iterator[tuple[bytes | None]], tx.cursor)
@@ -1379,7 +1385,20 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
             # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
             # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
             # proofs that aren't going to self-expire by the end of the day.
-            revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
+            #
+            # For different platforms in their testing environments, they have different timespans
+            # for a day, for example in Google 1 day is 10s. We handle that explicitly here.
+            if base.PLATFORM_TESTING_ENV:
+                match revocation.payment_provider:
+                    case base.PaymentProvider.Nil:
+                        revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
+                    case base.PaymentProvider.GooglePlayStore:
+                        # NOTE: In google 1 day is 10s
+                        revoke_unix_ts_ms_next_day = (revocation.revoke_unix_ts_ms + (10*1000 - 1)) // 10*1000 * 10*1000
+                    case base.PaymentProvider.iOSAppStore:
+                        revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
+            else:
+                revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
 
             # NOTE: A payment will not have a master pkey associated with it if the user hasn't
             # redeemed it yet

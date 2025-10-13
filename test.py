@@ -2802,7 +2802,7 @@ def test_google_platform_handle_notification(monkeypatch):
     res_items = base.json_dict_require_array(result, "items", err)
     assert not err.has()
     assert res_auto_renewing == False
-    assert res_latest_expiry_unix_ts == 0
+    assert res_latest_expiry_unix_ts == expiry_time_unix_ms
     assert res_pro_status == server.UserProStatus.Expired
     assert len(res_items) == 1
     item = res_items[0]

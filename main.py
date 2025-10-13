@@ -46,6 +46,7 @@ class ParsedArgs:
     unsafe_logging:                      bool        = False
     with_platform_apple:                 bool        = False
     with_platform_google:                bool        = False
+    platform_testing_env:                bool        = False
 
     apple_key_id:                        str         = ''
     apple_issuer_id:                     str         = ''
@@ -143,6 +144,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',          fallback=False)
         result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',     fallback=False)
         result.with_platform_google                = base_section.getboolean(option='with_platform_google',    fallback=False)
+        result.platform_testing_env                = base_section.getboolean(option='platform_testing_env',    fallback=False)
 
         if result.with_platform_apple:
             if 'apple' in ini_parser:
@@ -177,6 +179,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.dev                  = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
     result.with_platform_apple  = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
     result.with_platform_google = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
+    result.with_platform_google = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -197,6 +200,11 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         if not result.apple_sandbox_env:
             if result.apple_production_app_id is None:
                 err.msg_list.append('Platform Apple was enabled in production mode (e.g. not sandbox mode) but the production_app_id was not specified')
+
+        if result.apple_sandbox_env:
+            if result.platform_testing_env == False:
+                log.warning('Platform Apple was enabled in sandbox mode but platform_testing_env was not set to true. You want to set this to true, overriding the flag to true')
+                result.platform_testing_env = True
 
         if not err.has():
             try:
@@ -250,11 +258,12 @@ def entry_point() -> flask.Flask:
 
     # NOTE: Parse arguments from .INI if present and environment variables, then setup global variables
     err = base.ErrorSink()
-    parsed_args: ParsedArgs  = parse_args(err);
-    base.UNSAFE_LOGGING      = parsed_args.unsafe_logging
-    base.DEV_BACKEND_MODE    = parsed_args.dev
-    base.DB_PATH             = parsed_args.db_path
-    base.DB_PATH_IS_URI      = parsed_args.db_path_is_uri
+    parsed_args: ParsedArgs   = parse_args(err);
+    base.UNSAFE_LOGGING       = parsed_args.unsafe_logging
+    base.DEV_BACKEND_MODE     = parsed_args.dev
+    base.DB_PATH              = parsed_args.db_path
+    base.DB_PATH_IS_URI       = parsed_args.db_path_is_uri
+    base.PLATFORM_TESTING_ENV = parsed_args.platform_testing_env
     if err.has():
         log.error(f'Failed to startup, invalid configuration options:\n  ' + '\n  '.join(err.msg_list))
         sys.exit(1)

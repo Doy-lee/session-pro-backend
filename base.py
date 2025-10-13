@@ -29,6 +29,7 @@ DB_PATH_IS_URI                 = False
 DEV_BACKEND_MODE               = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 UNSAFE_LOGGING                 = False
+PLATFORM_TESTING_ENV           = False
 
 # NOTE: Restricted type-set, JSON obviously supports much more than this, but
 # our use-case only needs a small subset of it as of current so KISS.
