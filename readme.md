@@ -76,6 +76,15 @@ with_platform_apple          = false
 # configured if this is set
 with_platform_google         = false
 
+# Turn this on if you intend to pull test-notifications from Google/Apple and work with subscription
+# payments that have a modified duration (e.g. Google modifies 1 day subscription to be 10s). This
+# will modify some functionality with event timestamps to ensure that these timespans are respected
+#
+# One example is rounding timestamps to Google/Apple's modified timespan to determine whether or not
+# a revocation overlaps with the expiry of a payment. If there's an overlap the backend can skip
+# issuing a revocation (which is an expensive operation).
+platform_testing_environment = false
+
 # By default the backend is configured to strip personal-identifying information (PII) from the
 # logs. Enabling this preserves all information in those logs. This should not be used in a
 # production use-case.

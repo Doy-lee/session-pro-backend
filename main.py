@@ -317,6 +317,8 @@ def entry_point() -> flask.Flask:
         log.info(f'    DB loaded from: {db.path}{label}')
     if parsed_args.unsafe_logging:
         log.info(f'    Unsafe logging enabled (this must NOT be used in production)')
+    if parsed_args.platform_testing_env:
+        log.info(f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)')
     if parsed_args.with_platform_apple:
         label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
         log.info(f'    Platform: {label} Apple iOS App Store notification handling enabled')
