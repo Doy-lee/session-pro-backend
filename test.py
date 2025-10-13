@@ -2504,6 +2504,13 @@ def test_platform_apple():
 
 
 def test_google_platform_handle_notification(monkeypatch):
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True) as ctx:
+        _ = platform_google.init(sql_conn        = ctx.sql_conn,
+                         project_name            = 'loki-5a81e',
+                         package_name            = 'network.loki.messenger',
+                         subscription_name       = 'session-pro-sub',
+                         subscription_product_id = 'session_pro',
+                         app_credentials_path    = None)
     err                       = base.ErrorSink()
     monkeypatch.setattr(
         "platform_google_api.fetch_subscription_details_for_base_plan_id",
@@ -2709,7 +2716,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert not err.has()
         assert res_auto_renewing == auto_renew
         revoked = payment_status == base.PaymentStatus.Revoked
-        assert res_latest_expiry_unix_ts == (tx.expiry_unix_ts_ms if not revoked else 0)
+        assert res_latest_expiry_unix_ts == tx.expiry_unix_ts_ms
         assert res_pro_status == pro_status
         assert len(res_items) == user_ctx.payments
         item = res_items[-1]
@@ -2896,7 +2903,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """4. User cancels"""
         tx = test_notification(cancel, ctx)
-        assert_pro_status(tx=tx, pro_status=server.UserProStatus.Active, payment_status=backend.PaymentStatus.Redeemed, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """5. Subscription expires"""
         # tx = test_notification(expire, ctx)
