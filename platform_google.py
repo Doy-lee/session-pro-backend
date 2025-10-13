@@ -11,8 +11,9 @@ import googleapiclient.discovery
 
 import backend
 import base
-from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, ProPlanType, UserErrorTransaction
+from backend import OpenDBAtPath, PaymentProviderTransaction, AddRevocationItem, UserErrorTransaction
 from base import (
+    ProPlan,
     JSONObject,
     handle_not_implemented,
     json_dict_require_str,
@@ -35,19 +36,19 @@ class ThreadContext:
     thread:      threading.Thread | None = None
     kill_thread: bool                    = False
 
-def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> ProPlanType:
+def get_pro_plan_type_from_google_base_plan_id(base_plan_id: str, err: base.ErrorSink) -> ProPlan:
     assert base_plan_id.startswith("session-pro")
     match base_plan_id:
         case "session-pro-1-month":
-            return ProPlanType.OneMonth
+            return ProPlan.OneMonth
         case "session-pro-3-months":
-            return ProPlanType.ThreeMonth
+            return ProPlan.ThreeMonth
         case "session-pro-12-months":
-            return ProPlanType.TwelveMonth
+            return ProPlan.TwelveMonth
         case _:
             assert False, f'Invalid google base_plan_id: {base_plan_id}'
             err.msg_list.append(f'Invalid google base_plan_id, unable to determine plan variant: {base_plan_id}')
-            return ProPlanType.Nil
+            return ProPlan.Nil
 
 
 def add_user_unredeemed_payment(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):

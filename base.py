@@ -42,6 +42,24 @@ class PaymentProvider(enum.IntEnum):
     GooglePlayStore = 1
     iOSAppStore     = 2
 
+class PaymentStatus(enum.IntEnum):
+    Nil        = 0
+    Unredeemed = 1
+    Redeemed   = 2
+    Expired    = 3
+    Revoked    = 4
+
+class ProPlan(enum.Enum):
+    """
+    Universal Pro Plan Identifier.
+    This enum is stored as an int in the database, existing entries must
+    not be reordered or changed.
+    """
+    Nil             = 0
+    OneMonth        = 1
+    ThreeMonth      = 2
+    TwelveMonth     = 3
+
 class LogFormatter(logging.Formatter):
     @typing_extensions.override
     def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
@@ -205,6 +223,14 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
                             content.append(f'iOS App Store ({value_int})')
                         else:
                             content.append(f'Unknown ({value_int})')
+                    elif table_name == 'payments' and col == 'status':
+                        value_enum = PaymentStatus(value)
+                        content.append(f'{value_enum.name} ({value_enum.value})')
+                    elif table_name == 'payments' and col == 'plan':
+                        value_enum = ProPlan(value)
+                        content.append(f'{value_enum.name} ({value_enum.value})')
+                    elif table_name == 'payments' and col == 'auto_renewing':
+                        content.append('Yes' if value else 'No' + f' ({value})')
                     else:
                         content.append(str(value))
                 table_str.contents.append(content)

@@ -71,13 +71,13 @@ GRACE_PERIOD_DURATION_MS:                            int = 60 * 60 * 1 * 1000
 # into an app that accepts Apple iOS App Store subscription notifications
 flask_blueprint                                     = flask.Blueprint('session-pro-backend-apple', __name__)
 
-def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> backend.ProPlanType:
-    result = backend.ProPlanType.Nil
+def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> base.ProPlan:
+    result = base.ProPlan.Nil
     match product_id:
         case 'com.getsession.org.pro_sub':
-            result = backend.ProPlanType.OneMonth
+            result = base.ProPlan.OneMonth
         case 'com.getsession.org.pro_sub_3_months':
-            result = backend.ProPlanType.ThreeMonth
+            result = base.ProPlan.ThreeMonth
         case _:
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {product_id}')
             assert False, f'Invalid apple plan_id: {product_id}'
@@ -251,7 +251,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                 # NOTE: Extract plan
                 payment_tx: backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
-                pro_plan:   backend.ProPlanType                = pro_plan_from_product_id(tx.productId, err)
+                pro_plan:   base.ProPlan                   = pro_plan_from_product_id(tx.productId, err)
 
                 # NOTE: Process notification
                 with base.SQLTransaction(sql_conn) as sql_tx:
@@ -319,8 +319,8 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                     err.msg_list.append(f'{decoded_notification.body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
                 # NOTE: Extract plan
-                pro_plan:  backend.ProPlanType = pro_plan_from_product_id(tx.productId, err)
-                payment_tx                     = payment_tx_from_apple_jws_transaction(tx, err)
+                pro_plan:  base.ProPlan = pro_plan_from_product_id(tx.productId, err)
+                payment_tx                  = payment_tx_from_apple_jws_transaction(tx, err)
 
                 # NOTE: Extract components
                 if len(err.msg_list) == 0:
@@ -437,8 +437,8 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 err.msg_list.append(f'{decoded_notification.body.notificationType} TX type ({tx.type}) was not the expected value: {expected_type}. {print_obj(tx)}')
 
             # NOTE: Extract plan
-            pro_plan: backend.ProPlanType = pro_plan_from_product_id(tx.productId, err)
-            payment_tx                    = payment_tx_from_apple_jws_transaction(tx, err)
+            pro_plan: base.ProPlan = pro_plan_from_product_id(tx.productId, err)
+            payment_tx                 = payment_tx_from_apple_jws_transaction(tx, err)
 
             # NOTE: Extract components
             if not err.has():

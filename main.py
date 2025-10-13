@@ -26,7 +26,6 @@ import logging.handlers
 import configparser
 import sys
 import dataclasses
-import json
 
 import base
 import backend

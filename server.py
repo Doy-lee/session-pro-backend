@@ -720,7 +720,7 @@ def get_pro_payments():
                 # should witness from the payment provider independently from us so there should be
                 # no need to reveal this to the user until they've confirmed their own receipt of
                 # it.
-                if payment.status == backend.PaymentStatus.Unredeemed:
+                if payment.status == base.PaymentStatus.Unredeemed:
                     continue
 
                 # NOTE: Collect the payment if history was requested
@@ -758,7 +758,7 @@ def get_pro_payments():
                         })
 
                 # NOTE: Determine pro status if it is a relevant
-                if payment.status == backend.PaymentStatus.Redeemed:
+                if payment.status == base.PaymentStatus.Redeemed:
                     user_pro_status = UserProStatus.Active
 
                 # NOTE: If we determine that the user is active and the user didn't request for
