@@ -371,8 +371,9 @@ API
               "google_payment_token": "ad8b67960eb91e8e2c0a4e8f191ea77b5ad593508b52ecc36c69c059cab39397fbf1e96142fa7fbcc7391cc3369ad110e3f9cbfccef284a925dcd470a4670aec",
             }
           ],
-          "latest_expiry_unix_ts_ms": 1761782400000,
-          "latest_grace_unix_ts_ms": 0,
+          "auto_renewing": 1,
+          "expiry_unix_ts_ms": 1761782400000,
+          "grace_period_duration_ms": 60000,
           "status": 1,
           "version": 0
         },
