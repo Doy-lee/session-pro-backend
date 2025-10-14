@@ -99,6 +99,26 @@ def add_user_revocation(order_id: str, revoke_unix_ts_ms: int, sql_conn: sqlite3
 
     backend.add_revocation(sql_conn=sql_conn, revocation=revocation)
 
+# TODO: If this function ever finds rounded(expiry_ts) > rounded(event_ts) the devs need to be notified somehow.
+def add_user_revocation_if_not_self_expiring(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, revoke_unix_ts_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    """If everything works as intended, this function should always find that `rounded(expiry_ts) == rounded(event_ts)` and 
+    not issue a revocation. If a payment is ever in a state where it should self-expire but isn't, we need to revoke it. In
+    this case something has gone wrong and the user was over-entitled.
+    """
+    payment = backend.get_payment(sql_conn=sql_conn, payment_tx=tx_payment, err=err)
+    if payment is None or err.has():
+        err.msg_list.append(f"Failed to get payment details for potential revocation!")
+        return
+
+    rounded_expiry_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=payment.expiry_unix_ts_ms)
+    rounded_event_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=tx_event.event_ts_ms)
+
+    # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
+    # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
+    # proofs that aren't going to self-expire by the end of the day.
+    if rounded_expiry_ts_ms > rounded_event_ts_ms:
+        add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=revoke_unix_ts_ms, sql_conn=sql_conn)
+
 
 def add_user_canceled_reason(details: SubscriptionV2Data, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     handle_not_implemented('add_user_canceled_reason', err)
@@ -125,7 +145,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
 
         case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED:
+            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED or tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
                 toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
@@ -159,7 +179,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 (later than the end of the UTC day). A user enters account hold if their billing method is still failing after their
                 grace period ends.
                 """
-                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                add_user_revocation_if_not_self_expiring(tx_payment=tx_payment, tx_event=tx_event, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
@@ -197,7 +217,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
             """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
             for the vast majority of users this function wont make any changes to user entitlement."""
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
-                add_user_revocation(order_id=tx_payment.google_order_id, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn)
+                add_user_revocation_if_not_self_expiring(tx_payment=tx_payment, tx_event=tx_event, revoke_unix_ts_ms=tx_event.event_ts_ms, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED:
             # No entitlement change required
@@ -367,7 +387,9 @@ def init(sql_conn:                sqlite3.Connection,
          package_name:            str,
          subscription_name:       str,
          subscription_product_id: str,
-         app_credentials_path:    str | None) -> ThreadContext:
+         app_credentials_path:    str | None,
+         platform_testing:        bool | None) -> ThreadContext:
+    base.PLATFORM_TESTING_ENV = platform_testing if platform_testing is not None else False
     # NOTE: Setup credentials global variable
     assert platform_google_api.credentials       is None and \
            platform_google_api.publisher_service is None and \

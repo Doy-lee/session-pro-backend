@@ -1343,6 +1343,24 @@ def expire_by_unix_ts_ms(tx: base.SQLTransaction, unix_ts_ms: int) -> set[nacl.s
             revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
     return result
 
+
+def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider: base.PaymentProvider, unix_ts_ms: int):
+    result_unix_ts_ms = unix_ts_ms
+    """For different platforms in their testing environments, they have different timespans 
+    for a day, for example in Google 1 day is 10s. We handle that explicitly here."""
+    if base.PLATFORM_TESTING_ENV:
+        match payment_provider:
+            case base.PaymentProvider.Nil:
+                result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+            case base.PaymentProvider.GooglePlayStore:
+                # NOTE: In google 1 day is 10s
+                result_unix_ts_ms = (unix_ts_ms + (10*1000 - 1)) // 10*1000
+            case base.PaymentProvider.iOSAppStore:
+                result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+    else:
+        result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+    return result_unix_ts_ms
+
 def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) -> bool:
     assert tx.cursor
     tx_field_name = ''
@@ -1388,17 +1406,7 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
             #
             # For different platforms in their testing environments, they have different timespans
             # for a day, for example in Google 1 day is 10s. We handle that explicitly here.
-            if base.PLATFORM_TESTING_ENV:
-                match revocation.payment_provider:
-                    case base.PaymentProvider.Nil:
-                        revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
-                    case base.PaymentProvider.GooglePlayStore:
-                        # NOTE: In google 1 day is 10s
-                        revoke_unix_ts_ms_next_day = (revocation.revoke_unix_ts_ms + (10*1000 - 1)) // 10*1000 * 10*1000
-                    case base.PaymentProvider.iOSAppStore:
-                        revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
-            else:
-                revoke_unix_ts_ms_next_day = base.round_unix_ts_ms_to_next_day(revocation.revoke_unix_ts_ms)
+            revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(revocation.payment_provider, revocation.revoke_unix_ts_ms)
 
             # NOTE: A payment will not have a master pkey associated with it if the user hasn't
             # redeemed it yet
@@ -1541,3 +1549,52 @@ def delete_user_errors(sql_conn: sqlite3.Connection, provider: base.PaymentProvi
         assert tx.cursor is not None
         _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ?;''', (int(provider.value),))
 
+
+def get_payment_tx(tx:          base.SQLTransaction,
+                   payment_tx:  PaymentProviderTransaction,
+                   err:         base.ErrorSink):
+    result = None
+    verify_payment_provider_tx(payment_tx, err)
+    if err.has():
+        return result
+
+    assert tx.cursor is not None
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        _ = tx.cursor.execute(f'''
+            SELECT *
+            FROM payments
+            WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
+        ''', (int(payment_tx.provider.value),
+              payment_tx.google_payment_token,
+              payment_tx.google_order_id))
+
+        record = tx.cursor.fetchone()
+        if record:
+            row = typing.cast(tuple[int, *SQLTablePaymentRowTuple], record)
+            result = payment_row_from_tuple(row)
+
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        _ = tx.cursor.execute(f'''
+                SELECT *
+                FROM payments
+                WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+        ''', (int(payment_tx.provider.value),
+              payment_tx.apple_original_tx_id,
+              payment_tx.apple_tx_id,
+              payment_tx.apple_web_line_order_tx_id))
+
+        record = tx.cursor.fetchone()
+        if record:
+            row = typing.cast(tuple[int, *SQLTablePaymentRowTuple], record)
+            result = payment_row_from_tuple(row)
+ 
+    return result
+
+def get_payment(sql_conn:                          sqlite3.Connection,
+                           payment_tx:                        PaymentProviderTransaction,
+                           err:                               base.ErrorSink):
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        return get_payment_tx(tx=tx,
+                                  payment_tx=payment_tx,
+                                  err=err)
