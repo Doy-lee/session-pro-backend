@@ -387,9 +387,7 @@ def init(sql_conn:                sqlite3.Connection,
          package_name:            str,
          subscription_name:       str,
          subscription_product_id: str,
-         app_credentials_path:    str | None,
-         platform_testing:        bool | None) -> ThreadContext:
-    base.PLATFORM_TESTING_ENV = platform_testing if platform_testing is not None else False
+         app_credentials_path:    str | None) -> ThreadContext:
     # NOTE: Setup credentials global variable
     assert platform_google_api.credentials       is None and \
            platform_google_api.publisher_service is None and \

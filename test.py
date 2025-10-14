@@ -2504,14 +2504,14 @@ def test_platform_apple():
 
 
 def test_google_platform_handle_notification(monkeypatch):
+    base.PLATFORM_TESTING_ENV = True
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True) as ctx:
         _ = platform_google.init(sql_conn        = ctx.sql_conn,
                          project_name            = 'loki-5a81e',
                          package_name            = 'network.loki.messenger',
                          subscription_name       = 'session-pro-sub',
                          subscription_product_id = 'session_pro',
-                         app_credentials_path    = None,
-                         platform_testing        = True)
+                         app_credentials_path    = None)
     err                       = base.ErrorSink()
 
     test_product_details = SubscriptionProductDetails(
@@ -3294,3 +3294,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760069494987', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'aciongiofnlcagplnndcfhnf.AO-J1OyRJ1NXBfFEzDi14GkTdi6d1iJ5XudWH7CY5pMziU2IExCSZHIkc0LXnsqvFr6qxdlSOjuwm2UpaJ4_ev47EPJS3ndl2v_uiHhnztkzLNhE1LUMArA', 'subscriptionId': 'session_pro'}},
 current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T04:11:32.330Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:11:32.330Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
         )
+
+    
+    base.PLATFORM_TESTING_ENV = False # Keep at the end of the test for cleanup
+
