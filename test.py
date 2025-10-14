@@ -3265,6 +3265,36 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
+        1. User purchases 3-month subscription
+        2. Renews
+        3. User cancels
+        3. Expires
+        """
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 12-month subscription
+        2. Renews
+        3. User cancels
+        3. Expires
+        """
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 3-month subscription
+        2. User changes to 1-month subscription
+        3. Renews
+        """
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 12-month subscription
+        2. User changes to 1-month subscription
+        3. Renews
+        """
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
         """
@@ -3291,4 +3321,20 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         _ = test_notification(refund_b, ctx)
 
         assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 1-month subscription
+        2. Developer refunds subscription (removing entitlement)
+        3. User purchases 1-month subscription
+        4. User renews
+        """
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 12-month subscription
+        2. Developer refunds subscription (removing entitlement)
+        3. User purchases 12-month subscription
+        4. User renews
+        """
 
