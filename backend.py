@@ -1552,7 +1552,7 @@ def delete_user_errors(sql_conn: sqlite3.Connection, provider: base.PaymentProvi
 
 def get_payment_tx(tx:          base.SQLTransaction,
                    payment_tx:  PaymentProviderTransaction,
-                   err:         base.ErrorSink):
+                   err:         base.ErrorSink) -> PaymentRow | None:
     result = None
     verify_payment_provider_tx(payment_tx, err)
     if err.has():
@@ -1590,11 +1590,11 @@ def get_payment_tx(tx:          base.SQLTransaction,
  
     return result
 
-def get_payment(sql_conn:                          sqlite3.Connection,
-                           payment_tx:                        PaymentProviderTransaction,
-                           err:                               base.ErrorSink):
+def get_payment(sql_conn:   sqlite3.Connection,
+                payment_tx: PaymentProviderTransaction,
+                err:        base.ErrorSink) -> PaymentRow | None:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         return get_payment_tx(tx=tx,
-                                  payment_tx=payment_tx,
-                                  err=err)
+                              payment_tx=payment_tx,
+                              err=err)
