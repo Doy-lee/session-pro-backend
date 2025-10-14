@@ -1415,10 +1415,27 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
                 revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
     return result
 
-
 def add_revocation(sql_conn: sqlite3.Connection, revocation: AddRevocationItem):
     with base.SQLTransaction(sql_conn) as tx:
         _ = add_revocation_tx(tx, revocation)
+
+def add_revocation_and_unredeemed_payment(sql_conn:                          sqlite3.Connection,
+                                          revocation:                        AddRevocationItem,
+                                          payment_tx:                        PaymentProviderTransaction,
+                                          plan:                              base.ProPlan,
+                                          expiry_unix_ts_ms:                 int,
+                                          unredeemed_unix_ts_ms:             int,
+                                          platform_refund_expiry_unix_ts_ms: int,
+                                          err:                               base.ErrorSink):
+    with base.SQLTransaction(sql_conn) as tx:
+        _ = add_revocation_tx(tx=tx, revocation=revocation)
+        add_unredeemed_payment_tx(tx=tx,
+                                  payment_tx=payment_tx,
+                                  plan=plan,
+                                  expiry_unix_ts_ms=expiry_unix_ts_ms,
+                                  unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
+                                  platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_ts_ms,
+                                  err=err)
 
 def get_pro_proof(sql_conn:       sqlite3.Connection,
                   version:        int,
