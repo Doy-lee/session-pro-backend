@@ -88,10 +88,14 @@ def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> base.ProPl
 
     return result
 
-def print_obj(obj: typing.Any) -> str:
+def print_obj(obj: typing.Any) -> str:  # pyright: ignore[reportAny]
     # NOTE: For some reason pprint is unable to pretty print Apple classes. We do it manually ourselves
-    attrs  = {attr: getattr(obj, attr) for attr in dir(obj) if not attr.startswith('_') and not callable(getattr(obj, attr))}
-    result = f'{pprint.pformat(attrs)}'
+    result = ''
+    if base.UNSAFE_LOGGING:
+        attrs  = {attr: getattr(obj, attr) for attr in dir(obj) if not attr.startswith('_') and not callable(getattr(obj, attr))}
+        result = f'{pprint.pformat(attrs)}'
+    else:
+        result = '(obfuscated obj dump)'
     return result
 
 def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bool:
@@ -214,7 +218,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
         #     The billing retry successfully recovers the subscription. (subtype BILLING_RECOVERY)
         tx: AppleJWSTransactionDecodedPayload | None = decoded_notification.tx_info
         if not tx:
-            err.msg_list.append(f'{decoded_notification.body.notificationType.name} is missing TX info {print_obj(tx)}')
+            err.msg_list.append(f'{decoded_notification.body.notificationType.name} is missing TX info. {print_obj(tx)}')
 
         if len(err.msg_list) == 0:
             assert tx
@@ -246,7 +250,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                     # NOTE: Verify purchase type is what we expect it to be
                     expected_reason = AppleTransactionReason.PURCHASE
                     if tx.transactionReason != expected_reason:
-                        err.msg_list.append(f'{decoded_notification.body.notificationType.name} TX type ({tx.transactionReason}) was not the expected value for a one-time payment: {expected_reason}. {print_obj(tx)}')
+                        err.msg_list.append(f'{decoded_notification.body.notificationType.name} TX type ({tx.transactionReason}) was not the expected value for a one-time payment: {expected_reason.name}. {print_obj(tx)}')
                 else:
                     # NOTE: Verify that the TX type is what we expect it to be
                     expected_type = AppleType.AUTO_RENEWABLE_SUBSCRIPTION
@@ -393,9 +397,9 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                         with base.SQLTransaction(sql_conn) as sql_tx:
                             sql_tx.cancel = True
-                            revoked: bool = backend.add_apple_revocation_tx(tx                    = sql_tx,
-                                                                             apple_original_tx_id = tx.originalTransactionId,
-                                                                             revoke_unix_ts_ms    = revoke_unix_ts_ms)
+                            revoked: bool = backend.add_apple_revocation_tx(tx                   = sql_tx,
+                                                                            apple_original_tx_id = tx.originalTransactionId,
+                                                                            revoke_unix_ts_ms    = revoke_unix_ts_ms)
                             if not revoked:
                                 err.msg_list.append(f'No matching active payment was available to be revoked. {print_obj(tx)}')
 
@@ -816,6 +820,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
 def notifications_apple_app_connect_sandbox() -> flask.Response:
+    # NOTE: Extract notification from payload
     get: server.GetJSONFromFlaskRequest = server.get_json_from_flask_request(flask.request)
     if len(get.err_msg):
         log.error(f'Failed to parse notification as JSON: {flask.request.data}')
@@ -836,17 +841,20 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
         log.error(f'Failed to parse notification, signed payload was not a string: {type(signed_payload)}')
         flask.abort(500)
 
+    # NOTE: Decode the notification
     resp: AppleResponseBodyV2DecodedPayload   = core.signed_data_verifier.verify_and_decode_notification(signed_payload)
+
+    # NOTE: Handle the notification
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
     with server.open_db_from_flask_request_context(flask.current_app) as db:
         _ = handle_notification(decoded_notification, db.sql_conn, err)
 
     if err.has():
-        log.error('Failed to parse notification:' + '\n  '.join(err.msg_list))
+        log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))
         flask.abort(500)
-    else:
-        return flask.Response(status=200)
+
+    return flask.Response(status=200)
 
 def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: AppleSignedDataVerifier):
     try:
