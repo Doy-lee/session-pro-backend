@@ -127,8 +127,6 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                                                        err                      = err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
-            assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
-            assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
                 with base.SQLTransaction(sql_conn) as tx:
                     assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
@@ -180,7 +178,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                     if payment is None or err.has():
                         err.msg_list.append(f"Failed to get payment details for potential revocation!")
                     elif payment.status == base.PaymentStatus.Unredeemed:
-                        err.msg_list.append("Found payment status Unredeemed in potential EXPIRED or ON_HOLD revokation. This should not be possible!")
+                        err.msg_list.append("Found payment status Unredeemed in potential EXPIRED or ON_HOLD revocation. This should not be possible!")
 
                     if not err.has():
                         assert payment is not None
@@ -348,7 +346,7 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
                 google_payment_token = result.purchase_token,
             )
             with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                backend.add_user_error(sql_conn=db.sql_conn, error_tx=err_tx, err=err)
+                backend.add_user_error(sql_conn=db.sql_conn, error_tx=err_tx, err=err_internal)
             err.msg_list.extend(err_internal.msg_list)
 
     if err.has():
