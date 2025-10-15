@@ -28,7 +28,7 @@ class ExpireResult:
 class AddRevocationItem:
     payment_provider: base.PaymentProvider = base.PaymentProvider.Nil
     # Platform specific transaction ID to revoke from the payments table. For apple this is the
-    # transaction ID, for google this should be the order ID string.
+    # transaction ID, for google this should be the purchase token.
     tx_id:            str                  = ''
     # Timestamp in ms when the revoke event happens. This is used to determine if the proof
     # should actually be revoked, or left to expire on its own.
@@ -630,12 +630,6 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
     return result
 
 
-def verify_google_payment_token_hash(hash: str, err: base.ErrorSink):
-    # TODO: We might not hash the token anymore, just take the string directly from google?
-    # With apple we now take platform specific data (original tx, tx, and web line order tx id) seems
-    # painful to abstract those into a singular representation and error prone
-    pass
-
 def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     unredeemed_payments: list[PaymentRow] = get_unredeemed_payments_list(sql_conn)
     for index, it in enumerate(unredeemed_payments):
@@ -713,7 +707,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
 
         # NOTE: Check that the token is set correctly
         if it.payment_provider == base.PaymentProvider.GooglePlayStore:
-            verify_google_payment_token_hash(it.google_payment_token, err)
+            pass
         elif len(it.google_payment_token) != 0:
             err.msg_list.append(f'Payment #{index} speceified a google payment token: {it.google_payment_token} for a non-google platform')
 
@@ -767,6 +761,81 @@ def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, 
                                        tx_id=row[0],
                                        revoke_unix_ts_ms=revoke_unix_ts_ms)
         result = add_revocation_tx(tx, revocation)
+
+    return result
+
+def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
+    assert tx.cursor
+
+    # NOTE: Select the newest google transaction that has been redeemed or not. Google only gives us
+    # the purchase token in the scenarios that we call this function.
+
+    # NOTE: We also grab payments that are already revoked. This is because Google sends the revoked
+    # notification after it may have already expired or have been revoked. If we skip those, this
+    # function will return false and the caller will erroneously assume it has failed when infact
+    # what we're trying to communicate to the caller is that, the payment token they were trying to
+    # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
+    # that entitlement has been revoked where necessary.
+    _ = tx.cursor.execute(f'''
+    SELECT id, master_pkey, expiry_unix_ts_ms
+    FROM   payments
+    WHERE  google_payment_token = ? AND
+           payment_provider     = ? AND
+           (status              = ? OR status = ? OR status = ?)
+    ''', (# WHERE values
+          google_payment_token,
+          int(base.PaymentProvider.GooglePlayStore),
+          # OR status == ?
+          int(base.PaymentStatus.Unredeemed.value),
+          int(base.PaymentStatus.Redeemed.value),
+          int(base.PaymentStatus.Revoked.value),))
+
+    result                             = False
+    rows                               = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    master_pkey_dict: dict[bytes, int] = {}
+    for row in  rows:
+        result                          = True
+        id:                int          = row[0]
+        master_pkey_bytes: bytes | None = row[1]
+        expiry_unix_ts_ms: int          = row[2]
+
+        # NOTE: A payment will not have a master pkey associated with it if the user hasn't
+        # redeemed it yet so the key may not be set. If it's not set we still mark the payment as
+        # 'revoked', this means that it can't be activated and so a master pkey cannot be set on it
+        # after the fact as well.
+        if master_pkey_bytes:
+            master_pkey_dict[master_pkey_bytes] = expiry_unix_ts_ms
+
+        # NOTE: Mark all the payments as revoked
+        _ = tx.cursor.execute(f'''
+        UPDATE payments
+        SET    status = ?, revoked_unix_ts_ms = ?, auto_renewing = 0
+        WHERE  id = ? AND (status == ? OR status = ?)
+        ''', (# SET values
+              int(base.PaymentStatus.Revoked.value),
+              revoke_unix_ts_ms,
+              # WHERE values
+              id,
+              int(base.PaymentStatus.Unredeemed.value),
+              int(base.PaymentStatus.Redeemed.value)))
+
+    revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, revoke_unix_ts_ms)
+    for it in master_pkey_dict:
+        # TODO: Copy-pasta
+        # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
+        # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
+        # proofs that aren't going to self-expire by the end of the day.
+        #
+        # For different platforms in their testing environments, they have different timespans
+        # for a day, for example in Google 1 day is 10s. We handle that explicitly here.
+
+        expiry_unix_ts_ms = master_pkey_dict[it]
+        if expiry_unix_ts_ms > revoke_unix_ts_ms_next_day:
+            master_pkey = nacl.signing.VerifyKey(it)
+            revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
+
+    if result == False:
+        err.msg_list.append(f'Failed to revoke Google purchase token {base.obfuscate(google_payment_token)} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
@@ -854,7 +923,6 @@ def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base
     base.verify_payment_provider(payment_tx.provider, err)
     match payment_tx.provider:
         case base.PaymentProvider.GooglePlayStore:
-            verify_google_payment_token_hash(payment_tx.google_payment_token, err)
             if len(payment_tx.google_order_id) == 0:
                 err.msg_list.append(f'Google order id was not set')
             if len(payment_tx.google_payment_token) == 0:
@@ -1362,6 +1430,7 @@ def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider:
     return result_unix_ts_ms
 
 def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) -> bool:
+    """Returns true if a payment was found that could be revoked"""
     assert tx.cursor
     tx_field_name = ''
     match revocation.payment_provider:
@@ -1418,24 +1487,6 @@ def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) ->
 def add_revocation(sql_conn: sqlite3.Connection, revocation: AddRevocationItem):
     with base.SQLTransaction(sql_conn) as tx:
         _ = add_revocation_tx(tx, revocation)
-
-def add_revocation_and_unredeemed_payment(sql_conn:                          sqlite3.Connection,
-                                          revocation:                        AddRevocationItem,
-                                          payment_tx:                        PaymentProviderTransaction,
-                                          plan:                              base.ProPlan,
-                                          expiry_unix_ts_ms:                 int,
-                                          unredeemed_unix_ts_ms:             int,
-                                          platform_refund_expiry_unix_ts_ms: int,
-                                          err:                               base.ErrorSink):
-    with base.SQLTransaction(sql_conn) as tx:
-        _ = add_revocation_tx(tx=tx, revocation=revocation)
-        add_unredeemed_payment_tx(tx=tx,
-                                  payment_tx=payment_tx,
-                                  plan=plan,
-                                  expiry_unix_ts_ms=expiry_unix_ts_ms,
-                                  unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
-                                  platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_ts_ms,
-                                  err=err)
 
 def get_pro_proof(sql_conn:       sqlite3.Connection,
                   version:        int,
@@ -1516,7 +1567,6 @@ def verify_user_error_tx(error_tx: UserErrorTransaction, err: base.ErrorSink):
     base.verify_payment_provider(error_tx.provider, err)
     match error_tx.provider:
         case base.PaymentProvider.GooglePlayStore:
-            verify_google_payment_token_hash(error_tx.google_payment_token, err)
             if len(error_tx.google_payment_token) == 0:
                 err.msg_list.append(f'Google payment token was not set')
         case base.PaymentProvider.iOSAppStore:

@@ -29,7 +29,6 @@ import sqlite3
 import traceback
 
 import platform_google
-from platform_google import handle_notification
 import platform_google_api
 from platform_google_types import GoogleDuration, GoogleTimestamp, SubscriptionProductDetails, SubscriptionV2Data
 from vendor import onion_req
@@ -2583,9 +2582,8 @@ def test_google_platform_handle_notification(monkeypatch):
 
         assert isinstance(purchase_token, str)
 
-        err_tx = backend.UserErrorTransaction()
         err_rtdn = base.ErrorSink()
-        handle_notification(scenario.rtdn_event, err_tx, ctx.sql_conn, err_rtdn)
+        _        = platform_google.handle_notification(scenario.rtdn_event, ctx.sql_conn, err_rtdn)
         assert not err_rtdn.has()
 
         order_id = current_state.line_items[0].latest_successful_order_id
@@ -2784,11 +2782,26 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """3. User un-cancels"""
         _ = test_notification(uncancel, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_subscribe,
+                          pro_status                        = server.UserProStatus.Active,
+                          payment_status                    = base.PaymentStatus.Redeemed,
+                          auto_renew                        = True,
+                          grace_duration_ms                 = 0,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx,
+                          ctx                               = ctx)
 
         """4. User refunds"""
         _ = test_notification(refund, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_subscribe,
+                          pro_status                        = server.UserProStatus.Expired,
+                          payment_status                    = base.PaymentStatus.Revoked,
+                          auto_renew                        = False,
+                          grace_duration_ms                 = 0,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """

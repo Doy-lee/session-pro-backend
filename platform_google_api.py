@@ -1,7 +1,9 @@
 import dataclasses
 import typing
+import base
 from backend import PaymentProviderTransaction
 from base import (
+    ProPlan,
     ErrorSink,
     PaymentProvider,
     handle_not_implemented,
@@ -56,6 +58,7 @@ credentials:             service_account.Credentials        | None = None
 publisher_service:       googleapiclient.discovery.Resource | None = None
 package_name:            str                                       = ''
 subscription_product_id: str                                       = ''
+refund_deadline_duration_ms = base.MILLISECONDS_IN_DAY * 2
 
 def get_publisher_service() -> googleapiclient.discovery.Resource:
     assert credentials,       "Platform google initialisation has not been called yet"
@@ -437,15 +440,13 @@ def parse_valid_order_id(details: SubscriptionV2Data, err: ErrorSink) -> str:
 
 @dataclasses.dataclass
 class SubscriptionPlanEventTransaction:
-    # ID of the Google subscription's base plan. Not the product_id.
-    base_plan_id: str
-    # Time at which the subscription expires
-    expiry_time: GoogleTimestamp
-    # Timestamp in ms when the event occured
-    event_ts_ms: int
+    base_plan_id:          str             # ID of the Google subscription's base plan. Not the product_id.
+    pro_plan:              ProPlan         # Session Pro plan parsed from the `base_plan_id`
+    expiry_time:           GoogleTimestamp # Time at which the subscription expires
+    event_ts_ms:           int             # Timestamp in ms when the event occured
     linked_purchase_token: str | None
-    notification: SubscriptionNotificationType
-    subscription_state: SubscriptionsV2SubscriptionStateType
+    notification:          SubscriptionNotificationType
+    subscription_state:    SubscriptionsV2SubscriptionStateType
     purchase_acknowledged: SubscriptionsV2SubscriptionAcknowledgementStateType
 
 def parse_subscription_purchase_tx(purchase_token: str, details: SubscriptionV2Data, err: ErrorSink):
@@ -456,17 +457,34 @@ def parse_subscription_purchase_tx(purchase_token: str, details: SubscriptionV2D
         google_order_id=order_id
     )
 
-def parse_subscription_plan_event_tx(details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType) -> SubscriptionPlanEventTransaction:
-    line_item = parse_line_item(details)
-    return SubscriptionPlanEventTransaction(
-        base_plan_id=line_item.offer_details.base_plan_id,
-        expiry_time=line_item.expiry_time,
-        event_ts_ms=event_ts_ms,
-        notification=notification,
-        subscription_state=details.subscription_state,
-        linked_purchase_token=details.linked_purchase_token,
-        purchase_acknowledged=details.acknowledgement_state,
+def pro_plan_from_base_plan_id(base_plan_id: str, err: ErrorSink) -> ProPlan:
+    result = ProPlan.Nil
+    match base_plan_id:
+        case "session-pro-1-month":
+            result = ProPlan.OneMonth
+        case "session-pro-3-months":
+            result = ProPlan.ThreeMonth
+        case "session-pro-12-months":
+            result = ProPlan.TwelveMonth
+        case _:
+            err.msg_list.append(f'Invalid google base_plan_id, unable to determine plan variant: {base_plan_id}')
+
+    assert result != ProPlan.Nil
+    return result
+
+def parse_subscription_plan_event_tx(details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType, err: ErrorSink) -> SubscriptionPlanEventTransaction:
+    line_item: SubscriptionV2DataLineItem = parse_line_item(details)
+    result = SubscriptionPlanEventTransaction(
+        base_plan_id          = line_item.offer_details.base_plan_id,
+        expiry_time           = line_item.expiry_time,
+        pro_plan              = pro_plan_from_base_plan_id(line_item.offer_details.base_plan_id, err),
+        event_ts_ms           = event_ts_ms,
+        notification          = notification,
+        subscription_state    = details.subscription_state,
+        linked_purchase_token = details.linked_purchase_token,
+        purchase_acknowledged = details.acknowledgement_state,
     )
+    return result
 
 @dataclasses.dataclass
 class VoidedPurchaseTxFields:
