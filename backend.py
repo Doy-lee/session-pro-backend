@@ -153,7 +153,7 @@ class PaymentRow:
     id:                                 int                  = 0
     master_pkey:                        bytes | None         = None
     status:                             base.PaymentStatus   = base.PaymentStatus.Nil
-    plan:                               base.ProPlan     = base.ProPlan.Nil
+    plan:                               base.ProPlan         = base.ProPlan.Nil
     payment_provider:                   base.PaymentProvider = base.PaymentProvider.Nil
     auto_renewing:                      bool                 = False
     unredeemed_unix_ts_ms:              int                  = 0
@@ -1178,8 +1178,8 @@ def build_proof_hash(version:           int,
 def build_proof(gen_index:         int,
                 rotating_pkey:     nacl.signing.VerifyKey,
                 expiry_unix_ts_ms: int,
-                signing_key:      nacl.signing.SigningKey,
-                gen_index_salt:   bytes) -> ProSubscriptionProof:
+                signing_key:       nacl.signing.SigningKey,
+                gen_index_salt:    bytes) -> ProSubscriptionProof:
     assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
     result: ProSubscriptionProof = ProSubscriptionProof()
     result.version               = 0
@@ -1501,18 +1501,18 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # Verify some of the request parameters
-    hash_to_sign: bytes = make_get_pro_proof_hash(version=version,
-                                                  master_pkey=master_pkey,
-                                                  rotating_pkey=rotating_pkey,
-                                                  unix_ts_ms=unix_ts_ms)
+    hash_to_sign: bytes = make_get_pro_proof_hash(version       = version,
+                                                  master_pkey   = master_pkey,
+                                                  rotating_pkey = rotating_pkey,
+                                                  unix_ts_ms    = unix_ts_ms)
 
-    _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key=signing_key,
-                                                                   master_pkey=master_pkey,
-                                                                   rotating_pkey=rotating_pkey,
-                                                                   hash_to_sign=hash_to_sign,
-                                                                   master_sig=master_sig,
-                                                                   rotating_sig=rotating_sig,
-                                                                   err=err)
+    _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key   = signing_key,
+                                                                   master_pkey   = master_pkey,
+                                                                   rotating_pkey = rotating_pkey,
+                                                                   hash_to_sign  = hash_to_sign,
+                                                                   master_sig    = master_sig,
+                                                                   rotating_sig  = rotating_sig,
+                                                                   err           = err)
     if len(err.msg_list) > 0:
         return result
 
@@ -1523,15 +1523,22 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
         return result
 
     # All verified, now generate proof
-    user: UserRow = get_user(sql_conn, master_pkey)
-    if user.master_pkey == bytes(master_pkey):
-        result = build_proof(gen_index=user.gen_index,
-                             rotating_pkey=rotating_pkey,
-                             expiry_unix_ts_ms=user.expiry_unix_ts_ms,
-                             signing_key=signing_key,
-                             gen_index_salt=gen_index_salt);
+    get_user = GetUserAndPayments()
+    with base.SQLTransaction(sql_conn) as tx:
+        get_user = get_user_and_payments(tx, master_pkey)
+
+    if get_user.user.master_pkey == bytes(master_pkey):
+        proof_deadline_unix_ts_ms: int = get_user.expiry_unix_ts_ms + get_user.grace_period_duration_ms
+        if unix_ts_ms <= proof_deadline_unix_ts_ms:
+            result = build_proof(gen_index         = get_user.user.gen_index,
+                                 rotating_pkey     = rotating_pkey,
+                                 expiry_unix_ts_ms = proof_deadline_unix_ts_ms,
+                                 signing_key       = signing_key,
+                                 gen_index_salt    = gen_index_salt);
+        else:
+            err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(proof_deadline_unix_ts_ms)} ({base.readable_unix_ts_ms(get_user.expiry_unix_ts_ms)} + {get_user.grace_period_duration_ms})')
     else:
-        err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(user.master_pkey).hex()} {user.gen_index} {user.expiry_unix_ts_ms}')
+        err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(get_user.user.master_pkey).hex()} {get_user.user.gen_index} {get_user.expiry_unix_ts_ms}')
 
     return result
 

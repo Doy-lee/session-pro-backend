@@ -626,7 +626,7 @@ def test_server_add_payment_flow():
         assert result_ticket  == 1
         curr_revocation_ticket = result_ticket
 
-        # Check that the server returned the revocation list with the iniital
+        # Check that the server returned the revocation list with the initial
         # payment that got revoked after we stacked a new subscription ontop
         assert len(result_items) == 1
         for it in result_items:
@@ -800,6 +800,100 @@ def test_server_add_payment_flow():
             result_items= base.json_dict_require_array(d=result_json, key='items',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+
+    # NOTE: Add a grace period to the payment and check that we can still generate proofs in said
+    # grace period
+    if 1:
+        # NOTE: Verify that there is no grace period set first
+        with base.SQLTransaction(db.sql_conn) as tx:
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+            assert get_user.grace_period_duration_ms == 0
+
+        # NOTE: Grab the latest expiring payment so that we have access to the payment details
+        last_payment = backend.PaymentRow()
+        for payment_it in backend.get_payments_list(db.sql_conn):
+            if payment_it.expiry_unix_ts_ms > last_payment.expiry_unix_ts_ms:
+                last_payment = payment_it
+
+        # NOTE: Add a grace period
+        payment_tx                            = backend.PaymentProviderTransaction()
+        payment_tx.provider                   = last_payment.payment_provider
+        payment_tx.apple_original_tx_id       = last_payment.apple.original_tx_id
+        payment_tx.apple_tx_id                = last_payment.apple.tx_id
+        payment_tx.apple_web_line_order_tx_id = last_payment.apple.web_line_order_tx_id
+        payment_tx.google_payment_token       = last_payment.google_payment_token
+        payment_tx.google_order_id            = last_payment.google_order_id
+        _ = backend.update_payment_renewal_info(db.sql_conn,
+                                                payment_tx,
+                                                grace_period_duration_ms=10 * 1000,
+                                                auto_renewing=True,
+                                                err=err)
+        assert not err.has()
+
+        # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
+        pro_proof_deadline_unix_ts_ms: int = 0
+        with base.SQLTransaction(db.sql_conn) as tx:
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+            assert get_user.grace_period_duration_ms > 0
+            pro_proof_deadline_unix_ts_ms = get_user.expiry_unix_ts_ms + get_user.grace_period_duration_ms
+
+        # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
+        request_version: int   = 0
+        unix_ts_ms:      int   = pro_proof_deadline_unix_ts_ms
+        hash_to_sign:    bytes = backend.make_get_pro_proof_hash(version       = request_version,
+                                                                 master_pkey   = master_key.verify_key,
+                                                                 rotating_pkey = rotating_key.verify_key,
+                                                                 unix_ts_ms    = unix_ts_ms)
+
+        proof: backend.ProSubscriptionProof = backend.get_pro_proof(sql_conn       = db.sql_conn,
+                                                                    version        = request_version,
+                                                                    signing_key    = db.runtime.backend_key,
+                                                                    gen_index_salt = db.runtime.gen_index_salt,
+                                                                    master_pkey    = master_key.verify_key,
+                                                                    rotating_pkey  = rotating_key.verify_key,
+                                                                    unix_ts_ms     = unix_ts_ms,
+                                                                    master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                                                    rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                                                    err            = err)
+        assert not err.has()
+
+        # NOTE: Check that the proof is invalid
+        proof_hash = backend.build_proof_hash(proof.version,
+                                              proof.gen_index_hash,
+                                              proof.rotating_pkey,
+                                              proof.expiry_unix_ts_ms)
+        _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+
+
+        # NOTE: Try to generate a proof after the deadline (should fail)
+        unix_ts_ms: int = pro_proof_deadline_unix_ts_ms + 1
+        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version       = request_version,
+                                                              master_pkey   = master_key.verify_key,
+                                                              rotating_pkey = rotating_key.verify_key,
+                                                              unix_ts_ms    = unix_ts_ms)
+
+        proof = backend.get_pro_proof(sql_conn       = db.sql_conn,
+                                      version        = request_version,
+                                      signing_key    = db.runtime.backend_key,
+                                      gen_index_salt = db.runtime.gen_index_salt,
+                                      master_pkey    = master_key.verify_key,
+                                      rotating_pkey  = rotating_key.verify_key,
+                                      unix_ts_ms     = unix_ts_ms,
+                                      master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                      rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                      err            = err)
+
+        proof_hash = backend.build_proof_hash(proof.version,
+                                              proof.gen_index_hash,
+                                              proof.rotating_pkey,
+                                              proof.expiry_unix_ts_ms)
+
+        failed: bool = False
+        try:
+            _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+        except:
+            failed = True
+        assert err.has() and failed
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
