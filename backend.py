@@ -25,16 +25,6 @@ class ExpireResult:
     users:                        int  = 0
 
 @dataclasses.dataclass
-class AddRevocationItem:
-    payment_provider: base.PaymentProvider = base.PaymentProvider.Nil
-    # Platform specific transaction ID to revoke from the payments table. For apple this is the
-    # transaction ID, for google this should be the purchase token.
-    tx_id:            str                  = ''
-    # Timestamp in ms when the revoke event happens. This is used to determine if the proof
-    # should actually be revoked, or left to expire on its own.
-    revoke_unix_ts_ms: int                 = 0
-
-@dataclasses.dataclass
 class ProSubscriptionProof:
     version:           int                    = 0
     gen_index_hash:    bytes                  = b''
@@ -895,6 +885,23 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
 
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
+
+        # NOTE: We technically always allow a redeem of an unredeemed payment as long as the user
+        # knows the transaction ID (payment token/tx ID). If for example the user sits on the
+        # payment and doesn't redeem it and it expires but the expiry task hasn't been run yet, the
+        # user can still redeem the payment, they won't be allowed to use the proof because it has
+        # expired, but, they can register their public key for the payment and associate it with
+        # their account.
+        #
+        # The payment will now show up in their cross-platform payment history and visible across
+        # all the Session devices they have.
+        #
+        # TODO: What if the payment was expired and it has no master public key? Following the same
+        # train of thought it would be nice to let the user claim that payment so that they have
+        # the ability to maintain proper-book-keeping, but it's not clear to me if its even possible
+        # for that to happen. Maybe more realistically a payment could get revoked before it was
+        # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
+        # account.
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             _ = tx.cursor.execute(f'''
                 UPDATE payments

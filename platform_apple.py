@@ -576,24 +576,24 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
         #     A family member loses access to the subscription through Family Sharing.
         tx = decoded_notification.tx_info
         if tx:
-            _ = require_field(tx.purchaseDate,          f'{decoded_notification.body.notificationType.name} is missing TX purchase date. {print_obj(tx)}',           err)
+            _ = require_field(tx.revocationDate,        f'{decoded_notification.body.notificationType.name} is missing TX revocation date. {print_obj(tx)}',           err)
             _ = require_field(tx.originalTransactionId, f'{decoded_notification.body.notificationType.name} is missing TX original transaction ID. {print_obj(tx)}', err)
         else:
             err.msg_list.append(f'{decoded_notification.body.notificationType.name} is missing TX info {print_obj(tx)}')
 
         if len(err.msg_list) == 0:
             assert tx # NOTE: Assert the types for LSP now that we have checked that they exist
-            assert isinstance(tx.purchaseDate,          int), f'{print_obj(tx)}'
+            assert isinstance(tx.revocationDate,          int), f'{print_obj(tx)}'
             assert isinstance(tx.originalTransactionId, str), f'{print_obj(tx)}'
 
             # NOTE: Process
             payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
             if not err.has():
                 with base.SQLTransaction(sql_conn) as sql_tx:
-                    log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Revoke (orig. TX ID) date = {base.readable_unix_ts_ms(tx.purchaseDate)}')
+                    log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Revoke (orig. TX ID) date = {base.readable_unix_ts_ms(tx.revocationDate)}')
                     sql_tx.cancel = not backend.add_apple_revocation_tx(tx                   = sql_tx,
                                                                         apple_original_tx_id = tx.originalTransactionId,
-                                                                        revoke_unix_ts_ms    = tx.purchaseDate,
+                                                                        revoke_unix_ts_ms    = tx.revocationDate,
                                                                         err                  = err)
                     if sql_tx.cancel:
                         err.msg_list.append(f'No matching active payment was available to be refunded. {print_obj(tx)}')
@@ -817,7 +817,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
     else:
         err.msg_list.append(f'Received notification {decoded_notification.body.notificationType} that wasn\'t explicitly handled')
 
-    result = len(err.msg_list) > 0
+    result = len(err.msg_list) == 0
     return result
 
 
