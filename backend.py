@@ -304,6 +304,15 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
+def _payment_provider_tx_log_label(tx: PaymentProviderTransaction):
+    result = f'({tx.provider.name}) apple (orig/tx/web) = ({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google = ({tx.google_payment_token}/{tx.google_order_id})'
+    return result
+
+def _add_pro_payment_user_tx_log_label(tx: AddProPaymentUserTransaction):
+    result = f'({tx.provider.name}) apple = "{tx.apple_tx_id}", google = ({tx.google_payment_token}, {tx.google_order_id})'
+    return result
+
+
 def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
     result = ''
     if schema:
@@ -823,7 +832,8 @@ def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, 
           int(base.PaymentStatus.Expired.value),
           int(base.PaymentStatus.Revoked.value),))
 
-    rows = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
+    log.info(f'Revoking Apple payment; Orig. TX ID = {apple_original_tx_id}, revoke = {base.readable_unix_ts_ms(revoke_unix_ts_ms)}')
+    rows         = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
     result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
@@ -859,10 +869,11 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
           int(base.PaymentStatus.Expired.value),
           int(base.PaymentStatus.Revoked.value),))
 
+    log.info(f'Revoking Google payment; Payment token = {google_payment_token}, revoke = {base.readable_unix_ts_ms(revoke_unix_ts_ms)}')
     rows = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
     result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
     if result == False:
-        err.msg_list.append(f'Failed to revoke Apple orig. TX ID {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
+        err.msg_list.append(f'Failed to revoke Google payment {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
@@ -877,6 +888,10 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
     master_pkey_bytes: bytes = bytes(master_pkey)
     fields                   = ['master_pkey = ?', 'status = ?', 'redeemed_unix_ts_ms = ?']
     set_expr                 = ', '.join(fields) # Create '<field0> = ?, <field1> = ?, ...'
+
+    if log.getEffectiveLevel() <= logging.INFO:
+        payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
+        log.info(f'Redeeming payment; Master = {bytes(master_pkey).hex()}, rotating = {bytes(rotating_pkey).hex()}, redeemed ts = {base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, payment = {payment_tx_label}')
 
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
@@ -1012,6 +1027,11 @@ def update_payment_renewal_info_tx(tx:                       base.SQLTransaction
     Update a payment's grace period and/or auto renewing flag. Pass in `None` for the arguments
     you want to opt out of updating.
     """
+
+    if log.getEffectiveLevel() <= logging.INFO:
+        payment_tx_label = _payment_provider_tx_log_label(payment_tx)
+        log.info(f'Update renewal info; Payment = {payment_tx_label}, grace period ms = {grace_period_duration_ms}, auto_renewing = {auto_renewing}')
+
     result = False
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
@@ -1098,6 +1118,11 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                               unredeemed_unix_ts_ms:             int,
                               platform_refund_expiry_unix_ts_ms: int,
                               err:                               base.ErrorSink):
+
+    if log.getEffectiveLevel() <= logging.INFO:
+        payment_tx_label = _payment_provider_tx_log_label(payment_tx)
+        log.info(f'Update renewal info; Payment = {payment_tx_label}, plan = {plan.name}, expiry = {base.readable_unix_ts_ms(expiry_unix_ts_ms)}, unredeemed = {base.readable_unix_ts_ms(unredeemed_unix_ts_ms)}, refund = {base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)}')
+
     verify_payment_provider_tx(payment_tx, err)
     if len(err.msg_list) > 0:
         return
@@ -1326,6 +1351,11 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                     master_sig:          bytes,
                     rotating_sig:        bytes,
                     err:                 base.ErrorSink) -> ProSubscriptionProof:
+
+    if log.getEffectiveLevel() <= logging.INFO:
+        payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
+        log.info(f'Add payment; Version = {version}, redeemed {base.readable_unix_ts_ms}, master = {bytes(master_pkey).hex()}, payment = {payment_tx_label}')
+
     result: ProSubscriptionProof = ProSubscriptionProof()
 
     # In developer mode, the server is intended to be launched locally and we
@@ -1462,6 +1492,8 @@ def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: base.SQLTransaction, m
     _ = _allocate_new_gen_id_if_master_pkey_has_payments(tx, master_pkey)
 
 def expire_by_unix_ts_ms(tx: base.SQLTransaction, unix_ts_ms: int) -> set[nacl.signing.VerifyKey]:
+    log.info(f'Expire by ts; ts = {base.readable_unix_ts_ms(unix_ts_ms)}')
+
     assert tx.cursor
     _ = tx.cursor.execute(f'''
         UPDATE    payments
@@ -1513,6 +1545,7 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
                   rotating_sig:   bytes,
                   err:            base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
+    log.info(f'Get pro proof; Version = {version}, master = {bytes(master_pkey).hex()}, ts = {base.readable_unix_ts_ms(unix_ts_ms)}')
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_get_pro_proof_hash(version       = version,
@@ -1557,6 +1590,7 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
     return result
 
 def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_ms: int) -> ExpireResult:
+    log.info(f'Expire payments/revocs/users; ts = {base.readable_unix_ts_ms(unix_ts_ms)}')
     result = ExpireResult()
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None

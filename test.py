@@ -250,15 +250,12 @@ def test_backend_same_user_stacks_subscription():
     payment_tx.google_payment_token                         = scenarios[1].google_payment_token
     payment_tx.google_order_id                              = scenarios[1].google_order_id
     new_grace_duration_ms                                   = 10000
-    base.print_db_to_stdout(db.sql_conn)
     updated: bool                                           = backend.update_payment_renewal_info(sql_conn                 = db.sql_conn,
                                                                                                   payment_tx               = payment_tx,
                                                                                                   grace_period_duration_ms = new_grace_duration_ms,
                                                                                                   auto_renewing            = False,
                                                                                                   err                      = err)
-    base.print_db_to_stdout(db.sql_conn)
-    assert not err.has()
-    assert updated
+    assert not err.has() and updated
 
     # NOTE: Verify that the new grace was assigned to the user
     payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.sql_conn)
