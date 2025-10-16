@@ -791,7 +791,7 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
           int(base.PaymentStatus.Revoked.value),))
 
     result                             = False
-    rows                               = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    rows                               = typing.cast(list[tuple[int, bytes | None, int]], tx.cursor.fetchall())
     master_pkey_dict: dict[bytes, int] = {}
     for row in  rows:
         result                          = True
