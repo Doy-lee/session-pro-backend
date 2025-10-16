@@ -30,7 +30,7 @@ import traceback
 
 import platform_google
 import platform_google_api
-from platform_google_types import GoogleDuration, GoogleTimestamp, SubscriptionProductDetails, SubscriptionV2Data
+from platform_google_types import GoogleDuration, SubscriptionProductDetails 
 from vendor import onion_req
 import backend
 import base
@@ -2677,8 +2677,8 @@ def test_google_platform_handle_notification(monkeypatch):
         assert isinstance(purchase_token, str)
 
         err_rtdn = base.ErrorSink()
-        _        = platform_google.handle_notification(scenario.rtdn_event, ctx.sql_conn, err_rtdn)
-        assert not err_rtdn.has()
+        result   = platform_google.handle_notification(scenario.rtdn_event, ctx.sql_conn, err_rtdn)
+        assert not err_rtdn.has() and result.ack and len(result.purchase_token) > 0
 
         order_id = current_state.line_items[0].latest_successful_order_id
         expiry_time_unix_ms = current_state.line_items[0].expiry_time.unix_milliseconds
@@ -2696,11 +2696,11 @@ def test_google_platform_handle_notification(monkeypatch):
         version:      int   = 0
         history:      bool  = True
         hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
-        request_body={'version':     version,
-                      'master_pkey': bytes(user_ctx.master_key.verify_key).hex(),
-                      'master_sig':  bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms':  unix_ts_ms,
-                      'history':     history}
+        request_body={'version'     : version,
+                      'master_pkey' : bytes(user_ctx.master_key.verify_key).hex(),
+                      'master_sig'  : bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
+                      'unix_ts_ms'  : unix_ts_ms,
+                      'history'     : history}
         response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_GET_PRO_STATUS, json=request_body)
         response_json = response.json
         assert response_json is not None
@@ -2711,16 +2711,16 @@ def test_google_platform_handle_notification(monkeypatch):
         add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
         add_pro_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         add_pro_payment_tx.google_payment_token = tx.purchase_token
-        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                        master_pkey=user_ctx.master_key.verify_key,
-                                                                        rotating_pkey=user_ctx.rotating_key.verify_key,
-                                                                        payment_tx=add_pro_payment_tx)
+        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version       = version,
+                                                                        master_pkey   = user_ctx.master_key.verify_key,
+                                                                        rotating_pkey = user_ctx.rotating_key.verify_key,
+                                                                        payment_tx    = add_pro_payment_tx)
         request_body={
-              'version':              version,
-              'master_pkey':          bytes(user_ctx.master_key.verify_key).hex(),
-              'rotating_pkey':        bytes(user_ctx.rotating_key.verify_key).hex(),
-              'master_sig':           bytes(user_ctx.master_key.sign(payment_hash_to_sign).signature).hex(),
-              'rotating_sig':         bytes(user_ctx.rotating_key.sign(payment_hash_to_sign).signature).hex(),
+              'version'       : version,
+              'master_pkey'   : bytes(user_ctx.master_key.verify_key).hex(),
+              'rotating_pkey' : bytes(user_ctx.rotating_key.verify_key).hex(),
+              'master_sig'    : bytes(user_ctx.master_key.sign(payment_hash_to_sign).signature).hex(),
+              'rotating_sig'  : bytes(user_ctx.rotating_key.sign(payment_hash_to_sign).signature).hex(),
               'payment_tx': {
                   'provider':             add_pro_payment_tx.provider.value,
                   'google_payment_token': add_pro_payment_tx.google_payment_token,
@@ -2746,22 +2746,23 @@ def test_google_platform_handle_notification(monkeypatch):
 
     def assert_has_unredeemed_payment(tx: TestTx, plan: base.ProPlan, platform_refund_expiry_unix_ts_ms: int, ctx: TestingContext):
         unredeemed_payments = backend.get_unredeemed_payments_list(ctx.sql_conn)
-        assert len(unredeemed_payments) == 1
-        unredeemed_payment = unredeemed_payments[0]
-        assert isinstance(unredeemed_payment, backend.PaymentRow)
-
-        assert unredeemed_payment.master_pkey == None
-        assert unredeemed_payment.status == base.PaymentStatus.Unredeemed
-        assert unredeemed_payment.plan == plan
-        assert unredeemed_payment.payment_provider == base.PaymentProvider.GooglePlayStore
-        assert unredeemed_payment.redeemed_unix_ts_ms == None
-        assert unredeemed_payment.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
-        assert unredeemed_payment.grace_period_duration_ms == 0
-        assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
-        assert unredeemed_payment.revoked_unix_ts_ms == None
-        assert unredeemed_payment.apple == backend.AppleTransaction()
-        assert unredeemed_payment.google_payment_token == tx.purchase_token
-        assert unredeemed_payment.google_order_id == tx.order_id
+        found = False
+        for unredeemed_payment in unredeemed_payments:
+            if unredeemed_payment.google_order_id == tx.order_id:
+                found = True
+                assert isinstance(unredeemed_payment, backend.PaymentRow)
+                assert unredeemed_payment.master_pkey == None
+                assert unredeemed_payment.status == base.PaymentStatus.Unredeemed
+                assert unredeemed_payment.plan == plan
+                assert unredeemed_payment.payment_provider == base.PaymentProvider.GooglePlayStore
+                assert unredeemed_payment.redeemed_unix_ts_ms == None
+                assert unredeemed_payment.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
+                assert unredeemed_payment.grace_period_duration_ms == 0
+                assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
+                assert unredeemed_payment.revoked_unix_ts_ms == None
+                assert unredeemed_payment.apple == backend.AppleTransaction()
+                assert unredeemed_payment.google_payment_token == tx.purchase_token
+        assert found
 
     def assert_has_payment(tx: TestTx, plan: base.ProPlan, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
         payments = backend.get_payments_list(ctx.sql_conn)
@@ -2804,15 +2805,15 @@ def test_google_platform_handle_notification(monkeypatch):
         assert len(res_items) == user_ctx.payments
         item = res_items[-1]
         assert isinstance(item, dict)
-        item_expiry_unix_ts = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
-        item_order_id = base.json_dict_require_str(item, "google_order_id", err)
-        item_payment_token = base.json_dict_require_str(item, "google_payment_token", err)
-        item_grace_duration_ms = base.json_dict_require_int(item, "grace_period_duration_ms", err)
-        item_payment_provider = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
+        item_expiry_unix_ts                    = base.json_dict_require_int(item, "expiry_unix_ts_ms", err)
+        item_order_id                          = base.json_dict_require_str(item, "google_order_id", err)
+        item_payment_token                     = base.json_dict_require_str(item, "google_payment_token", err)
+        item_grace_duration_ms                 = base.json_dict_require_int(item, "grace_period_duration_ms", err)
+        item_payment_provider                  = base.json_dict_require_int_coerce_to_enum(item, "payment_provider", base.PaymentProvider, err)
         item_platform_refund_expiry_unix_ts_ms = base.json_dict_require_int(item, "platform_refund_expiry_unix_ts_ms", err)
-        item_redeemed_unix_ts_ms = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
-        item_revoked_unix_ts_ms = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
-        item_status = base.json_dict_require_int_coerce_to_enum(item, "status", base.PaymentStatus, err)
+        item_redeemed_unix_ts_ms               = base.json_dict_require_int(item, "redeemed_unix_ts_ms", err)
+        item_revoked_unix_ts_ms                = base.json_dict_require_int(item, "revoked_unix_ts_ms", err)
+        item_status                            = base.json_dict_require_int_coerce_to_enum(item, "status", base.PaymentStatus, err)
         assert not err.has()
         assert item_expiry_unix_ts == tx.expiry_unix_ts_ms
         assert item_order_id == tx.order_id
@@ -2827,11 +2828,14 @@ def test_google_platform_handle_notification(monkeypatch):
     """
     Testing Common Action Functions
     """
-
-    def test_make_purchase_and_claim_payment(purchase: TestScenario, plan: base.ProPlan, user_ctx: TestUserCtx, ctx: TestingContext):
+    def test_make_purchase(purchase: TestScenario, plan: base.ProPlan, ctx: TestingContext):
         tx = test_notification(purchase, ctx)
         platform_refund_expiry_unix_tx_ms = calculate_google_platform_expiry_ts_ms(tx)
         assert_has_unredeemed_payment(tx=tx, plan=plan, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, ctx=ctx)
+        return tx, platform_refund_expiry_unix_tx_ms
+
+    def test_make_purchase_and_claim_payment(purchase: TestScenario, plan: base.ProPlan, user_ctx: TestUserCtx, ctx: TestingContext):
+        tx, platform_refund_expiry_unix_tx_ms = test_make_purchase(purchase=purchase, plan=plan, ctx=ctx)
         # Redeem subscription payment
         redeemed_ts_ms_rounded = add_payment(tx=tx, user_ctx=user_ctx, ctx=ctx)
         assert len(backend.get_unredeemed_payments_list(ctx.sql_conn)) == 0
@@ -2872,7 +2876,14 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User cancels"""
         _ = test_notification(cancel, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_subscribe, 
+                          pro_status                        = server.UserProStatus.Active,
+                          payment_status                    = base.PaymentStatus.Redeemed,
+                          auto_renew                        = False,
+                          grace_duration_ms                 = 0,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
 
         """3. User un-cancels"""
         _ = test_notification(uncancel, ctx)
@@ -2883,8 +2894,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           grace_duration_ms                 = 0,
                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx,
-                          ctx                               = ctx)
+                          user_ctx                          = user_ctx, ctx = ctx)
 
         """4. User refunds"""
         _ = test_notification(refund, ctx)
@@ -2933,26 +2943,61 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_subscribe,
+                          pro_status                        = server.UserProStatus.Active,
+                          payment_status                    = base.PaymentStatus.Redeemed,
+                          auto_renew                        = True,
+                          grace_duration_ms                 = test_product_details.grace_period.milliseconds,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
         # Expire payments at the EOD of the resubscribe expiry_ts (not the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_subscribe,
+                          pro_status                        = server.UserProStatus.Expired,
+                          payment_status                    = base.PaymentStatus.Expired,
+                          auto_renew                        = True,
+                          grace_duration_ms                 = test_product_details.grace_period.milliseconds,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
 
         """3. User renews"""
         tx_renew, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=renew_after_grace, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
         """4. User cancels"""
         _ = test_notification(cancel, ctx)
-        assert_pro_status(tx=tx_renew, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_renew,
+                          pro_status                        = server.UserProStatus.Active,
+                          payment_status                    = base.PaymentStatus.Redeemed,
+                          auto_renew                        = False,
+                          grace_duration_ms                 = 0,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
 
         """5. Subscription expires"""
         tx_expire = test_notification(expire, ctx)
         # status isnt expired yet as the rounded expiry time hasnt happend and the sweeper hasn't run, so there should be no status change
-        assert_pro_status(tx=tx_renew, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_renew,
+                          pro_status                        = server.UserProStatus.Active,
+                          payment_status                    = base.PaymentStatus.Redeemed,
+                          auto_renew                        = False,
+                          grace_duration_ms                 = 0,
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          = user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_renew, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_status(tx                                = tx_renew,
+                          pro_status                        = server.UserProStatus.Expired,
+                          payment_status                    = base.PaymentStatus.Expired,
+                          auto_renew                        = False,
+                          grace_duration_ms                 = 0, 
+                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                          user_ctx                          =user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3445,3 +3490,41 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User renews
         """
 
+
+    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+        """
+        1. User purchases 1-month subscription, but does not redeem it.
+        2. Developer refunds subscription (removing entitlement)
+        """
+        purchase = TestScenario(
+rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580587012', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:14:46.394Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923'}]}
+        )
+        renew = TestScenario(
+rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580615882', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:15:09.687Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+        )
+        refund_a = TestScenario(
+rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580644292', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+        )
+        refund_b = TestScenario(
+rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580647465', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+        )
+        assert_clean_state(ctx)
+        """1. User purchases 1-month subscription, but does not redeem it."""
+        tx, _ = test_make_purchase(purchase=purchase, plan=base.ProPlan.OneMonth, ctx=ctx)
+        tx, _ = test_make_purchase(purchase=renew, plan=base.ProPlan.OneMonth, ctx=ctx)
+        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.sql_conn)
+        for payment in unredeemed_payments:
+            assert payment.status == base.PaymentStatus.Unredeemed
+
+        """2. Developer refunds subscription (removing entitlement)"""
+        _ = test_notification(refund_a, ctx)
+        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.sql_conn)
+        for payment in unredeemed_payments:
+            assert payment.status == base.PaymentStatus.Revoked
+        _ = test_notification(refund_b, ctx)
+        for payment in unredeemed_payments:
+            assert payment.status == base.PaymentStatus.Revoked
