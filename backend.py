@@ -120,6 +120,11 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
                                                             str | None,   # google_payment_token
                                                             str | None]   # google_order_id
 
+AddRevocationIterator:             typing.TypeAlias = tuple[int,          # (row) id
+                                                            bytes | None, # master_pkey
+                                                            int]          # expiry_unix_ts_ms
+
+
 @dataclasses.dataclass
 class PaymentProviderTransaction:
     provider:                   base.PaymentProvider = base.PaymentProvider.Nil
@@ -629,7 +634,6 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
 
     return result
 
-
 def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     unredeemed_payments: list[PaymentRow] = get_unredeemed_payments_list(sql_conn)
     for index, it in enumerate(unredeemed_payments):
@@ -723,73 +727,8 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     result = len(err.msg_list) == 0
     return result
 
-def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, revoke_unix_ts_ms: int) -> bool:
+def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: collections.abc.Iterator[AddRevocationIterator], revoke_unix_ts_ms: int) -> bool:
     assert tx.cursor
-
-    # NOTE: Select the newest apple transaction that has been redeemed or not. Apple only gives us
-    # the original transaction ID in the scenarios that we call this function (e.g. when upgrading)
-    #
-    # From there we need to find the previous plan using this ID which is shared across all payments
-    # by the user which we can do by finding the newest most payment that is still valid to be used.
-    _ = tx.cursor.execute(f'''
-    SELECT apple_tx_id
-    FROM   payments
-    WHERE  apple_original_tx_id  = ? AND
-           payment_provider      = ? AND
-           (status               = ? OR status = ?) AND
-           unredeemed_unix_ts_ms = (
-        SELECT MAX(unredeemed_unix_ts_ms)
-        FROM payments
-        WHERE apple_original_tx_id = ? AND payment_provider = ?
-      );
-    ''', (# WHERE values
-          apple_original_tx_id,
-          int(base.PaymentProvider.iOSAppStore.value),
-          # OR status == ?
-          int(base.PaymentStatus.Unredeemed.value),
-          int(base.PaymentStatus.Redeemed.value),
-          # WHERE unredeemed_unix_ts_ms = ..
-          apple_original_tx_id,
-          int(base.PaymentProvider.iOSAppStore.value)))
-
-    result = False
-    row    = tx.cursor.fetchone()
-    if row:
-        # NOTE: Found the TX now execute the revoke on it
-        row        = typing.cast(collections.abc.Iterator[tuple[str]], row)
-        revocation = AddRevocationItem(payment_provider=base.PaymentProvider.iOSAppStore,
-                                       tx_id=row[0],
-                                       revoke_unix_ts_ms=revoke_unix_ts_ms)
-        result = add_revocation_tx(tx, revocation)
-
-    return result
-
-def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
-    assert tx.cursor
-
-    # NOTE: Select the newest google transaction that has been redeemed or not. Google only gives us
-    # the purchase token in the scenarios that we call this function.
-
-    # NOTE: We also grab payments that are already revoked. This is because Google sends the revoked
-    # notification after it may have already expired or have been revoked. If we skip those, this
-    # function will return false and the caller will erroneously assume it has failed when infact
-    # what we're trying to communicate to the caller is that, the payment token they were trying to
-    # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
-    # that entitlement has been revoked where necessary.
-    _ = tx.cursor.execute(f'''
-    SELECT id, master_pkey, expiry_unix_ts_ms
-    FROM   payments
-    WHERE  google_payment_token = ? AND
-           payment_provider     = ? AND
-           (status              = ? OR status = ? OR status = ?)
-    ''', (# WHERE values
-          google_payment_token,
-          int(base.PaymentProvider.GooglePlayStore),
-          # OR status == ?
-          int(base.PaymentStatus.Unredeemed.value),
-          int(base.PaymentStatus.Redeemed.value),
-          int(base.PaymentStatus.Revoked.value),))
-
     result                             = False
     rows                               = typing.cast(list[tuple[int, bytes | None, int]], tx.cursor.fetchall())
     master_pkey_dict: dict[bytes, int] = {}
@@ -819,9 +758,8 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
               int(base.PaymentStatus.Unredeemed.value),
               int(base.PaymentStatus.Redeemed.value)))
 
-    revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, revoke_unix_ts_ms)
+    revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.iOSAppStore, revoke_unix_ts_ms)
     for it in master_pkey_dict:
-        # TODO: Copy-pasta
         # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
         # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
         # proofs that aren't going to self-expire by the end of the day.
@@ -834,8 +772,84 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
             master_pkey = nacl.signing.VerifyKey(it)
             revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
 
+    return result
+
+def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
+    """Revoke all the payments that aren't revoked that share the same original TX ID. Returns true
+    if there were any rows that had the ID"""
+    assert tx.cursor
+    # TODO: Can be cleaned up more, a lot of repeated code between apple and google here, but it
+    # works fine. Also, this code is very platform specific, potentially the grabbing of IDs should
+    # happen in the platform layers and then the backend only deals with IDs. Potentially separating
+    # such platform specific implementation concerns to the requisite platforms.
+
+    # NOTE: Select the newest apple transaction that has been redeemed or not. apple only gives us
+    # the original TX ID token in the scenarios that we call this function.
+    #
+    # From there we need to find the previous plan using this ID which is shared across all payments
+    # by the user which we can do by finding the newest most payment that is still valid to be used.
+
+    # NOTE: We also grab payments that are already revoked. This is because Google sends the revoked
+    # notification after it may have already expired or have been revoked. If we skip those, this
+    # function will return false and the caller will erroneously assume it has failed when infact
+    # what we're trying to communicate to the caller is that, the payment token they were trying to
+    # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
+    # that entitlement has been revoked where necessary.
+    _ = tx.cursor.execute(f'''
+    SELECT id, master_pkey, expiry_unix_ts_ms
+    FROM   payments
+    WHERE  apple_original_tx_id  = ? AND
+           payment_provider      = ? AND
+           (status               = ? OR status = ? OR status = ? OR status = ?);
+    ''', (# WHERE values
+          apple_original_tx_id,
+          int(base.PaymentProvider.iOSAppStore.value),
+          # OR status == ?
+          int(base.PaymentStatus.Unredeemed.value),
+          int(base.PaymentStatus.Redeemed.value),
+          int(base.PaymentStatus.Expired.value),
+          int(base.PaymentStatus.Revoked.value),))
+
+    rows = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
     if result == False:
-        err.msg_list.append(f'Failed to revoke Google purchase token {base.obfuscate(google_payment_token)} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
+        err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
+
+    return result
+
+def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
+    """Revoke all the payments that aren't revoked that share the same original TX ID. Returns true
+    if there were any rows that had the ID"""
+    assert tx.cursor
+
+    # NOTE: Select the newest google transaction that has been redeemed or not. Google only gives us
+    # the purchase token in the scenarios that we call this function.
+
+    # NOTE: We also grab payments that are already revoked. This is because Google sends the revoked
+    # notification after it may have already expired or have been revoked. If we skip those, this
+    # function will return false and the caller will erroneously assume it has failed when infact
+    # what we're trying to communicate to the caller is that, the payment token they were trying to
+    # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
+    # that entitlement has been revoked where necessary.
+    _ = tx.cursor.execute(f'''
+    SELECT id, master_pkey, expiry_unix_ts_ms
+    FROM   payments
+    WHERE  google_payment_token = ? AND
+           payment_provider     = ? AND
+           (status              = ? OR status = ? OR status = ? OR status = ?)
+    ''', (# WHERE values
+          google_payment_token,
+          int(base.PaymentProvider.GooglePlayStore),
+          # OR status == ?
+          int(base.PaymentStatus.Unredeemed.value),
+          int(base.PaymentStatus.Redeemed.value),
+          int(base.PaymentStatus.Expired.value),
+          int(base.PaymentStatus.Revoked.value),))
+
+    rows = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
+    if result == False:
+        err.msg_list.append(f'Failed to revoke Apple orig. TX ID {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
@@ -1411,7 +1425,6 @@ def expire_by_unix_ts_ms(tx: base.SQLTransaction, unix_ts_ms: int) -> set[nacl.s
             revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
     return result
 
-
 def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider: base.PaymentProvider, unix_ts_ms: int):
     result_unix_ts_ms = unix_ts_ms
     """For different platforms in their testing environments, they have different timespans 
@@ -1428,65 +1441,6 @@ def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider:
     else:
         result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     return result_unix_ts_ms
-
-def add_revocation_tx(tx: base.SQLTransaction, revocation: AddRevocationItem) -> bool:
-    """Returns true if a payment was found that could be revoked"""
-    assert tx.cursor
-    tx_field_name = ''
-    match revocation.payment_provider:
-        case base.PaymentProvider.Nil:
-            tx_field_name = ''
-        case base.PaymentProvider.GooglePlayStore:
-            tx_field_name = 'google_order_id'
-        case base.PaymentProvider.iOSAppStore:
-            tx_field_name = 'apple_tx_id'
-
-    result = False
-    assert len(tx_field_name) > 0
-    if len(tx_field_name) > 0:
-        _ = tx.cursor.execute(f'''
-            SELECT    id, master_pkey, expiry_unix_ts_ms
-            FROM      payments
-            WHERE     {tx_field_name} = ?
-        ''', (# WHERE values
-              revocation.tx_id,))
-
-        rows = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
-        for row in rows:
-            result                          = True
-            id:                int          = row[0]
-            master_pkey_bytes: bytes | None = row[1]
-            expiry_unix_ts_ms: int          = row[2]
-
-            # NOTE: Mark the payment as revoked
-            _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET    status = ?, revoked_unix_ts_ms = ?, auto_renewing = 0
-                WHERE  id     = ?
-            ''', (# SET values
-                  int(base.PaymentStatus.Revoked.value),
-                  revocation.revoke_unix_ts_ms,
-                  # WHERE values
-                  id))
-
-            # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
-            # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
-            # proofs that aren't going to self-expire by the end of the day.
-            #
-            # For different platforms in their testing environments, they have different timespans
-            # for a day, for example in Google 1 day is 10s. We handle that explicitly here.
-            revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(revocation.payment_provider, revocation.revoke_unix_ts_ms)
-
-            # NOTE: A payment will not have a master pkey associated with it if the user hasn't
-            # redeemed it yet
-            if master_pkey_bytes and expiry_unix_ts_ms > revoke_unix_ts_ms_next_day:
-                master_pkey = nacl.signing.VerifyKey(master_pkey_bytes)
-                revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
-    return result
-
-def add_revocation(sql_conn: sqlite3.Connection, revocation: AddRevocationItem):
-    with base.SQLTransaction(sql_conn) as tx:
-        _ = add_revocation_tx(tx, revocation)
 
 def get_pro_proof(sql_conn:       sqlite3.Connection,
                   version:        int,
