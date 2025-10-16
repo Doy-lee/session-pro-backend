@@ -277,9 +277,11 @@ API
                        features.
       auto_renewing:     1 byte boolean indicating if the latest pro subscription (if active)
                          is set to auto-renew at the marked expiry time.
-      expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the entitlement of Session
-                         Pro is due to expire as defined by the payment with the latest
-                         expiry date associated with it.
+      expiry_unix_ts_ms: 8 byte UNIX timestamp indicating the latest timestamp to which a user is
+                         allowed to request a Session Pro Proof from the backend. This timestamp is
+                         inclusive of the grace period a user may be allocated if they have an auto-
+                         renewing subscription. This is calculated by the max(expiry + maybe grace
+                         period) timestamp from their list of payments.
       grace_duration_ms: 8 byte duration integer indicating the grace period duration indicating
                          the amount of time the payment platform will attempt to auto-renew the
                          subscription after it has expired. The user is entitled to Session Pro

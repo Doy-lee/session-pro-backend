@@ -53,6 +53,13 @@ class ProSubscriptionProof:
         return result
 
 @dataclasses.dataclass
+class LookupUserExpiryUnixTsMs:
+    expiry_unix_ts_ms_from_redeemed:   int = 0
+    expiry_unix_ts_ms_from_expired:    int = 0
+    best_expiry_unix_ts_ms:            int = 0
+
+
+@dataclasses.dataclass
 class SQLField:
     name: str = ''
     type: str = ''
@@ -571,7 +578,14 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 gen_index INTEGER NOT NULL,
 
                 -- Timestamp at latest subscriptions for the user expires. This might be in the past
-                -- for elapsed payments
+                -- for elapsed payments. This timestamp is inclusive of the grace period and is
+                -- consequently updated every time the user toggles their subscription auto-renewing
+                -- preferences.
+                --
+                -- This timestamp is used to determine the deadline for which a Session Pro proof
+                -- can be generated for a user, after the time has elapsed the user is no longer
+                -- eligible for a proof signed by the backend and the user will naturally be
+                -- vacuumed by the DB once the expiry job executes.
                 expiry_unix_ts_ms INTEGER NOT NULL
             );
 
@@ -906,7 +920,7 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
             # user had one as a new proof will be generated
             revoke_gen_id_for_master_pkey_internal(tx=tx, master_pkey=master_pkey)
 
-            allocated: AllocatedGenID = allocate_new_gen_id_if_master_pkey_has_payments_internal(tx=tx, master_pkey=master_pkey)
+            allocated: AllocatedGenID = _allocate_new_gen_id_if_master_pkey_has_payments(tx=tx, master_pkey=master_pkey)
             if allocated.found:
                 proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
                 if base.DEV_BACKEND_MODE:
@@ -949,6 +963,47 @@ def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
+def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> LookupUserExpiryUnixTsMs:
+    assert tx.cursor
+
+    # NOTE: We grab the expired ones as well because if they have grace that payment's deadline
+    # is later than the expiry period which may actually be the latest known expiry period
+    #
+    # By definition we can't lookup unredeemed payments because they don't have a master public key
+    # registered for it yet (e.g. the user has not associated a master public key with the payment
+    # yet by redeeming it).
+    _ = tx.cursor.execute(f'''
+        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status
+        FROM      payments
+        WHERE     master_pkey = ? AND (status = ? OR status = ?)
+    ''', (bytes(master_pkey),
+          int(base.PaymentStatus.Redeemed.value),
+          int(base.PaymentStatus.Expired.value),))
+
+    # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
+    # the expiry time (inclusive of the grace period if applicable)
+    result = LookupUserExpiryUnixTsMs()
+    rows = typing.cast(list[tuple[int, int, int, int]], tx.cursor.fetchall())
+    for row in rows:
+        expiry_unix_ts_ms:        int = row[0]
+        grace_period_duration_ms: int = row[1]
+        auto_renewing:            int = row[2]
+        status:                   int = row[3]
+
+        payment_expiry_unix_ts_ms = expiry_unix_ts_ms
+        if auto_renewing:
+            payment_expiry_unix_ts_ms += grace_period_duration_ms
+
+        if status == base.PaymentStatus.Redeemed:
+            result.expiry_unix_ts_ms_from_redeemed = max(result.expiry_unix_ts_ms_from_redeemed, payment_expiry_unix_ts_ms)
+        elif status == base.PaymentStatus.Expired:
+            result.expiry_unix_ts_ms_from_expired = max(result.expiry_unix_ts_ms_from_expired, payment_expiry_unix_ts_ms)
+        else:
+            assert False, f"Invalid code path, unhandled PaymentStatus value ({status})"
+
+    result.best_expiry_unix_ts_ms = max(result.expiry_unix_ts_ms_from_expired, result.expiry_unix_ts_ms_from_redeemed)
+    return result
+
 def update_payment_renewal_info_tx(tx:                       base.SQLTransaction,
                                    payment_tx:               PaymentProviderTransaction,
                                    grace_period_duration_ms: int  | None,
@@ -990,23 +1045,40 @@ def update_payment_renewal_info_tx(tx:                       base.SQLTransaction
 
         case base.PaymentProvider.GooglePlayStore:
             _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET   {sql_set_fields}
-                WHERE google_payment_token = ? AND google_order_id = ?
+                UPDATE    payments
+                SET       {sql_set_fields}
+                WHERE     google_payment_token = ? AND google_order_id = ?
+                RETURNING master_pkey
             ''', (*tuple(sql_execute_args), payment_tx.google_payment_token, payment_tx.google_order_id))
 
         case base.PaymentProvider.iOSAppStore:
             _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET   {sql_set_fields}
-                WHERE  apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                UPDATE    payments
+                SET       {sql_set_fields}
+                WHERE     apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                RETURNING master_pkey
             ''', (*tuple(sql_execute_args), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
 
-    result = tx.cursor.rowcount > 0
+    # NOTE: Having `RETURNING master_pkey` seems to break tx.cursor.rowcount and returns 0 even on
+    # row modification. We use fetchone instead
+    row    = typing.cast(tuple[bytes] | None, tx.cursor.fetchone())
+    result = row is not None
 
-    if not result:
+    # NOTE: Update the user's expiry to the latest known expiry
+    if row and row[0]:
+        master_pkey_bytes: bytes = row[0]
+        lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx,
+                                                                                                         nacl.signing.VerifyKey(master_pkey_bytes))
+        # NOTE: We have the latest expiry value, now update the user
+        _ = tx.cursor.execute('''
+            UPDATE users
+            SET    expiry_unix_ts_ms = ?
+            WHERE  master_pkey = ?
+        ''', (lookup.best_expiry_unix_ts_ms, master_pkey_bytes))
+
+    if result == False:
         payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
-        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider} {payment_id}')
+        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
     return result
 
 def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
@@ -1119,27 +1191,16 @@ def add_unredeemed_payment(sql_conn:                          sqlite3.Connection
                                   platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_ts_ms,
                                   err=err)
 
-def allocate_new_gen_id_if_master_pkey_has_payments_internal(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
+def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     result:            AllocatedGenID = AllocatedGenID()
     master_pkey_bytes: bytes          = bytes(master_pkey)
     assert tx.cursor is not None
 
-    # Get the latest payment that has been redeemed and has an expiry date assigned to it for the
-    # master pkey. This is the newest expiry date that we will allocate a generation ID for
-    _ = tx.cursor.execute('''
-        SELECT   expiry_unix_ts_ms
-        FROM     payments
-        WHERE    master_pkey = ? AND status = ?
-        ORDER BY expiry_unix_ts_ms DESC
-        LIMIT    1
-    ''', (master_pkey_bytes, int(base.PaymentStatus.Redeemed.value),))
-
-    row = typing.cast(tuple[int], tx.cursor.fetchone())
-    if row:
-        result.found             = True
-        result.expiry_unix_ts_ms = row[0]
-
-        # Master pkey has a payment we can use. Allocate a new generation ID in the runtime table
+    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx, master_pkey)
+    result.expiry_unix_ts_ms         = lookup.expiry_unix_ts_ms_from_redeemed
+    if lookup.expiry_unix_ts_ms_from_redeemed > 0:
+        # NOTE: Master pkey has a payment we can use. Allocate a new generation ID in the runtime table
+        result.found = True
         _ = tx.cursor.execute('''
             UPDATE    runtime
             SET       gen_index = gen_index + 1
@@ -1398,8 +1459,8 @@ def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: base.SQLTransaction, m
     # If the use had any left over payments that are valid to use, we can allocate them a new
     # generation ID for subsequent proofs to be generated under. Clients will notice that their
     # current proofs on the old generation ID are revoked (via the previous function here) and
-    # requery the backend to generate a new one.
-    _ = allocate_new_gen_id_if_master_pkey_has_payments_internal(tx, master_pkey)
+    # re-query the backend to generate a new one.
+    _ = _allocate_new_gen_id_if_master_pkey_has_payments(tx, master_pkey)
 
 def expire_by_unix_ts_ms(tx: base.SQLTransaction, unix_ts_ms: int) -> set[nacl.signing.VerifyKey]:
     assert tx.cursor
