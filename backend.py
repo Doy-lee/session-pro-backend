@@ -741,10 +741,9 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     result = len(err.msg_list) == 0
     return result
 
-def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: collections.abc.Iterator[AddRevocationIterator], revoke_unix_ts_ms: int) -> bool:
+def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevocationIterator], revoke_unix_ts_ms: int) -> bool:
     assert tx.cursor
     result                             = False
-    rows                               = typing.cast(list[tuple[int, bytes | None, int]], tx.cursor.fetchall())
     master_pkey_dict: dict[bytes, int] = {}
     for row in  rows:
         result                          = True
@@ -824,7 +823,7 @@ def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, 
           int(base.PaymentStatus.Expired.value),
           int(base.PaymentStatus.Revoked.value),))
 
-    rows = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    rows = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
     result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
@@ -860,7 +859,7 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
           int(base.PaymentStatus.Expired.value),
           int(base.PaymentStatus.Revoked.value),))
 
-    rows = typing.cast(collections.abc.Iterator[tuple[int, bytes | None, int]], tx.cursor)
+    rows = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
     result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Apple orig. TX ID {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
