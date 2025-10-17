@@ -702,9 +702,9 @@ def get_pro_payments():
     with open_db_from_flask_request_context(flask.current_app) as db:
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
-            grace_period_duration_ms = get_user.grace_period_duration_ms
-            expiry_unix_ts_ms        = get_user.expiry_unix_ts_ms
-            auto_renewing            = get_user.auto_renewing
+            grace_period_duration_ms = get_user.user.grace_period_duration_ms
+            expiry_unix_ts_ms        = get_user.user.expiry_unix_ts_ms
+            auto_renewing            = get_user.user.auto_renewing
             has_payments             = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired

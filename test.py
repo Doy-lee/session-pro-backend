@@ -292,8 +292,8 @@ def test_backend_same_user_stacks_subscription():
     # NOTE: Get the user and payments and verify that the expiry and grace are correct
     with base.SQLTransaction(db.sql_conn) as tx:
         get: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
-        assert get.auto_renewing            == False
-        assert get.grace_period_duration_ms == new_grace_duration_ms
+        assert get.user.auto_renewing            == False
+        assert get.user.grace_period_duration_ms == new_grace_duration_ms
 
     _ = backend.verify_db(db.sql_conn, err)
     if len(err.msg_list) > 0:
@@ -810,7 +810,7 @@ def test_server_add_payment_flow():
         # NOTE: Verify that there is no grace period set first
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.grace_period_duration_ms == 0
+            assert get_user.user.grace_period_duration_ms == 0
 
         # NOTE: Grab the latest expiring payment so that we have access to the payment details
         last_payment = backend.PaymentRow()
@@ -837,8 +837,8 @@ def test_server_add_payment_flow():
         pro_proof_deadline_unix_ts_ms: int = 0
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.grace_period_duration_ms > 0
-            pro_proof_deadline_unix_ts_ms = get_user.expiry_unix_ts_ms + get_user.grace_period_duration_ms
+            assert get_user.user.grace_period_duration_ms > 0
+            pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms
 
         # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
         request_version: int   = 0
@@ -3158,20 +3158,25 @@ def test_google_platform_handle_notification(monkeypatch):
         assert isinstance(user, backend.UserRow)
         assert user.master_pkey == bytes(user_ctx.master_key.verify_key)
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
-        assert user.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
+        assert user.expiry_unix_ts_ms == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
 
     def assert_pro_status(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
         status = get_pro_status(user_ctx=user_ctx, ctx=ctx)
         err = base.ErrorSink()
         result = base.json_dict_require_obj(status, "result", err)
         res_auto_renewing = base.json_dict_require_bool(result, "auto_renewing", err)
-        res_latest_expiry_unix_ts = base.json_dict_require_int(result, "expiry_unix_ts_ms", err)
+        res_expiry_unix_ts_ms = base.json_dict_require_int(result, "expiry_unix_ts_ms", err)
+        res_grace_period_duration_ms = base.json_dict_require_int(result, "grace_period_duration_ms", err)
         res_pro_status = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
         res_items = base.json_dict_require_array(result, "items", err)
         assert not err.has()
         assert res_auto_renewing == auto_renew
         revoked = payment_status == base.PaymentStatus.Revoked
-        assert res_latest_expiry_unix_ts == tx.expiry_unix_ts_ms
+        if revoked:
+            assert res_expiry_unix_ts_ms == tx.expiry_unix_ts_ms
+        else:
+            res_expiry_unix_ts_ms_wo_grace = res_expiry_unix_ts_ms - res_grace_period_duration_ms
+            assert res_expiry_unix_ts_ms_wo_grace == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
         assert res_pro_status == pro_status
         assert len(res_items) == user_ctx.payments
         item = res_items[-1]
@@ -3322,8 +3327,10 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx, ctx=ctx)
-        # Expire payments at the EOD of the resubscribe expiry_ts (not the extend expiry_ts from the grace period tx)
+
+        # Expire payments at the EOD of the resubscribe expiry_ts (note the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
+
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
         assert_pro_status(tx                                = tx_subscribe,
                           pro_status                        = server.UserProStatus.Expired,
