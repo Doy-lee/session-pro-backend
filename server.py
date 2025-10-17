@@ -352,7 +352,7 @@ API
         "version": 0,
         "master_pkey": "8ddc57b457fca85d2184813ea18a048f64a35ab0e693d4a0a3e4f8ee87ff3360",
         "master_sig": "37495dfab72772ebf4e4bf213b0a1c46e8e044ef3e4360ff8ef04ee8a7daf2178a716447de6f938d0e7865be31735fb2db2d1213dc35c02dfe253aac77fb2a0d",
-        "timestamp": 1755653705,
+        "unix_ts_ms": 1755653705,
         "history": true,
       }
 
