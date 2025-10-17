@@ -301,7 +301,7 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
-def _payment_provider_tx_log_label(tx: PaymentProviderTransaction):
+def payment_provider_tx_log_label(tx: PaymentProviderTransaction):
     result = f'{tx.provider.name}, apple (orig/tx/web)=({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google=({tx.google_payment_token}/{tx.google_order_id})'
     return result
 
@@ -1077,7 +1077,7 @@ def update_payment_renewal_info_tx(tx:                       base.SQLTransaction
     """
 
     if log.getEffectiveLevel() <= logging.INFO:
-        payment_tx_label = _payment_provider_tx_log_label(payment_tx)
+        payment_tx_label = payment_provider_tx_log_label(payment_tx)
         log.info(f'Update renewal info (payment={payment_tx_label}, grace period ms={grace_period_duration_ms}, auto_renewing={auto_renewing})')
 
     result = False
@@ -1161,7 +1161,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                               err:                               base.ErrorSink):
 
     if log.getEffectiveLevel() <= logging.INFO:
-        payment_tx_label = _payment_provider_tx_log_label(payment_tx)
+        payment_tx_label = payment_provider_tx_log_label(payment_tx)
         log.info(f'Unredeemed payment (payment={payment_tx_label}, plan={plan.name}, expiry={base.readable_unix_ts_ms(expiry_unix_ts_ms)}, unredeemed={base.readable_unix_ts_ms(unredeemed_unix_ts_ms)}, refund={base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)})')
 
     verify_payment_provider_tx(payment_tx, err)

@@ -85,6 +85,12 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                     assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
                     assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
 
+                    if log.getEffectiveLevel() <= logging.INFO:
+                        expiry:        str = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
+                        unredeemed:    str = base.readable_unix_ts_ms(tx_event.event_ts_ms)
+                        payment_label: str = backend.payment_provider_tx_log_label(tx_payment)
+                        log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={tx_event.linked_purchase_token}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
+
                     with base.SQLTransaction(sql_conn) as tx:
                         # NOTE: If a linked token is in the payload, it means that the old token
                         # needs to be voided first before continuing as the link token is the new
@@ -119,6 +125,12 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
                 plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
+
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    grace_ms: int = plan_details.grace_period.milliseconds if plan_details else 0
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, grace period ms={grace_ms})')
+
                 if not err.has():
                     assert plan_details is not None
                     set_purchase_grace_period_duration(tx_payment               = tx_payment,
@@ -128,6 +140,13 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
 
         case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+
+                if log.getEffectiveLevel() <= logging.INFO:
+                    expiry        = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
+                    unredeemed    = base.readable_unix_ts_ms(tx_event.event_ts_ms)
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, plan={tx_event.pro_plan.name}, unredeemed={unredeemed}, expiry={expiry})')
+
                 with base.SQLTransaction(sql_conn) as tx:
                     assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
                     assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
@@ -144,15 +163,24 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED \
             or tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
                 toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
                 toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
                 with base.SQLTransaction(sql_conn) as tx:
                     _ = backend.add_google_revocation_tx(tx                   = tx,
                                                          google_payment_token = tx_payment.google_payment_token,
@@ -168,13 +196,18 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
             """
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED \
             or tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ON_HOLD:
+
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, revoke={base.readable_unix_ts_ms(tx_event.event_ts_ms)})')
+
                 with base.SQLTransaction(sql_conn) as tx:
                     # TODO: If this function ever finds rounded(expiry_ts) > rounded(event_ts) the devs need to be notified somehow.
                     """If everything works as intended, this function should always find that `rounded(expiry_ts) == rounded(event_ts)` and 
                     not issue a revocation. If a payment is ever in a state where it should self-expire but isn't, we need to revoke it. In
                     this case something has gone wrong and the user was over-entitled.
                     """
-                    payment = backend.get_payment_tx(tx=tx, payment_tx=tx_payment, err=err)
+                    payment: backend.PaymentRow | None = backend.get_payment_tx(tx=tx, payment_tx=tx_payment, err=err)
                     if payment is None or err.has():
                         err.msg_list.append(f"Failed to get payment details for potential revocation!")
                     elif payment.status == base.PaymentStatus.Unredeemed:
@@ -220,13 +253,11 @@ def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
                     pass
                 case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
                     err.msg_list.append(f'voided purchase refundType {reflect_enum(tx.refund_type)} is unsupported!')
-                case _:
-                    err.msg_list.append(f'voided purchase refundType is not valid: {reflect_enum(tx.refund_type)}')
         case ProductType.PRODUCT_TYPE_ONE_TIME:
             err.msg_list.append(f'voided purchase productType {reflect_enum(tx.product_type)} is unsupported!')
 
     if err.has():
-        err.msg_list.append(f'Failed to handle {reflect_enum(tx.refund_type) if tx.refund_type is not None else "N/A"} order_id {obfuscate(tx.order_id) if len(tx.order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {reflect_enum(tx.refund_type)}')
 
 
 def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> GoogleHandleNotificationResult:
@@ -363,7 +394,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
             sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
-            future   = client.subscribe(subscription=sub_path, callback=callback)
+            future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
             while context.kill_thread == False:
                 try:
                     future.result(timeout=0.5)
@@ -385,7 +416,7 @@ def init(sql_conn:                sqlite3.Connection,
     if app_credentials_path:
         platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
                                                                                                 scopes=['https://www.googleapis.com/auth/androidpublisher'])
-        platform_google_api.publisher_service = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)
+        platform_google_api.publisher_service = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)  # pyright: ignore[reportUnknownMemberType]
 
     platform_google_api.package_name            = package_name
     platform_google_api.subscription_product_id = subscription_product_id
