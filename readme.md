@@ -194,7 +194,7 @@ python -m pytest test.py --verbose --capture=no
 # needs to be running to maintain the integrity of the DB.
 #
 # Lazy apps `--lazy-apps` ensures that each spawned process runs our
-# `entry_point` in main # instead of having 1 master process that runs it and
+# `entry_point` in main instead of having 1 master process that runs it and
 # then multiple sub-workers that sit-idle waiting for requests via flask. This
 # is required as otherwise UWSGI has problems terminating the workers (for some
 # reason, see: https://github.com/unbit/uwsgi/issues/1609). Ordinarily you would

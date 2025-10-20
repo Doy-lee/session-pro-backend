@@ -85,16 +85,31 @@ class ErrorSink:
     def has(self) -> bool:
         return len(self.msg_list) > 0
 
+class SQLTransactionMode(enum.IntEnum):
+    Default   = 0 # Acquires requisite r/w DB lock on first query
+    Immediate = 1 # Acquires write lock and allows concurrent reads
+    Exclusive = 2 # Acquires lock and blocks concurrent reads (and by definition, writes)
+
 @dataclasses.dataclass
 class SQLTransaction:
     conn:   sqlite3.Connection
     cursor: sqlite3.Cursor | None = None
     cancel: bool                  = False
-    def __init__(self, conn: sqlite3.Connection):
+    mode:   SQLTransactionMode    = SQLTransactionMode.Default
+    def __init__(self, conn: sqlite3.Connection, mode: SQLTransactionMode = SQLTransactionMode.Default):
         self.conn = conn
+        self.mode = mode
 
     def __enter__(self):
-        self.cursor = self.conn.execute('BEGIN TRANSACTION')
+        mode_label = ''
+        match self.mode:
+            case SQLTransactionMode.Default:
+                mode_label = 'DEFERRED '
+            case SQLTransactionMode.Immediate:
+                mode_label = 'IMMEDIATE '
+            case SQLTransactionMode.Exclusive:
+                mode_label = 'EXCLUSIVE '
+        self.cursor = self.conn.execute(f'BEGIN {mode_label} TRANSACTION')
         return self
 
     def __exit__(self,

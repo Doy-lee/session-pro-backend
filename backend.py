@@ -9,6 +9,7 @@ import datetime
 import dataclasses
 import random
 import logging
+import traceback
 
 import base
 
@@ -18,11 +19,12 @@ log                 = logging.Logger("BACKEND")
 
 @dataclasses.dataclass
 class ExpireResult:
-    already_done_by_someone_else: bool = False
-    success:                      bool = False
-    payments:                     int  = 0
-    revocations:                  int  = 0
-    users:                        int  = 0
+    already_done_by_someone_else:    bool = False
+    success:                         bool = False
+    payments:                        int  = 0
+    revocations:                     int  = 0
+    users:                           int  = 0
+    apple_notification_uuid_history: int  = 0
 
 @dataclasses.dataclass
 class ProSubscriptionProof:
@@ -241,10 +243,12 @@ class RuntimeRow:
     If the tickets are the same, clients can conclude that there are no revocation entries to sync
     from the database.
     '''
-    gen_index:         int                     = 0
-    gen_index_salt:    bytes                   = b''
-    backend_key:       nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
-    revocation_ticket: int                     = 0
+    gen_index:                                int                     = 0
+    gen_index_salt:                           bytes                   = b''
+    backend_key:                              nacl.signing.SigningKey = nacl.signing.SigningKey(ZERO_BYTES32)
+    last_expire_unix_ts_ms:                   int                     = 0
+    apple_notification_checkpoint_unix_ts_ms: int                     = 0
+    revocation_ticket:                        int                     = 0
 
 @dataclasses.dataclass
 class AllocatedGenID:
@@ -473,18 +477,26 @@ def get_pro_revocations_iterator(tx: base.SQLTransaction) -> collections.abc.Ite
     result = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
     return result;
 
+def get_runtime_tx(tx: base.SQLTransaction) -> RuntimeRow:
+    assert tx.cursor is not None
+    _                                                = tx.cursor.execute('SELECT gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket FROM runtime')
+    row                                              = typing.cast(tuple[int, bytes, bytes, int, int, int], tx.cursor.fetchone())
+    result: RuntimeRow                               = RuntimeRow()
+    result.gen_index                                 = row[0]
+    result.gen_index_salt                            = row[1]
+    backend_key: bytes                               = row[2]
+    assert len(backend_key)                         == len(ZERO_BYTES32)
+    result.backend_key                               = nacl.signing.SigningKey(backend_key)
+    result.apple_notification_checkpoint_unix_ts_ms  = row[3]
+    result.apple_notification_checkpoint_unix_ts_ms  = row[4]
+    result.revocation_ticket                         = row[5]
+    return result;
+
+
 def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     result: RuntimeRow = RuntimeRow()
     with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _                        = tx.cursor.execute('SELECT * FROM runtime')
-        row                      = typing.cast(tuple[int, bytes, bytes, int], tx.cursor.fetchone())
-        result.gen_index         = row[0]
-        result.gen_index_salt    = row[1]
-        backend_key: bytes       = row[2]
-        assert len(backend_key) == len(ZERO_BYTES32)
-        result.backend_key       = nacl.signing.SigningKey(backend_key)
-        result.revocation_ticket = row[3]
+        result = get_runtime_tx(tx)
     return result;
 
 def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSink) -> str:
@@ -534,6 +546,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         return result
 
     with base.SQLTransaction(result.sql_conn) as tx:
+        target_db_version = 1
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY NOT NULL,
@@ -593,11 +606,37 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             );
 
             CREATE TABLE IF NOT EXISTS runtime (
-                gen_index              INTEGER NOT NULL, -- Next generation index to allocate to an updated user
-                gen_index_salt         BLOB NOT NULL,    -- BLAKE2B salt for hashing the gen_index in proofs
-                backend_key            BLOB NOT NULL,    -- Ed25519 skey for signing proofs
-                last_expire_unix_ts_ms INTEGER NOT NULL, -- Last time expire payments/revocs/users was called on the table
-                revocation_ticket      INTEGER NOT NULL  -- Monotonic index incremented when a revocation is added or removed
+                gen_index                                INTEGER NOT NULL, -- Next generation index to allocate to an updated user
+                gen_index_salt                           BLOB NOT NULL,    -- BLAKE2B salt for hashing the gen_index in proofs
+                backend_key                              BLOB NOT NULL,    -- Ed25519 skey for signing proofs
+                last_expire_unix_ts_ms                   INTEGER NOT NULL, -- Last time expire payments/revocs/users was called on the table
+                -- Last time the DB has successfully handled notifications up to. This is to be used
+                -- to determine the start date to retrieve notifications from when starting up the
+                -- DB to catch out on missed notifications (e.g. downtime due to maintenance or
+                -- outages)
+                apple_notification_checkpoint_unix_ts_ms INTEGER NOT NULL,
+                revocation_ticket                        INTEGER NOT NULL  -- Monotonic index incremented when a revocation is added or removed
+            );
+
+            -- Track notifications that we have processed from Apple by their UUID. We need this for
+            -- robustness. One, we can miss notifications from Apple due to downtime e.g. planned
+            -- maintenance in which case, Apple will retry the notification with an exponential
+            -- backoff:
+            --
+            -- > For version 2 notifications, it retries five times, at 1, 12, 24, 48, and 72 hours after the previous attempt.
+            --
+            -- Alternatively, the backend on startup will query for missed notifications and try to
+            -- catch up on its own. It will store the UUIDs of the notifications it has processed
+            -- so that if the notification is re-attempted, it will be a no-op if we've already
+            -- processed it ourselves.
+            --
+            -- The other scenario is that the backend may experience network connectivity issue and
+            -- our acknowledgement of the notification may fail whilst having already processed the
+            -- notification. In that case, Apple will similarly retry the notification and we need
+            -- to no-op in that situation as well. This is all managed in this table.
+            CREATE TABLE IF NOT EXISTS apple_notification_uuid_history (
+                uuid              STRING NOT NULL,
+                expiry_unix_ts_ms INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS user_errors (
@@ -624,20 +663,40 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         assert tx.cursor is not None
 
         try:
-            _                  = tx.cursor.executescript(sql_stmt)
-            _                  = tx.cursor.execute('SELECT EXISTS (SELECT 1 FROM runtime) as row_exists')
-            runtime_row_exists = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
-            if not runtime_row_exists:
-                if backend_key == None:
-                    backend_key = nacl.signing.SigningKey.generate()
+            # NOTE: Bootstrap tables
+            _ = tx.cursor.executescript(sql_stmt)
 
-                _ = tx.cursor.execute('''
-                    INSERT INTO runtime
-                    SELECT 0, ?, ?, 0, 0
-                ''', (os.urandom(hashlib.blake2b.SALT_SIZE), bytes(backend_key)))
+            # NOTE: Version migration
+            if 1:
+                db_version: int = tx.cursor.execute('PRAGMA user_version').fetchone()[0]  # pyright: ignore[reportAny]
+
+                # NOTE: v0 is the nil state, it means the DB has never been bootstrapped. All the
+                # tables will have been created with the latest schema so we teleport to the target
+                # version
+                if db_version == 0:
+                    # NOTE: Commit the new version
+                    db_version = target_db_version
+                    _          = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
+                # NOTE: Verify that the DB was migrated to the target version
+                assert db_version == target_db_version
+
+            # NOTE: Initialise the runtime row (app global settings) with the default values
+            if 1:
+                _                  = tx.cursor.execute('SELECT EXISTS (SELECT 1 FROM runtime) as row_exists')
+                runtime_row_exists = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
+                if not runtime_row_exists:
+                    if backend_key == None:
+                        backend_key = nacl.signing.SigningKey.generate()
+
+                    _ = tx.cursor.execute('''
+                        INSERT INTO runtime
+                        SELECT 0, ?, ?, 0, 0, 0
+                    ''', (os.urandom(hashlib.blake2b.SALT_SIZE), bytes(backend_key)))
+
             result.success = True
-        except Exception as e:
-            err.msg_list.append(f"Failed to bootstrap DB tables: {e}")
+        except Exception:
+            err.msg_list.append(f"Failed to bootstrap DB tables: {traceback.format_exc()}")
 
     if result.success:
         result.runtime = get_runtime(result.sql_conn)
@@ -1631,7 +1690,7 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
 
 def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_ms: int) -> ExpireResult:
     result = ExpireResult()
-    with base.SQLTransaction(sql_conn) as tx:
+    with base.SQLTransaction(sql_conn, mode=base.SQLTransactionMode.Exclusive) as tx:
         assert tx.cursor is not None
         # Retrieve the last expiry time that was executed
         _ = tx.cursor.execute('''SELECT last_expire_unix_ts_ms FROM runtime''')
@@ -1653,6 +1712,10 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
             # Delete expired users
             _ = tx.cursor.execute('''DELETE FROM users WHERE master_pkey NOT IN (SELECT master_pkey FROM payments)''')
             result.users = tx.cursor.rowcount
+
+            # Delete expired apple notification UUIDs
+            _ = tx.cursor.execute('''DELETE FROM apple_notification_uuid_history WHERE ? >= expiry_unix_ts_ms''', (unix_ts_ms,))
+            result.apple_notification_uuid_history = tx.cursor.rowcount
 
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
@@ -1760,3 +1823,27 @@ def get_payment(sql_conn:   sqlite3.Connection,
         return get_payment_tx(tx=tx,
                               payment_tx=payment_tx,
                               err=err)
+
+def add_apple_notification_uuid_tx(tx: base.SQLTransaction, uuid: str, expiry_unix_ts_ms: int):
+    assert tx.cursor
+    _ = tx.cursor.execute(f'''
+            INSERT INTO apple_notification_uuid_history
+            VALUES      (?, ?)
+    ''', (uuid, expiry_unix_ts_ms))
+
+def apple_notification_uuid_is_in_db_tx(tx: base.SQLTransaction, uuid: str) -> bool:
+    assert tx.cursor
+    _ = tx.cursor.execute(f'''
+            SELECT 1
+            FROM   apple_notification_uuid_history
+            WHERE  uuid = ?
+    ''', (uuid,))
+    result = tx.cursor.rowcount > 0
+    return result
+
+def set_apple_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkpoint_unix_ts_ms: int):
+    assert tx.cursor
+    _ = tx.cursor.execute(f'''
+            UPDATE runtime
+            SET    apple_notification_checkpoint_unix_ts_ms = ?
+    ''', (checkpoint_unix_ts_ms,))

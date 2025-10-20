@@ -1097,7 +1097,7 @@ def test_platform_apple():
 
         notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
         err = base.ErrorSink()
-        platform_apple.handle_notification(decoded_notification=notification, sql_conn=test.sql_conn, err=err)
+        _ = platform_apple.handle_notification(decoded_notification=notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has(), err.msg_list
 
         # NOTE: Subscription renewal should be unredeemed
@@ -1293,7 +1293,7 @@ def test_platform_apple():
             decoded_notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, err=err)
+            _ = platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: Subscription purchase is unredeemed
@@ -1425,7 +1425,7 @@ def test_platform_apple():
             decoded_notification                     = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: Check payment is still in the DB and that auto-renewing was turned off
@@ -1557,7 +1557,7 @@ def test_platform_apple():
             decoded_notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: The payment expires as per Apple's notification. We don't have to do anything
@@ -2359,7 +2359,7 @@ def test_platform_apple():
 
         # NOTE: Witness 3 month subscription
         if 1:
-            platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check payment got added to the DB
             unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2426,7 +2426,7 @@ def test_platform_apple():
         # month subscription following it. This means that going to a 1 week subscription is
         # considered an "upgrade".
         if 1:
-            platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: An upgrade is applied immediately because the user pays on the spot to upgrade.
             # The old subscription should be revoked incase the user already redeemed it and the
@@ -2486,7 +2486,7 @@ def test_platform_apple():
             assert payment_list[len(payment_list) - 1] == unredeemed_payment_list[0]
 
         if 1:
-            platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the payment was marked not auto-renewing
             unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2496,7 +2496,7 @@ def test_platform_apple():
         # NOTE: A downgrade should be a no-op as it's queued to execute at the end of the billing
         # cycle, but it does implicitly mean that auto-renewing is turned back on.
         if 1:
-            platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the new payment has remain unchanged
             unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2529,7 +2529,7 @@ def test_platform_apple():
         # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
         # remain on the 1wk plan
         if 1:
-            platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check that the initial 3 month subscription remains refunded (e.g. unchanged)
             payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.sql_conn)
@@ -2569,7 +2569,7 @@ def test_platform_apple():
 
         # NOTE: Disable auto renew, flag should be turned false for the 1 week plan payment
         if 1:
-            platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the payment was marked not auto-renewing
             unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(test.sql_conn)
@@ -2578,7 +2578,7 @@ def test_platform_apple():
 
         # NOTE: Expire the subscription
         if 1:
-            platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   sql_conn=test.sql_conn, err=err)
+            platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: This is a no-op, but in this test we haven't advanced time past the expiry yet
             # so actually the subscription should still be marked unredeemed in the database hence
@@ -2649,7 +2649,8 @@ def test_platform_apple():
             #     pathlib.Path('/AppleRootCA-G3.cer').read_bytes(),
             # ]
 
-            core: platform_apple.Core = platform_apple.init(key_id      = '9S69CZVVW2',
+            core: platform_apple.Core = platform_apple.init(sql_conn    = test.sql_conn,
+                                                            key_id      = '9S69CZVVW2',
                                                             issuer_id   = 'a7e44301-18a6-4ee1-b21a-c7be8a5b39de',
                                                             bundle_id   = 'com.loki-project.loki-messenger',
                                                             app_id      = None,
@@ -2760,7 +2761,7 @@ def test_platform_apple():
         e00_sub_to_3_months_tx_info.webOrderLineItemId               = '2000000114930708'
 
         e00_sub_to_3_months_decoded_notification                     = platform_apple.DecodedNotification(body=e00_sub_to_3_months_body, tx_info=e00_sub_to_3_months_tx_info, renewal_info=e00_sub_to_3_months_renewal_info)
-        e00_result: bool                                             = platform_apple.handle_notification(decoded_notification = e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, err=err)
+        e00_result: bool                                             = platform_apple.handle_notification(decoded_notification = e00_sub_to_3_months_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e00_result
 
@@ -2859,7 +2860,7 @@ def test_platform_apple():
         e01_consumption_req_tx_info.webOrderLineItemId               = '2000000114930653'
 
         e01_consumption_req_decoded_notification                     = platform_apple.DecodedNotification(body=e01_consumption_req_body, tx_info=e01_consumption_req_tx_info, renewal_info=e01_consumption_req_renewal_info)
-        e01_result: bool                                             = platform_apple.handle_notification(decoded_notification=e01_consumption_req_decoded_notification, sql_conn=test.sql_conn, err=err)
+        e01_result: bool                                             = platform_apple.handle_notification(decoded_notification=e01_consumption_req_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e01_result
 
@@ -2958,7 +2959,7 @@ def test_platform_apple():
         e02_apple_refund_tx_info.webOrderLineItemId                  = '2000000114930653'
 
         e02_apple_refund_decoded_notification = platform_apple.DecodedNotification(body=e02_apple_refund_body, tx_info=e02_apple_refund_tx_info, renewal_info=e02_apple_refund_renewal_info)
-        e02_result: bool                      = platform_apple.handle_notification(decoded_notification=e02_apple_refund_decoded_notification, sql_conn=test.sql_conn, err=err)
+        e02_result: bool                      = platform_apple.handle_notification(decoded_notification=e02_apple_refund_decoded_notification, sql_conn=test.sql_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e02_result
 

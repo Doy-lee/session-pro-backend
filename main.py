@@ -116,11 +116,12 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
             if expire_result.success:
                 if not expire_result.already_done_by_someone_else:
-                    log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users={}/{}/{}'.format(yesterday_str,
+                    log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users/apple notifs={}/{}/{}/{}'.format(yesterday_str,
                                                                                                                      today_str,
                                                                                                                      expire_result.payments,
                                                                                                                      expire_result.revocations,
-                                                                                                                     expire_result.users))
+                                                                                                                     expire_result.users,
+                                                                                                                     expire_result.apple_notification_uuid_history))
             else:
                 log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
@@ -415,6 +416,12 @@ def entry_point() -> flask.Flask:
                                                         root_certs  = parsed_args.apple_root_certs,
                                                         sandbox_env = parsed_args.apple_sandbox_env)
         platform_apple.equip_flask_routes(core, result)
+
+        # NOTE: Offset by 10s to account for clock drift between backend and the Apple servers
+        end_unix_ts_ms = int((time.time() - 10) * 1000)
+        platform_apple.catchup_on_missed_notifications(core           = core,
+                                                       sql_conn       = db.sql_conn,
+                                                       end_unix_ts_ms = end_unix_ts_ms)
 
     # NOTE: Enable Google Play Store notification handling, this is a blocking call so it's delegated
     # to a thread. We use Google's asynchronous streaming pull client which spawns a thread pool
