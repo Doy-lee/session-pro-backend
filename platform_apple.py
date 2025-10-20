@@ -106,6 +106,18 @@ def require_field(field: typing.Any, msg: str, err: base.ErrorSink | None) -> bo
             err.msg_list.append(msg)
     return result
 
+def get_platform_refund_expiry_unix_ts_ms(tx: AppleJWSTransactionDecodedPayload) -> int:
+    # TODO: It's unclear from the Apple documentation whether or not there is a deadline that a user
+    # has to submit a refund request directly through Apple. There are some various off-hand
+    # comments on the internet that state this is 90 days but cannot be corroborated on the actual
+    # documents provided by Apple.
+    #
+    # In this instance then we default to informing clients that the user _can_ request a refund
+    # through apple for the entirety of their subscription duration as a "sane" default.
+    assert tx.expiresDate
+    result: int = tx.expiresDate
+    return result
+
 def handle_notification(decoded_notification: DecodedNotification, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     if err.has():
         return False
@@ -263,7 +275,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                 expiry_unix_ts_ms                 = tx.expiresDate
                 unredeemed_unix_ts_ms             = tx.purchaseDate
-                platform_refund_expiry_unix_ts_ms = 0 # TODO
+                platform_refund_expiry_unix_ts_ms = get_platform_refund_expiry_unix_ts_ms(tx)
                 auto_renewing                     = True
 
                 if log.getEffectiveLevel() <= logging.DEBUG:
@@ -385,7 +397,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
                         expiry_unix_ts_ms                 = tx.expiresDate
                         unredeemed_unix_ts_ms             = tx.purchaseDate
-                        platform_refund_expiry_unix_ts_ms = 0 # TODO
+                        platform_refund_expiry_unix_ts_ms = get_platform_refund_expiry_unix_ts_ms(tx)
                         auto_renewing                     = True
                         revoke_unix_ts_ms                 = tx.purchaseDate
                         if log.getEffectiveLevel() <= logging.DEBUG:
@@ -472,14 +484,14 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
 
             # NOTE: Extract plan
             pro_plan: base.ProPlan = pro_plan_from_product_id(tx.productId, err)
-            payment_tx                 = payment_tx_from_apple_jws_transaction(tx, err)
+            payment_tx             = payment_tx_from_apple_jws_transaction(tx, err)
 
             # NOTE: Extract components
             if not err.has():
                 if not decoded_notification.body.subtype:
                     # NOTE: User is redeeming an offer to start(?) a sub. Submit the payment
                     unredeemed_unix_ts_ms:             int = tx.purchaseDate
-                    platform_refund_expiry_unix_ts_ms: int = 0 # TODO
+                    platform_refund_expiry_unix_ts_ms: int = get_platform_refund_expiry_unix_ts_ms(tx)
                     expiry_unix_ts_ms:                 int = tx.expiresDate
 
                     if log.getEffectiveLevel() <= logging.DEBUG:
@@ -492,7 +504,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                                                    payment_tx                        = payment_tx,
                                                    plan                              = pro_plan,
                                                    unredeemed_unix_ts_ms             = tx.purchaseDate,
-                                                   platform_refund_expiry_unix_ts_ms = 0, # TODO
+                                                   platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
                                                    expiry_unix_ts_ms                 = tx.expiresDate,
                                                    err                               = err)
 
@@ -514,7 +526,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                         auto_renewing                     = True
                         expiry_unix_ts_ms                 = tx.expiresDate
                         unredeemed_unix_ts_ms             = tx.purchaseDate
-                        platform_refund_expiry_unix_ts_ms = 0 # TODO
+                        platform_refund_expiry_unix_ts_ms = get_platform_refund_expiry_unix_ts_ms(tx)
                         revoke_unix_ts_ms                 = tx.purchaseDate
 
                         if log.getEffectiveLevel() <= logging.DEBUG:
@@ -748,7 +760,9 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
             elif decoded_notification.body.notificationType == AppleNotificationV2.REFUND_DECLINED:
                 # A notification type that indicates the App Store declined a refund request.
                 #
-                # NOTE: No-op, the user is still entitled to Session Pro
+                # NOTE: No-op, the user is still entitled to Session Pro, we either get a REFUND or
+                # REFUND_DECLINED, they are mutually exclusive. In the REFUND case we will end their
+                # entitlement.
                 pass
 
             elif decoded_notification.body.notificationType == AppleNotificationV2.GRACE_PERIOD_EXPIRED:
@@ -760,7 +774,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 #
                 # Triggers (https://developer.apple.com/documentation/appstoreservernotifications/notificationtype#Handle-use-cases-for-in-app-purchase-life-cycle-events)
                 #
-                # TODO: No-op, the Session Pro proofs have an expiry date embedded into them and that is
+                # NOTE: No-op, the Session Pro proofs have an expiry date embedded into them and that is
                 # handled by the backend itself.
                 pass
 
@@ -797,7 +811,7 @@ def handle_notification(decoded_notification: DecodedNotification, sql_conn: sql
                 #
                 # Triggers (https://developer.apple.com/documentation/appstoreservernotifications/notificationtype#Handle-use-cases-for-in-app-purchase-life-cycle-events)
                 #
-                # TODO: No-op, the apps do not respond to price increases
+                # NOTE: No-op, the apps do not respond to price increases
                 pass
 
 

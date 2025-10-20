@@ -1308,7 +1308,7 @@ def test_platform_apple():
             assert unredeemed_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert unredeemed_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert unredeemed_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert unredeemed_list[0].apple.tx_id                       == tx_info.transactionId
@@ -1440,7 +1440,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
@@ -1574,7 +1574,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
@@ -1594,7 +1594,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
@@ -2373,7 +2373,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
@@ -2414,7 +2414,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
@@ -2444,7 +2444,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
@@ -2476,7 +2476,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
@@ -2518,7 +2518,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
@@ -2543,7 +2543,7 @@ def test_platform_apple():
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == e00_sub_to_3_months_tx_info.transactionId
@@ -2561,7 +2561,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
@@ -2594,7 +2594,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].grace_period_duration_ms          == platform_apple.GRACE_PERIOD_DURATION_MS
-            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == 0
+            assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
