@@ -389,21 +389,13 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
         # NOTE: Acknowledge the notification
         message.ack()
 
-def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str, topic_name: str):
+def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
     # NOTE: Start pulling subscriber from Google endpoints with the streaming pull client
     # By default this starts a thread pool to handle the messages and blocks on the future
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
-
-            sub_path   = client.subscription_path(project=project_name, subscription=subscription_name)
-            topic_path = client.topic_path(project=project_name, topic=topic_name)
-            _          = pubsub.Subscription = client.create_subscription(request={
-                'name': sub_path,
-                'topic': topic_path,
-                'enable_message_ordering': True,
-            })
-
-            future = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
+            sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
+            future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
             while context.kill_thread == False:
                 try:
                     future.result(timeout=0.5)
@@ -415,7 +407,6 @@ def init(sql_conn:                sqlite3.Connection,
          package_name:            str,
          subscription_name:       str,
          subscription_product_id: str,
-         topic_name:              str,
          app_credentials_path:    str | None) -> ThreadContext:
     # NOTE: Setup credentials global variable
     assert platform_google_api.credentials       is None and \
@@ -436,5 +427,5 @@ def init(sql_conn:                sqlite3.Connection,
 
     # NOTE: Setup thread for caller to use
     result        = ThreadContext()
-    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name, topic_name))
+    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
     return result

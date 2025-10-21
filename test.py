@@ -2980,7 +2980,6 @@ def test_google_platform_handle_notification(monkeypatch):
                          package_name            = 'network.loki.messenger',
                          subscription_name       = 'session-pro-sub',
                          subscription_product_id = 'session_pro',
-                         topic_name              = 'session-pro',
                          app_credentials_path    = None)
     err = base.ErrorSink()
     test_product_details = SubscriptionProductDetails(

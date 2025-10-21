@@ -63,7 +63,6 @@ class ParsedArgs:
     google_package_name:                 str            = ''
     google_application_credentials_path: str            = ''
     google_project_name:                 str            = ''
-    google_topic_name:                   str            = ''
     google_subscription_name:            str            = ''
     google_subscription_product_id:      str            = ''
 
@@ -168,7 +167,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
                 google_section: configparser.SectionProxy  = ini_parser['google']
                 result.google_package_name                 = google_section.get(option='package_name',                 fallback='')
                 result.google_project_name                 = google_section.get(option='project_name',                 fallback='')
-                result.google_topic_name                   = google_section.get(option='topic_name',                   fallback='')
                 result.google_subscription_name            = google_section.get(option='subscription_name',            fallback='')
                 result.google_application_credentials_path = google_section.get(option='application_credentials_path', fallback='')
                 result.google_subscription_product_id      = google_section.get(option='subscription_product_id',      fallback='')
@@ -225,8 +223,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
             err.msg_list.append('Platform Google was enabled but package_name was not specified')
         if len(result.google_project_name) == 0:
             err.msg_list.append('Platform Google was enabled but project_name was not specified')
-        if len(result.google_project_name) == 0:
-            err.msg_list.append('Platform Google was enabled but topic_name was not specified')
         if len(result.google_subscription_name) == 0:
             err.msg_list.append('Platform Google was enabled but subscription_name was not specified')
         if len(result.google_application_credentials_path) == 0:
@@ -433,7 +429,6 @@ def entry_point() -> flask.Flask:
                                                      package_name            = parsed_args.google_package_name,
                                                      subscription_name       = parsed_args.google_subscription_name,
                                                      subscription_product_id = parsed_args.google_subscription_product_id,
-                                                     topic_name              = parsed_args.google_topic_name,
                                                      app_credentials_path    = parsed_args.google_application_credentials_path)
         assert google_thread_context.thread
         google_thread_context.thread.start()
