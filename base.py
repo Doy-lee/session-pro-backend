@@ -129,18 +129,24 @@ class TableStrings:
     name:     str = ''
     contents: list[list[str]] = dataclasses.field(default_factory=list)
 
-def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink):
+def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink | None) -> bool:
+    result = False
     provider = PaymentProvider.Nil
-    if isinstance(payment_provider, int):
+    if isinstance(payment_provider, PaymentProvider):
+        provider = payment_provider
+        result = True
+    else:
         try:
             provider = PaymentProvider(payment_provider)
+            result = True
         except ValueError:
-            err.msg_list.append('Unrecognised payment provider: {}'.format(payment_provider))
-    else:
-        provider = payment_provider
+            if err:
+                err.msg_list.append('Unrecognised payment provider: {}'.format(payment_provider))
 
-    if len(err.msg_list) == 0 and provider == PaymentProvider.Nil:
+    if err and len(err.msg_list) == 0 and provider == PaymentProvider.Nil:
         err.msg_list.append('Nil payment provider is invalid, must be set to a provider')
+
+    return result
 
 def hex_to_bytes(hex: str, label: str, hex_len: int, err: ErrorSink) -> bytes:
     result = b''

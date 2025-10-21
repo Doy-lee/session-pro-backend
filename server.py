@@ -289,6 +289,11 @@ API
                          `auto_renewing` is true. Clients can request a proof for users in a grace
                          period that expires at the end of the grace period. This value is 0 if
                          `auto_renewing` is false.
+      error_report:    1 byte integer error code where any non-zero value indicates that the Session
+                       Pro Backend encountered an error book-keeping Session Pro for the user. Their
+                       Session Pro status may be out-of-date, hence if this value is non-zero,
+                       implementing clients can optionally display a warning or prompt that the user
+                       should contact support for investigation.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                   1 byte integer describing the status of the consumption of the
@@ -377,6 +382,7 @@ API
           "expiry_unix_ts_ms": 1761782400000,
           "grace_period_duration_ms": 60000,
           "status": 1,
+          "error_report": 0,
           "version": 0
         },
         "status": 0
@@ -699,13 +705,19 @@ def get_pro_payments():
     auto_renewing                                      = False
     expiry_unix_ts_ms                                  = 0
     grace_period_duration_ms                           = 0
+
+    # NOTE: Eventually we might migrate this to be a fully-featured enum to provide some more
+    # descriptive messaging
+    error_report: int                                  = False
+
     with open_db_from_flask_request_context(flask.current_app) as db:
         with base.SQLTransaction(db.sql_conn) as tx:
+            error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
-            grace_period_duration_ms = get_user.user.grace_period_duration_ms
-            expiry_unix_ts_ms        = get_user.user.expiry_unix_ts_ms
-            auto_renewing            = get_user.user.auto_renewing
-            has_payments             = False
+            grace_period_duration_ms             = get_user.user.grace_period_duration_ms
+            expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
+            auto_renewing                        = get_user.user.auto_renewing
+            has_payments                         = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
                 # initially and every payment we come across, if they have a redeemed payment
@@ -776,6 +788,7 @@ def get_pro_payments():
         'auto_renewing':            auto_renewing,
         'expiry_unix_ts_ms':        expiry_unix_ts_ms,
         'grace_period_duration_ms': grace_period_duration_ms if auto_renewing else 0,
+        'error_report':             error_report,
         'items':                    items
     })
     return result

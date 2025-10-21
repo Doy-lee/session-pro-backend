@@ -90,6 +90,24 @@ platform_testing_environment = false
 # production use-case.
 unsafe_logging               = false
 
+# A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
+# in the DB on startup. This value must be of the format
+#
+#   "<payment_provider integer>:<payment_id>, ..."
+#
+# For example
+#
+#   "1:the_google_order_id,2:the_apple_order_id"
+#
+# Which will delete the row that has a payment provider of 1 (which corresponds to the Google Play
+# Store) has a payment ID that matches "google_order_id" and so forth.
+#
+# Keep this as an empty string to opt out this functionality. This is intended to be used to flush
+# errors from the DB if they are encountered during the handling of payment notifications for a
+# specific user. Platform clients may be using the error table to populate UI that indicates that a
+# user should contact support, hence clearing this value may clear the error prompt for said user.
+delete_user_errors           =
+
 # NOTE: The [apple] section and its fields are only required if `with_platform_apple` is defined
 [apple]
 
@@ -141,6 +159,7 @@ SESH_PRO_BACKEND_PRINT_TABLES         = [0|1]
 SESH_PRO_BACKEND_DEV                  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_APPLE  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE = [0|1]
+SESH_PRO_BACKEND_DELETE_USER_ERRORS   = <...>
 ```
 
 ## Build and run

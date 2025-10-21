@@ -38,33 +38,35 @@ google_thread_context = platform_google.ThreadContext()
 
 @dataclasses.dataclass
 class ParsedArgs:
-    ini_path:                            str         = ''
-    db_path:                             str         = ''
-    db_path_is_uri:                      bool        = False
-    print_tables:                        bool        = False
-    dev:                                 bool        = False
-    unsafe_logging:                      bool        = False
-    with_platform_apple:                 bool        = False
-    with_platform_google:                bool        = False
-    platform_testing_env:                bool        = False
+    ini_path:                            str                                    = ''
+    db_path:                             str                                    = ''
+    db_path_is_uri:                      bool                                   = False
+    print_tables:                        bool                                   = False
+    dev:                                 bool                                   = False
+    unsafe_logging:                      bool                                   = False
+    with_platform_apple:                 bool                                   = False
+    with_platform_google:                bool                                   = False
+    platform_testing_env:                bool                                   = False
+    delete_user_errors:                  str                                    = ''
+    parsed_delete_user_errors:           list[tuple[base.PaymentProvider, str]] = dataclasses.field(default_factory=list)
 
-    apple_key_id:                        str         = ''
-    apple_issuer_id:                     str         = ''
-    apple_bundle_id:                     str         = ''
-    apple_key_path:                      str         = ''
-    apple_root_cert_path:                str         = ''
-    apple_root_cert_ca_g2_path:          str         = ''
-    apple_root_cert_ca_g3_path:          str         = ''
-    apple_key:                           bytes       = b''
-    apple_root_certs:                    list[bytes] = dataclasses.field(default_factory=list)
-    apple_sandbox_env:                   bool        = False
-    apple_production_app_id:             int | None  = None
+    apple_key_id:                        str                                    = ''
+    apple_issuer_id:                     str                                    = ''
+    apple_bundle_id:                     str                                    = ''
+    apple_key_path:                      str                                    = ''
+    apple_root_cert_path:                str                                    = ''
+    apple_root_cert_ca_g2_path:          str                                    = ''
+    apple_root_cert_ca_g3_path:          str                                    = ''
+    apple_key:                           bytes                                  = b''
+    apple_root_certs:                    list[bytes]                            = dataclasses.field(default_factory=list)
+    apple_sandbox_env:                   bool                                   = False
+    apple_production_app_id:             int | None                             = None
 
-    google_package_name:                 str            = ''
-    google_application_credentials_path: str            = ''
-    google_project_name:                 str            = ''
-    google_subscription_name:            str            = ''
-    google_subscription_product_id:      str            = ''
+    google_package_name:                 str                                    = ''
+    google_application_credentials_path: str                                    = ''
+    google_project_name:                 str                                    = ''
+    google_subscription_name:            str                                    = ''
+    google_subscription_product_id:      str                                    = ''
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
@@ -125,6 +127,29 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             else:
                 log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
+def parse_delete_user_error_arg(arg: str, err: base.ErrorSink) -> list[tuple[base.PaymentProvider, str]]:
+    """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
+    result: list[tuple[base.PaymentProvider, str]] = []
+    if len(arg) == 0:
+        return result
+
+    for item in arg.split(','):
+        item = item.strip()
+        if ':' not in item:
+            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<payment_provider>:<payment_id>'.")
+            return result
+        payment_provider_str, payment_id = item.split(':', 1)
+        payment_provider_str             = payment_provider_str.strip()
+        payment_provider                 = base.PaymentProvider.Nil
+        try:
+            payment_provider = base.PaymentProvider(int(payment_provider_str))
+        except Exception:
+            err.msg_list.append(f'Failed to parse payment provider ({payment_provider_str}) for item {item} (arg was: {arg})')
+            return result
+
+        result.append((payment_provider, payment_id))
+    return result
+
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Parse .INI file if present and get arguments for it
     result          = ParsedArgs()
@@ -146,6 +171,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',     fallback=False)
         result.with_platform_google                = base_section.getboolean(option='with_platform_google',    fallback=False)
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env',    fallback=False)
+        result.delete_user_errors                  = base_section.get(option='delete_user_errors',             fallback='')
 
         if result.with_platform_apple:
             if 'apple' in ini_parser:
@@ -174,13 +200,15 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
                 err.msg_list.append('Platform Google was enabled but [google] section is missing')
 
     # NOTE: Get arguments from environment, they override .INI values if specified
-    result.db_path              = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
-    result.db_path_is_uri       = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
-    result.print_tables         = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
-    result.dev                  = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
-    result.with_platform_apple  = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
-    result.with_platform_google = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
-    result.with_platform_google = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
+    result.db_path                   = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
+    result.db_path_is_uri            = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
+    result.print_tables              = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
+    result.dev                       = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
+    result.with_platform_apple       = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
+    result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
+    result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
+    result.delete_user_errors        = os.getenv('SESH_PRO_BACKEND_DELETE_USER_ERRORS',                 result.delete_user_errors)
+    result.parsed_delete_user_errors = parse_delete_user_error_arg(result.delete_user_errors, err)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -338,6 +366,24 @@ def entry_point() -> flask.Flask:
         base.print_db_to_stdout(db.sql_conn)
         sys.exit(1)
 
+    # NOTE: Delete user errors if there were some specified
+    if len(parsed_args.parsed_delete_user_errors) > 0:
+        delete_count = 0
+        delete_label = ''
+        for index, it in enumerate(parsed_args.parsed_delete_user_errors):
+            if index:
+                delete_label += f'\n'
+            delete_label += f'  {index:02d} {it[0].value}:{it[1]}'
+            if backend.delete_user_errors(sql_conn         = db.sql_conn,
+                                          payment_provider = it[0],
+                                          payment_id       = it[1]):
+                delete_label += f' (deleted)'
+            else:
+                delete_label += f' (skipped)'
+
+        log.info(f"Deleted {delete_count}/{len(parsed_args.parsed_delete_user_errors)} user errors from the DB\n{delete_label}")
+        sys.exit(1)
+
     # NOTE: Running the application just in Flask (e.g. local development) we
     # need a way to signal to the long-running payment expiry thread to
     # terminate itself, we do this using a cv+mutex combo otherwise the
@@ -349,16 +395,12 @@ def entry_point() -> flask.Flask:
     # passing the flag `py-call-osafterfork` which makes the UWSGI process
     # respect our custom signal handlers.
     #
-    # This option however is not present on older UWSGI version like 2.0.21.
-    # But actually UWSGI is able to terminate the thread without our signal
-    # handling because they hijack the process and do whatever magic they do as
-    # long as you pass `--lazy-apps` which ensures that each spawned process
-    # runs our `entry_point`.
+    # This option however is not present on older UWSGI version like 2.0.21. For
+    # those versions setting these signal handlers do not solve the hang-on-exit
+    # issue and instead the user should set `--worker-reload-mercy` to a short
+    # value to get UWSGI to terminate the process for you.
     #
-    # Since UWSGI can handle terminating the thread we only equip our signal
-    # handlers if we know we're not running in UWSGI mode, this means we don't
-    # need to use `py-call-osafterfork` which increases the backend's
-    # compatibility to a large suite of operating environments.
+    # TODO: Find a better solution to this
     _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
     _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
     _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit

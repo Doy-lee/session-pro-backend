@@ -5,6 +5,7 @@ import sqlite3
 import dataclasses
 import pprint
 import logging
+import time
 
 from appstoreserverlibrary.models.SendTestNotificationResponse    import SendTestNotificationResponse    as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse   import CheckTestNotificationResponse   as AppleCheckTestNotificationResponse
@@ -885,7 +886,18 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     with server.open_db_from_flask_request_context(flask.current_app) as db:
         _ = handle_notification(decoded_notification, db.sql_conn, core.notification_retry_duration_ms, err)
 
+    # NOTE: Handle errors
     if err.has():
+        # NOTE: Record the error under the payment token if possible to propagate to clients
+        if decoded_notification.tx_info and decoded_notification.tx_info.originalTransactionId:
+            user_error = backend.UserError(
+                provider             = base.PaymentProvider.iOSAppStore,
+                apple_original_tx_id = decoded_notification.tx_info.originalTransactionId,
+            )
+            with server.open_db_from_flask_request_context(flask.current_app) as db:
+                backend.add_user_error(sql_conn=db.sql_conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
+
+        # NOTE: Log and abort request
         log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))
         flask.abort(500)
 

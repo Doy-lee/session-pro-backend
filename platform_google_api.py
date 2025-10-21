@@ -15,7 +15,6 @@ from base import (
     json_dict_require_obj,
     json_dict_require_str,
     json_dict_require_str_coerce_to_enum,
-    obfuscate,
     safe_dump_arbitrary_value_or_type,
     validate_string_list,
 )
@@ -349,7 +348,7 @@ def subscription_v1_acknowledge(purchase_token: str, err: ErrorSink):
     ).execute()
     # Google returns an empty string response for a success
     if response != "":
-        err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {obfuscate(purchase_token)}')
+        err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {purchase_token}')
 
 def fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: ErrorSink) -> Monetizationv3SubscriptionData | None:
     """

@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import dataclasses
 import typing
+import time
 
 from google.oauth2 import service_account
 from google.cloud import pubsub_v1
@@ -12,7 +13,7 @@ import googleapiclient.discovery
 
 import backend
 import base
-from backend import OpenDBAtPath, PaymentProviderTransaction, UserErrorTransaction
+from backend import OpenDBAtPath, PaymentProviderTransaction, UserError
 from base import (
     ProPlan,
     JSONObject,
@@ -22,7 +23,6 @@ from base import (
     json_dict_optional_obj,
     json_dict_require_int_coerce_to_enum,
     reflect_enum,
-    obfuscate
 )
 
 import platform_google_api
@@ -54,17 +54,17 @@ def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_re
 def toggle_payment_auto_renew(tx_payment: PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, auto_renewing, None, sql_conn, err)
     if not success:
-        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {obfuscate(tx_payment.google_payment_token)} and order_id: {obfuscate(tx_payment.google_order_id)}')
+        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
 def set_purchase_grace_period_duration(tx_payment: PaymentProviderTransaction, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, sql_conn, err)
     if not success:
-        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {obfuscate(tx_payment.google_payment_token)} and order_id: {obfuscate(tx_payment.google_order_id)}')
+        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
-def validate_no_existing_purchase_token_error(purchase_token:str, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    result = backend.get_user_error(sql_conn=sql_conn, provider_id=purchase_token)
-    if result.provider_id == purchase_token:
-        err.msg_list.append(f"Received RTDN notification for already errored purchase token: {obfuscate(purchase_token)}")
+def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+    result = backend.has_user_error(sql_conn=sql_conn, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=purchase_token)
+    if result:
+        err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 
 def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink): 
     match tx_event.notification:
@@ -242,7 +242,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
 
     if err.has():
         # Purchase token logging is included in the wrapper function
-        err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {obfuscate(tx_payment.google_order_id) if len(tx_payment.google_order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {tx_payment.google_order_id if len(tx_payment.google_order_id) > 0 else "N/A"}')
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
     match tx.product_type:
@@ -364,21 +364,17 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
     if not result.ack and not err.has():
         err.msg_list.append("Notification wasnt marked to be acknowledged but contained no errors! What happened?")
 
-    # NOTE: Handle errors
-    if err.has():
-        # NOTE: Record the error under the payment token if possible
-        if len(result.purchase_token):
-            err.msg_list.append(f'Failed to process event for purchase token: {obfuscate(result.purchase_token)}')
+    # NOTE: Record the error under the payment token if possible to propagate to clients
+    if err.has() and len(result.purchase_token):
+        err.msg_list.append(f'Failed to process event for purchase token: {result.purchase_token}')
 
-            # NOTE: Record the error
-            err_internal    = base.ErrorSink()
-            err_tx          = UserErrorTransaction(
-                provider             = base.PaymentProvider.GooglePlayStore,
-                google_payment_token = result.purchase_token,
-            )
-            with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                backend.add_user_error(sql_conn=db.sql_conn, error_tx=err_tx, err=err_internal)
-            err.msg_list.extend(err_internal.msg_list)
+        # NOTE: Record the error
+        user_error = UserError(
+            provider             = base.PaymentProvider.GooglePlayStore,
+            google_payment_token = result.purchase_token,
+        )
+        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+            backend.add_user_error(sql_conn=db.sql_conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
 
     if err.has():
         # NOTE: Log the error
@@ -420,9 +416,6 @@ def init(sql_conn:                sqlite3.Connection,
 
     platform_google_api.package_name            = package_name
     platform_google_api.subscription_product_id = subscription_product_id
-
-    # NOTE: Flush errors
-    backend.delete_user_errors(sql_conn, base.PaymentProvider.GooglePlayStore)
 
     # NOTE: Setup thread for caller to use
     result        = ThreadContext()

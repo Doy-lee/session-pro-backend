@@ -687,7 +687,7 @@ def test_server_add_payment_flow():
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms':   unix_ts_ms,
+                      'unix_ts_ms':  unix_ts_ms,
                       'history':     history}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,

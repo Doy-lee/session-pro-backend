@@ -142,7 +142,7 @@ class PaymentProviderTransaction:
     google_order_id:            str = ''
 
 @dataclasses.dataclass
-class UserErrorTransaction:
+class UserError:
     provider:                   base.PaymentProvider = base.PaymentProvider.Nil
     apple_original_tx_id:       str = ''
     google_payment_token:       str = ''
@@ -185,13 +185,6 @@ class UserRow:
     expiry_unix_ts_ms:        int   = 0
     grace_period_duration_ms: int   = 0
     auto_renewing:            bool  = False
-
-@dataclasses.dataclass
-class UserErrorRow:
-    provider_id:       str                  = ''
-    payment_provider:  base.PaymentProvider = base.PaymentProvider.Nil
-    error_type:        int                  = 0
-
 
 @dataclasses.dataclass
 class GetUserAndPayments:
@@ -546,7 +539,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         return result
 
     with base.SQLTransaction(result.sql_conn) as tx:
-        target_db_version = 1
+        target_db_version = 2
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY NOT NULL,
@@ -640,9 +633,10 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             );
 
             CREATE TABLE IF NOT EXISTS user_errors (
-                -- Unique provider id, this is the unredeemed token on google, and x (TODO: add apple token name) on apple
-                provider_id                 STRING PRIMARY KEY NOT NULL,
-                payment_provider            INTEGER NOT NULL
+                payment_id       STRING  NOT NULL,
+                payment_provider INTEGER NOT NULL,
+                unix_ts_ms       INTEGER NOT NULL,
+                UNIQUE(payment_id, payment_provider)
             );
 
             CREATE TRIGGER IF NOT EXISTS increment_revocation_ticket_after_insert
@@ -674,9 +668,23 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 # tables will have been created with the latest schema so we teleport to the target
                 # version
                 if db_version == 0:
-                    # NOTE: Commit the new version
                     db_version = target_db_version
                     _          = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
+                if db_version == 1:
+                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                    _ = tx.cursor.executescript('''
+                        DROP TABLE user_errors;
+                        CREATE TABLE IF NOT EXISTS user_errors (
+                            payment_id       STRING  NOT NULL,
+                            payment_provider INTEGER NOT NULL,
+                            unix_ts_ms       INTEGER NOT NULL,
+                            UNIQUE(payment_id, payment_provider)
+                        );
+                    ''')
+                    db_version += 1 # NOTE: Bump the version
+                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
 
                 # NOTE: Verify that the DB was migrated to the target version
                 assert db_version == target_db_version
@@ -1721,59 +1729,60 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         result.success                      = True
     return result
 
-def verify_user_error_tx(error_tx: UserErrorTransaction, err: base.ErrorSink):
-    base.verify_payment_provider(error_tx.provider, err)
-    match error_tx.provider:
-        case base.PaymentProvider.GooglePlayStore:
-            if len(error_tx.google_payment_token) == 0:
-                err.msg_list.append(f'Google payment token was not set')
-        case base.PaymentProvider.iOSAppStore:
-            if len(error_tx.apple_original_tx_id) == 0:
-                err.msg_list.append(f'Apple original TX ID was not set')
-        case base.PaymentProvider.Nil:
-            err.msg_list.append(f'Payment provider was set invalidly to nil')
-
-def add_user_error(sql_conn: sqlite3.Connection, error_tx: UserErrorTransaction, err: base.ErrorSink):
-    verify_user_error_tx(error_tx, err)
-    if not err.has():
-        with base.SQLTransaction(sql_conn) as tx:
-            assert tx.cursor is not None
-            match error_tx.provider:
-                case base.PaymentProvider.Nil:
-                    pass
-                case base.PaymentProvider.GooglePlayStore:
-                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
-                                            VALUES (?, ?) ON CONFLICT DO NOTHING''',
-                         (error_tx.google_payment_token,
-                          int(error_tx.provider.value)))
-                case base.PaymentProvider.iOSAppStore:
-                    _ = tx.cursor.execute('''INSERT INTO user_errors (provider_id, payment_provider)
-                                            VALUES (?, ?) ON CONFLICT DO NOTHING''', 
-                         (error_tx.apple_original_tx_id,
-                          int(error_tx.provider.value)))
-
-def get_user_error_from_sql_tx(tx: base.SQLTransaction, provider_id: str) -> UserErrorRow:
-    assert tx.cursor is not None
-    _                        = tx.cursor.execute('SELECT * FROM user_errors WHERE provider_id = ?', ((provider_id),))
-    result: UserErrorRow     = UserErrorRow()
-    row                      = typing.cast(tuple[str, int] | None, tx.cursor.fetchone())
-    if row:
-        result.provider_id       = row[0]
-        result.payment_provider  = base.PaymentProvider(row[1])
-    return result;
-
-
-def get_user_error(sql_conn: sqlite3.Connection, provider_id: str) -> UserErrorRow:
-    result: UserErrorRow = UserErrorRow()
-    with base.SQLTransaction(sql_conn) as tx:
-        result = get_user_error_from_sql_tx(tx, provider_id)
-    return result;
-
-def delete_user_errors(sql_conn: sqlite3.Connection, provider: base.PaymentProvider):
+def add_user_error(sql_conn: sqlite3.Connection, error: UserError, unix_ts_ms: int):
+    assert error.provider != base.PaymentProvider.Nil
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ?;''', (int(provider.value),))
+        match error.provider:
+            case base.PaymentProvider.GooglePlayStore:
+                assert len(error.google_payment_token) > 0
+                _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
+                     (int(error.provider.value),
+                      error.google_payment_token,
+                      unix_ts_ms))
 
+            case base.PaymentProvider.iOSAppStore:
+                assert len(error.apple_original_tx_id) > 0
+                _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
+                     (int(error.provider.value),
+                      error.apple_original_tx_id,
+                      unix_ts_ms))
+
+def has_user_error_tx(tx: base.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+    assert tx.cursor is not None
+    _ = tx.cursor.execute('SELECT 1 FROM user_errors WHERE payment_id = ? AND payment_provider = ?', (payment_id, int(payment_provider.value),))
+    result = tx.cursor.rowcount > 0
+    return result;
+
+def has_user_error_from_master_pkey_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> bool:
+    assert tx.cursor is not None
+    _ = tx.cursor.execute(f'''
+SELECT EXISTS (
+    SELECT 1
+    FROM payments p
+    LEFT JOIN user_errors ue
+        ON (p.payment_provider = {int(base.PaymentProvider.iOSAppStore.value)}     AND p.apple_original_tx_id = ue.payment_id)
+        OR (p.payment_provider = {int(base.PaymentProvider.GooglePlayStore.value)} AND p.google_payment_token = ue.payment_id)
+    WHERE p.master_pkey = ?
+    AND ue.payment_id IS NOT NULL
+) AS has_error;
+                          ''', (bytes(master_pkey),))
+    result = bool(tx.cursor.fetchone()[0] == 1)
+    return result;
+
+def has_user_error(sql_conn: sqlite3.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+    result = False
+    with base.SQLTransaction(sql_conn) as tx:
+        result = has_user_error_tx(tx, payment_provider, payment_id)
+    return result;
+
+def delete_user_errors(sql_conn: sqlite3.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+    result = False
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ? AND payment_id = ?''', (int(payment_provider.value), payment_id))
+    result = tx.cursor.rowcount > 0
+    return result
 
 def get_payment_tx(tx:          base.SQLTransaction,
                    payment_tx:  PaymentProviderTransaction,
