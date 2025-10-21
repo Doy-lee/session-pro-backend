@@ -193,18 +193,12 @@ python -m pytest test.py --verbose --capture=no
 # Our backend spawns one long-running thread for expiring rows in the DB, this
 # needs to be running to maintain the integrity of the DB.
 #
-# Lazy apps `--lazy-apps` ensures that each spawned process runs our
-# `entry_point` in main instead of having 1 master process that runs it and
-# then multiple sub-workers that sit-idle waiting for requests via flask. This
-# is required as otherwise UWSGI has problems terminating the workers (for some
-# reason, see: https://github.com/unbit/uwsgi/issues/1609). Ordinarily you would
-# want to use `py-call-osafterfork` however that option is not supported on some
-# older versions of UWSGI still in-use.
-
-# (It may be possible to replace this with the injected uwsgi.signals Python
-# module by UWSGI when it launches the backend. However that leaks UWSGI
-# implementation detail into the backend and also it's a good idea that child
-# processes follow UNIX conventions as you'd expect them to in the first place).
+# `py-call-osafterfork` should be enabled if your UWSGI installation supports it
+# which lets the backend attach to the signal handler and gracefully terminate
+# the thread that the backend spawns. If your UWSGI version does not support
+# this the best we can do is instead `--worker-reload-mercy=3` which causes
+# UWSGI to forcibly terminate the thread after 3 seconds, configure the timeout
+# as necessary. Without this, on exit the application hangs.
 #
 # Die on terminate (--die-on-term) similar to `py-call-osafterfork` restores
 # UNIX convention in that a SIGTERM should kill the process. UWSGI hijacks this
@@ -231,6 +225,7 @@ SESH_PRO_BACKEND_DB_PATH=./data/pro.db \
   --strict \
   --need-app \
   --vacuum \
-  --lazy-apps \
+  --py-call-osafterfork \
+  --worker-reload-mercy=3 \
   --procname-prefix \"SESH Pro Backend \"
 ```
