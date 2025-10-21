@@ -4,11 +4,7 @@ import typing
 import sqlite3
 import dataclasses
 import pprint
-import datetime
 import logging
-import sys
-import os
-import time
 
 from appstoreserverlibrary.models.SendTestNotificationResponse    import SendTestNotificationResponse    as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse   import CheckTestNotificationResponse   as AppleCheckTestNotificationResponse
@@ -23,7 +19,6 @@ from appstoreserverlibrary.models.Subtype                         import Subtype
 from appstoreserverlibrary.models.NotificationTypeV2              import NotificationTypeV2              as AppleNotificationV2
 from appstoreserverlibrary.models.NotificationHistoryRequest      import NotificationHistoryRequest      as AppleNotificationHistoryRequest
 from appstoreserverlibrary.models.NotificationHistoryResponse     import NotificationHistoryResponse     as AppleNotificationHistoryResponse
-from appstoreserverlibrary.models.NotificationHistoryResponseItem import NotificationHistoryResponseItem as AppleNotificationHistoryResponseItem
 
 from appstoreserverlibrary.api_client import (
     AppStoreServerAPIClient as AppleAppStoreServerAPIClient,
@@ -888,7 +883,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
     with server.open_db_from_flask_request_context(flask.current_app) as db:
-        _ = handle_notification(core, decoded_notification, db.sql_conn, err)
+        _ = handle_notification(decoded_notification, db.sql_conn, core.notification_retry_duration_ms, err)
 
     if err.has():
         log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))

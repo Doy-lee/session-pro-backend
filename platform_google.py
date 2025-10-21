@@ -8,7 +8,6 @@ import typing
 from google.oauth2 import service_account
 from google.cloud import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
-from google.pubsub_v1.types import pubsub
 import googleapiclient.discovery
 
 import backend
