@@ -20,7 +20,7 @@ API
   Which means that calling code should conditionally handle a root level `result` or `errors` type
   payload based on the status. `0` for success and non-`0` for failures.
 
-  All routes accept v4 onion requests under the endpoint /oxen/lsrpc/v4
+  All routes accept v4 onion requests under the endpoint /oxen/v4/lsrpc
 
   /add_pro_payment
     Description
