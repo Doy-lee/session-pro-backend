@@ -656,7 +656,6 @@ def get_pro_revocations():
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result
 
-# TODO: we need to add the user_errors table changes to any endpoints that need to report a generic error to a user
 @flask_blueprint.route(FLASK_ROUTE_GET_PRO_STATUS, methods=['POST'])
 def get_pro_payments():
     # Get JSON from request

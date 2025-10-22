@@ -8,9 +8,6 @@ The server tests spins up a local Flask instance as per
 (https://flask.palletsprojects.com/en/stable/testing/#sending-requests-with-the-test-client) and
 sends a request using the test client and we vet the request and response produced by hitting said
 endpoint.
-
-TODO:
-  - Test that modifying the salt breaks verification
 '''
 
 import pprint
@@ -2523,8 +2520,6 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
             assert unredeemed_payment_list[0].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert unredeemed_payment_list[0].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
-
-        # TODO: We need to check that the correct proofs are revoked. This is not done yet in Apple
 
         # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
         # remain on the 1wk plan
