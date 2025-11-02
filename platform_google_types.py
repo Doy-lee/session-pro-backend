@@ -1,3 +1,7 @@
+'''
+Type definitions for data structures used in the Google APIs
+'''
+
 import dataclasses
 import traceback
 import typing

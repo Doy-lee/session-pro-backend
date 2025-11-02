@@ -1,3 +1,9 @@
+'''
+Entry point for witnessing notifications from the Apple App store. The Apple App store sends
+notifications to this server which is achieved by exposing a flask route that triggers the data
+flows to receive, parse and process payment information into the database layer (backend.py).
+'''
+
 import flask
 import json
 import typing
@@ -27,8 +33,8 @@ from appstoreserverlibrary.api_client import (
 )
 
 from appstoreserverlibrary.signed_data_verifier import (
-    VerificationException        as AppleVerificationException,
-    SignedDataVerifier           as AppleSignedDataVerifier,
+    VerificationException   as AppleVerificationException,
+    SignedDataVerifier      as AppleSignedDataVerifier,
 )
 
 import base
@@ -75,6 +81,31 @@ GRACE_PERIOD_DURATION_MS:                            int = 60 * 60 * 1 * 1000
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Apple iOS App Store subscription notifications
 flask_blueprint                                     = flask.Blueprint('session-pro-backend-apple', __name__)
+
+def init(key_id: str, issuer_id: str, bundle_id: str, app_id: int | None, key_bytes: bytes, root_certs: list[bytes], sandbox_env: bool) -> Core:
+    apple_env                   = AppleEnvironment.SANDBOX if sandbox_env else AppleEnvironment.PRODUCTION
+    app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key = key_bytes,
+                                                               key_id      = key_id,
+                                                               issuer_id   = issuer_id,
+                                                               bundle_id   = bundle_id,
+                                                               environment = apple_env)
+
+    signed_data_verifier        = AppleSignedDataVerifier(root_certificates    = root_certs,
+                                                          enable_online_checks = True,
+                                                          environment          = apple_env,
+                                                          bundle_id            = bundle_id,
+                                                          app_apple_id         = app_id)
+
+    result                            = Core(app_store_server_api_client, signed_data_verifier)
+    result.sandbox                    = sandbox_env
+    result.max_history_lookup_in_days = 30 if sandbox_env else 180
+
+    # NOTE: Apple retries 1, 12, 24 ... hours after the previous attempt
+    # NOTE: Then add a 30min buffer just in-case
+    if result.sandbox == False:
+        result.notification_retry_duration_ms  = (1 + 12 + 24 + 48 + 72) * 60 * 1000
+        result.notification_retry_duration_ms += (30 * 60) * 1000
+    return result
 
 def payment_tx_id_label(tx: backend.PaymentProviderTransaction) -> str:
     result = f'TX ID (orig/tx/web) {tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}'
@@ -917,31 +948,6 @@ def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: Ap
                 log.info('Decoded test response: ', decoded_response)
     except AppleAPIException as e:
         log.error(f'Failed to decode test notification: {e}')
-
-def init(key_id: str, issuer_id: str, bundle_id: str, app_id: int | None, key_bytes: bytes, root_certs: list[bytes], sandbox_env: bool) -> Core:
-    apple_env                   = AppleEnvironment.SANDBOX if sandbox_env else AppleEnvironment.PRODUCTION
-    app_store_server_api_client = AppleAppStoreServerAPIClient(signing_key = key_bytes,
-                                                               key_id      = key_id,
-                                                               issuer_id   = issuer_id,
-                                                               bundle_id   = bundle_id,
-                                                               environment = apple_env)
-
-    signed_data_verifier        = AppleSignedDataVerifier(root_certificates    = root_certs,
-                                                          enable_online_checks = True,
-                                                          environment          = apple_env,
-                                                          bundle_id            = bundle_id,
-                                                          app_apple_id         = app_id)
-
-    result                            = Core(app_store_server_api_client, signed_data_verifier)
-    result.sandbox                    = sandbox_env
-    result.max_history_lookup_in_days = 30 if sandbox_env else 180
-
-    # NOTE: Apple retries 1, 12, 24 ... hours after the previous attempt
-    # NOTE: Then add a 30min buffer just in-case
-    if result.sandbox == False:
-        result.notification_retry_duration_ms  = (1 + 12 + 24 + 48 + 72) * 60 * 1000
-        result.notification_retry_duration_ms += (30 * 60) * 1000
-    return result
 
 def catchup_on_missed_notifications(core: Core, sql_conn: sqlite3.Connection, end_unix_ts_ms: int):
     # NOTE: Lock the DB and catch on up missed notifications

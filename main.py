@@ -466,8 +466,7 @@ def entry_point() -> flask.Flask:
     # (10 threads by default) to process messages.
     if parsed_args.with_platform_google:
         global google_thread_context
-        google_thread_context = platform_google.init(sql_conn                = db.sql_conn,
-                                                     project_name            = parsed_args.google_project_name,
+        google_thread_context = platform_google.init(project_name            = parsed_args.google_project_name,
                                                      package_name            = parsed_args.google_package_name,
                                                      subscription_name       = parsed_args.google_subscription_name,
                                                      subscription_product_id = parsed_args.google_subscription_product_id,

@@ -1,3 +1,7 @@
+'''
+Functionality to query the Google APIs and parse it
+'''
+
 import dataclasses
 import typing
 import base

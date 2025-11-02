@@ -1,3 +1,9 @@
+'''
+Entry point for witnessing notifications from the Google Play store. This layer initiates an
+asynchronous fetching operation from Google to monitor for new payments, parsing
+it and process said payments into the database layer (backend.py)
+'''
+
 import json
 import logging
 import sqlite3
@@ -6,8 +12,8 @@ import dataclasses
 import typing
 import time
 
-from google.oauth2 import service_account
-from google.cloud import pubsub_v1
+from   google.oauth2 import service_account
+from   google.cloud  import pubsub_v1
 import google.cloud.pubsub_v1.subscriber.message
 import googleapiclient.discovery
 
@@ -38,8 +44,45 @@ class ThreadContext:
 
 @dataclasses.dataclass
 class GoogleHandleNotificationResult:
-    purchase_token: str = ""
-    ack: bool = False
+    purchase_token: str  = ""
+    ack:            bool = False
+
+def init(project_name:            str,
+         package_name:            str,
+         subscription_name:       str,
+         subscription_product_id: str,
+         app_credentials_path:    str | None) -> ThreadContext:
+    # NOTE: Setup credentials global variable
+    assert platform_google_api.credentials       is None and \
+           platform_google_api.publisher_service is None and \
+           len(platform_google_api.package_name) == 0, \
+            "Initialise was called twice. Google uses callbacks with no way to pass in a per-callback context so it needs global variables"
+
+    if app_credentials_path:
+        platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
+                                                                                                scopes=['https://www.googleapis.com/auth/androidpublisher'])
+        platform_google_api.publisher_service = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)  # pyright: ignore[reportUnknownMemberType]
+
+    platform_google_api.package_name            = package_name
+    platform_google_api.subscription_product_id = subscription_product_id
+
+    # NOTE: Setup thread for caller to use
+    result        = ThreadContext()
+    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
+    return result
+
+def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
+    # NOTE: Start pulling subscriber from Google endpoints with the streaming pull client
+    # By default this starts a thread pool to handle the messages and blocks on the future
+    while context.kill_thread == False:
+        with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
+            sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
+            future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
+            while context.kill_thread == False:
+                try:
+                    future.result(timeout=0.5)
+                except TimeoutError:
+                    pass
 
 def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
@@ -351,7 +394,7 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
     body: typing.Any = json.loads(message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
-        logging.error(f'ERROR: Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
+        logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
         return
 
     # NOTE: Process the notification
@@ -383,41 +426,3 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
     elif result.ack:
         # NOTE: Acknowledge the notification
         message.ack()
-
-def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
-    # NOTE: Start pulling subscriber from Google endpoints with the streaming pull client
-    # By default this starts a thread pool to handle the messages and blocks on the future
-    while context.kill_thread == False:
-        with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
-            sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
-            future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
-            while context.kill_thread == False:
-                try:
-                    future.result(timeout=0.5)
-                except TimeoutError:
-                    pass
-
-def init(sql_conn:                sqlite3.Connection,
-         project_name:            str,
-         package_name:            str,
-         subscription_name:       str,
-         subscription_product_id: str,
-         app_credentials_path:    str | None) -> ThreadContext:
-    # NOTE: Setup credentials global variable
-    assert platform_google_api.credentials       is None and \
-           platform_google_api.publisher_service is None and \
-           len(platform_google_api.package_name) == 0, \
-            "Initialise was called twice. Google uses callbacks with no way to pass in a per-callback context so it needs global variables"
-
-    if app_credentials_path:
-        platform_google_api.credentials = service_account.Credentials.from_service_account_file(app_credentials_path,  # pyright: ignore[reportUnknownMemberType]
-                                                                                                scopes=['https://www.googleapis.com/auth/androidpublisher'])
-        platform_google_api.publisher_service = googleapiclient.discovery.build('androidpublisher', 'v3', credentials=platform_google_api.credentials)  # pyright: ignore[reportUnknownMemberType]
-
-    platform_google_api.package_name            = package_name
-    platform_google_api.subscription_product_id = subscription_product_id
-
-    # NOTE: Setup thread for caller to use
-    result        = ThreadContext()
-    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
-    return result
