@@ -401,13 +401,19 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     result.user = get_user_from_sql_tx(tx, master_pkey)
 
     _ = tx.cursor.execute(f'''
+        SELECT   COUNT(*)
+        FROM     payments
+        WHERE    master_pkey = ?
+    ''', (bytes(master_pkey),))
+    result.payments_count = tx.cursor.fetchone()[0]
+
+    _ = tx.cursor.execute(f'''
         SELECT   {select_fields}
         FROM     payments
         WHERE    master_pkey = ?
         ORDER BY redeemed_unix_ts_ms DESC
     ''', (bytes(master_pkey),))
 
-    result.payments_count = tx.cursor.rowcount
     result.payments_it    = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
     return result;
 
