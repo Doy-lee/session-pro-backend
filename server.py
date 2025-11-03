@@ -246,7 +246,7 @@ API
       The embedded `master_sig` signature must sign over the 32 byte hash of the requests contents
       (in little endian):
 
-        hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_ms || page)
+        hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_ms || count)
 
       TODO: In future we plan to prune payment history after some legally required threshold such as
       a year.
@@ -259,9 +259,9 @@ API
                    user knows the secret component to the `master_pkey` and hence the caller is
                    authorised to get pro status for this key.
       unix_ts_ms:  8 byte UNIX timestamp of the current time.
-      history:     1 byte bool that when set to true enables retrieval of payment history which is
-                   populated into the `items` of the response.
-
+      count:       4 byte integer indicating up to how many payments can be populated in the `items`
+                   array. `items` is capped to the actual number of payments available for
+                   `master_pkey`.
     Response
       status:   1 byte integer describing the current Session Pro entitlement of the associated key
                 with the following mapping:
@@ -307,7 +307,6 @@ API
                                     4 => Revoked
                                          User has successfully refunded/or had their payment revoked
                                          and Session Pro entitlement is no longer available
-
                                   Always check the status before interpreting the fields. It's
                                   possible to transition from revoked -> redeemed for example if the
                                   payment provider cancels a refund in which case the revoked
@@ -358,7 +357,7 @@ API
         "master_pkey": "8ddc57b457fca85d2184813ea18a048f64a35ab0e693d4a0a3e4f8ee87ff3360",
         "master_sig": "37495dfab72772ebf4e4bf213b0a1c46e8e044ef3e4360ff8ef04ee8a7daf2178a716447de6f938d0e7865be31735fb2db2d1213dc35c02dfe253aac77fb2a0d",
         "unix_ts_ms": 1755653705,
-        "history": true,
+        "count":      10000,
       }
 
       Response
@@ -459,12 +458,12 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
 
     return result
 
-def make_get_all_payments_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, history: bool) -> bytes:
+def make_get_pro_status(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, count: int) -> bytes:
     hasher: hashlib.blake2b = backend.make_blake2b_hasher()
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
-    hasher.update(history.to_bytes(length=1, byteorder='little'))
+    hasher.update(count.to_bytes(length=4, byteorder='little'))
     result: bytes = hasher.digest()
     return result
 
@@ -657,7 +656,7 @@ def get_pro_revocations():
     return result
 
 @flask_blueprint.route(FLASK_ROUTE_GET_PRO_STATUS, methods=['POST'])
-def get_pro_payments():
+def get_pro_status():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
@@ -669,7 +668,7 @@ def get_pro_payments():
     master_pkey: str  = base.json_dict_require_str(d=get.json,  key='master_pkey', err=err)
     master_sig:  str  = base.json_dict_require_str(d=get.json,  key='master_sig',  err=err)
     unix_ts_ms:  int  = base.json_dict_require_int(d=get.json,  key='unix_ts_ms',  err=err)
-    history:     bool = base.json_dict_require_bool(d=get.json, key='history',     err=err)
+    count:       int  = base.json_dict_require_int(d=get.json, key='count',       err=err)
     if len(err.msg_list):
         return make_error_response(status=1, errors=err.msg_list)
 
@@ -678,6 +677,9 @@ def get_pro_payments():
         err.msg_list.append(f'Unrecognised version passed: {version}')
     master_pkey_bytes = base.hex_to_bytes(hex=master_pkey, label='Master public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
     master_sig_bytes  = base.hex_to_bytes(hex=master_sig,  label='Master key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+
+    if count < 0:
+        err.msg_list.append(f'Count was negative: {count}')
 
     # Validate timestamp
     # TODO: We _could_ track the last GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S seconds worth of
@@ -692,18 +694,19 @@ def get_pro_payments():
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
-    hash_to_verify: bytes = make_get_all_payments_hash(version=version, master_pkey=master_pkey_nacl, unix_ts_ms=unix_ts_ms, history=history)
+    hash_to_verify: bytes = make_get_pro_status(version=version, master_pkey=master_pkey_nacl, unix_ts_ms=unix_ts_ms, count=count)
     try:
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception as e:
         err.msg_list.append('Signature failed to be verified')
         return make_error_response(status=1, errors=err.msg_list)
 
-    items:           list[dict[str, str | int | bool]] = []
-    user_pro_status: UserProStatus                     = UserProStatus.NeverBeenPro
-    auto_renewing                                      = False
-    expiry_unix_ts_ms                                  = 0
-    grace_period_duration_ms                           = 0
+    items:                                  list[dict[str, str | int | bool]] = []
+    user_pro_status:                        UserProStatus                     = UserProStatus.NeverBeenPro
+    user_platform_refund_expiry_unix_ts_ms: int                               = 0
+    auto_renewing                                                             = False
+    expiry_unix_ts_ms                                                         = 0
+    grace_period_duration_ms                                                  = 0
 
     # NOTE: Eventually we might migrate this to be a fully-featured enum to provide some more
     # descriptive messaging
@@ -738,7 +741,7 @@ def get_pro_payments():
                     continue
 
                 # NOTE: Collect the payment if history was requested
-                if history:
+                if count > 0:
                     if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
                         items.append({
                             'status':                               int(payment.status.value),
@@ -771,14 +774,14 @@ def get_pro_payments():
                             'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
                         })
 
-                # NOTE: Determine pro status if it is a relevant
+                # NOTE: Determine pro status if it is relevant
                 if payment.status == base.PaymentStatus.Redeemed:
                     user_pro_status = UserProStatus.Active
 
                 # NOTE: If we determine that the user is active and the user didn't request for
                 # history, we can early terminate the loop as we've found what we wanted (their pro
                 # status).
-                if not history and user_pro_status == UserProStatus.Active:
+                if len(items) >= count and user_pro_status == UserProStatus.Active:
                     break
 
     result = make_success_response(dict_result={

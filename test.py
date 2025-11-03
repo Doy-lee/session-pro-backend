@@ -340,13 +340,13 @@ def test_server_add_payment_flow():
     first_expiry_unix_ts_ms: int = 0
     if 1: # Grab the pro status before anything has happened
         version:      int   = 0
-        history:      bool  = True
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
+        count:        int   = 10_000
+        hash_to_sign: bytes = server.make_get_pro_status(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                       'unix_ts_ms':  unix_ts_ms,
-                      'history':     history}
+                      'count':       count}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
@@ -678,14 +678,14 @@ def test_server_add_payment_flow():
     if 1:
         version:      int   = 0
         unix_ts_ms:   int   = int(time.time() * 1000)
-        history:      bool  = True
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
+        count:        int   = 10_000
+        hash_to_sign: bytes = server.make_get_pro_status(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
 
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
                       'unix_ts_ms':  unix_ts_ms,
-                      'history':     history}
+                      'count':       count}
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
@@ -720,15 +720,15 @@ def test_server_add_payment_flow():
         # Retry the request but use a too old timestamp
         if 1:
             unix_ts_ms:   int   = int((time.time() * 1000) + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS * 2))
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
+            hash_to_sign: bytes = server.make_get_pro_status(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':   unix_ts_ms,
-                                                                    'history':     history})
+                                                                    'unix_ts_ms':  unix_ts_ms,
+                                                                    'count':       count})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -747,16 +747,16 @@ def test_server_add_payment_flow():
         # Retry the request but create a hash with the rotating key
         if 1:
             unix_ts_ms:    int   = int(time.time() * 1000)
-            history:       bool  = True
-            hash_to_sign:  bytes = server.make_get_all_payments_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
+            count:         int   = 10_000
+            hash_to_sign:  bytes = server.make_get_pro_status(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':   unix_ts_ms,
-                                                                    'history':     history})
+                                                                    'unix_ts_ms':  unix_ts_ms,
+                                                                    'count':       count})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -774,17 +774,17 @@ def test_server_add_payment_flow():
 
         # Retry the request but with no history
         if 1:
-            unix_ts_ms:    int  = int(time.time() * 1000)
-            history:      bool  = False
-            hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
-            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+            unix_ts_ms:   int   = int(time.time() * 1000)
+            count:        int   = 0
+            hash_to_sign: bytes = server.make_get_pro_status(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            onion_request       = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
                                                       endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':   unix_ts_ms,
-                                                                    'history':     history})
+                                                                    'unix_ts_ms':  unix_ts_ms,
+                                                                    'count':       count})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -3060,13 +3060,13 @@ def test_google_platform_handle_notification(monkeypatch):
     def get_pro_status(user_ctx: TestUserCtx, ctx: TestingContext) -> base.JSONObject:
         unix_ts_ms:   int   = int(time.time() * 1000)
         version:      int   = 0
-        history:      bool  = True
-        hash_to_sign: bytes = server.make_get_all_payments_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, history=history)
-        request_body={'version'     : version,
-                      'master_pkey' : bytes(user_ctx.master_key.verify_key).hex(),
-                      'master_sig'  : bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms'  : unix_ts_ms,
-                      'history'     : history}
+        count:        int   = 10_000
+        hash_to_sign: bytes = server.make_get_pro_status(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+        request_body={'version':     version,
+                      'master_pkey': bytes(user_ctx.master_key.verify_key).hex(),
+                      'master_sig':  bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
+                      'unix_ts_ms':  unix_ts_ms,
+                      'count':       count}
         response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_GET_PRO_STATUS, json=request_body)
         response_json = response.json
         assert response_json is not None
