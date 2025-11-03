@@ -251,6 +251,10 @@ API
       TODO: In future we plan to prune payment history after some legally required threshold such as
       a year.
 
+      TODO: We should paginate the count or provide feedback to the user how many payments they have
+      so they know how many entries to request. For now we just return the number of payments they
+      have
+
     Request
       version:     1 byte, current version of the request which should be 0
       master_pkey: 32 byte Ed25519 public key derived deterministic from the Session Account seed in
@@ -294,6 +298,10 @@ API
                        Session Pro status may be out-of-date, hence if this value is non-zero,
                        implementing clients can optionally display a warning or prompt that the user
                        should contact support for investigation.
+      payments_total:  4 byte integer indicating the total amount of payments the backend has for
+                       the user, after, pruning. This value may be greater than the length of items
+                       if you requested less than the user has or if new payments have been made
+                       since the request.
       items:    Array of payments associated with `master_pkey`. Payments are returned in descending
                 order by the payment date
         status:                   1 byte integer describing the status of the consumption of the
@@ -701,12 +709,12 @@ def get_pro_status():
         err.msg_list.append('Signature failed to be verified')
         return make_error_response(status=1, errors=err.msg_list)
 
-    items:                                  list[dict[str, str | int | bool]] = []
-    user_pro_status:                        UserProStatus                     = UserProStatus.NeverBeenPro
-    user_platform_refund_expiry_unix_ts_ms: int                               = 0
-    auto_renewing                                                             = False
-    expiry_unix_ts_ms                                                         = 0
-    grace_period_duration_ms                                                  = 0
+    items:           list[dict[str, str | int | bool]] = []
+    user_pro_status: UserProStatus                     = UserProStatus.NeverBeenPro
+    auto_renewing                                      = False
+    expiry_unix_ts_ms                                  = 0
+    grace_period_duration_ms                           = 0
+    payments_total                                     = 0
 
     # NOTE: Eventually we might migrate this to be a fully-featured enum to provide some more
     # descriptive messaging
@@ -719,6 +727,7 @@ def get_pro_status():
             grace_period_duration_ms             = get_user.user.grace_period_duration_ms
             expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
             auto_renewing                        = get_user.user.auto_renewing
+            payments_total                       = get_user.payments_count
             has_payments                         = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
@@ -790,6 +799,7 @@ def get_pro_status():
         'auto_renewing':            auto_renewing,
         'expiry_unix_ts_ms':        expiry_unix_ts_ms,
         'grace_period_duration_ms': grace_period_duration_ms if auto_renewing else 0,
+        'payments_total':           payments_total,
         'error_report':             error_report,
         'items':                    items
     })

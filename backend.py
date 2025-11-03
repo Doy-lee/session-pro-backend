@@ -188,8 +188,9 @@ class UserRow:
 
 @dataclasses.dataclass
 class GetUserAndPayments:
-    user:        UserRow                                           = dataclasses.field(default_factory=UserRow)
-    payments_it: collections.abc.Iterator[SQLTablePaymentRowTuple] = dataclasses.field(default_factory=lambda: iter([SQLTablePaymentRowTuple()]))
+    user:           UserRow                                           = dataclasses.field(default_factory=UserRow)
+    payments_it:    collections.abc.Iterator[SQLTablePaymentRowTuple] = dataclasses.field(default_factory=lambda: iter([SQLTablePaymentRowTuple()]))
+    payments_count: int                                               = 0
 
 @dataclasses.dataclass
 class RevocationRow:
@@ -406,7 +407,8 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
         ORDER BY redeemed_unix_ts_ms DESC
     ''', (bytes(master_pkey),))
 
-    result.payments_it = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
+    result.payments_count = tx.cursor.rowcount
+    result.payments_it    = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
     return result;
 
 def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
