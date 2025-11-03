@@ -15,6 +15,9 @@ And so forth.
 
 - `vendor/`: 3rd party dependencies
 
+- `examples/`: Helper script to contact all the endpoints of a Pro Backend
+  development server dumping the JSON requests and responses for said endpoints.
+
 - `base.py`: Basic primitives shared across all modules where necessary.
 
 - `backend.py`: DB layer that validates incoming requests and stores/retrieves
