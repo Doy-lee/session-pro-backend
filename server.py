@@ -388,6 +388,7 @@ API
           "auto_renewing": 1,
           "expiry_unix_ts_ms": 1761782400000,
           "grace_period_duration_ms": 60000,
+          "payments_total": 1,
           "status": 1,
           "error_report": 0,
           "version": 0
