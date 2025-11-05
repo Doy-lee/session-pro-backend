@@ -32,6 +32,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
     if add_pro_payment_example_with_google:
         google_enum               = 1                    # equivalent to => int(base.PaymentProvider.GooglePlayStore.value)
         google_payment_token: str = os.urandom(16).hex() # For the payment token, anything is accepted on a development server
+        google_order_id:      str = os.urandom(16).hex() # For the order ID, anything is accepted on a development server
 
         hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
@@ -39,6 +40,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         hasher.update(bytes(rotating_key.verify_key))
         hasher.update(int(google_enum).to_bytes(length=1, byteorder='little'))
         hasher.update(google_payment_token.encode('utf-8'))
+        hasher.update(google_order_id.encode('utf-8'))
 
         request_body={
             'version':       request_version,
@@ -46,7 +48,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             'rotating_pkey': bytes(rotating_key.verify_key).hex(),
             'master_sig':    bytes(master_key.sign(hasher.digest()).signature).hex(),
             'rotating_sig':  bytes(rotating_key.sign(hasher.digest()).signature).hex(),
-            'payment_tx': { 'provider': google_enum, 'google_payment_token': google_payment_token }
+            'payment_tx': { 'provider': google_enum, 'google_payment_token': google_payment_token, 'google_order_id': google_order_id }
         }
 
         print('\n--\n')

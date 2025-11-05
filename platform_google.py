@@ -94,7 +94,7 @@ def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_re
         err                      = err,
     )
 
-def toggle_payment_auto_renew(tx_payment: PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+def set_payment_auto_renew(tx_payment: PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, auto_renewing, None, sql_conn, err)
     if not success:
         err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
@@ -209,7 +209,7 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
-                toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
+                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
@@ -217,13 +217,13 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
-                toggle_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
+                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
 
         case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
+                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
                 with base.SQLTransaction(sql_conn) as tx:
                     _ = backend.add_google_revocation_tx(tx                   = tx,
                                                          google_payment_token = tx_payment.google_payment_token,

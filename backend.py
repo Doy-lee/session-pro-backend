@@ -67,7 +67,7 @@ class RedeemPaymentStatus(enum.Enum):
 @dataclasses.dataclass
 class RedeemPayment:
     proof:  ProSubscriptionProof = dataclasses.field(default_factory=ProSubscriptionProof)
-    status: RedeemPaymentStatus  = RedeemPaymentStatus.Success
+    status: RedeemPaymentStatus  = RedeemPaymentStatus.Nil
 
 @dataclasses.dataclass
 class SQLField:
@@ -190,6 +190,7 @@ class PaymentRow:
 
 @dataclasses.dataclass
 class UserRow:
+    found:                    bool  = False
     master_pkey:              bytes = ZERO_BYTES32
     gen_index:                int   = 0
     expiry_unix_ts_ms:        int   = 0
@@ -317,6 +318,13 @@ def _add_pro_payment_user_tx_log_label(tx: AddProPaymentUserTransaction):
     result = f'{tx.provider.name}, apple={tx.apple_tx_id}, google=({tx.google_payment_token}, {tx.google_order_id})'
     return result
 
+def convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms: int):
+    result: int = 0
+    if base.DEV_BACKEND_MODE:
+        result = unix_ts_ms
+    else:
+        result = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+    return result
 
 def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
     result = ''
@@ -351,6 +359,7 @@ def make_add_pro_payment_hash(version:       int,
     hasher.update(int(payment_tx.provider.value).to_bytes(length=1, byteorder='little'))
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         hasher.update(payment_tx.google_payment_token.encode('utf-8'))
+        hasher.update(payment_tx.google_order_id.encode('utf-8'))
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         hasher.update(payment_tx.apple_tx_id.encode('utf-8'))
     else:
@@ -421,7 +430,7 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
         SELECT   {select_fields}
         FROM     payments
         WHERE    master_pkey = ?
-        ORDER BY redeemed_unix_ts_ms DESC
+        ORDER BY unredeemed_unix_ts_ms DESC, id DESC
     ''', (bytes(master_pkey),))
 
     result.payments_it    = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
@@ -447,6 +456,7 @@ def get_user_from_sql_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.Veri
     result: UserRow          = UserRow()
     row                      = typing.cast(tuple[bytes, int, int, int, int] | None, tx.cursor.fetchone())
     if row:
+        result.found                    = True
         result.master_pkey              = row[0]
         result.gen_index                = row[1]
         result.expiry_unix_ts_ms        = row[2]
@@ -956,7 +966,7 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
            (status              = ? OR status = ? OR status = ? OR status = ?)
     ''', (# WHERE values
           google_payment_token,
-          int(base.PaymentProvider.GooglePlayStore),
+          int(base.PaymentProvider.GooglePlayStore.value),
           # OR status == ?
           int(base.PaymentStatus.Unredeemed.value),
           int(base.PaymentStatus.Redeemed.value),
@@ -971,14 +981,15 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
 
     return result
 
-def redeem_payment(sql_conn:            sqlite3.Connection,
-                   master_pkey:         nacl.signing.VerifyKey,
-                   rotating_pkey:       nacl.signing.VerifyKey,
-                   signing_key:         nacl.signing.SigningKey,
-                   redeemed_unix_ts_ms: int,
-                   payment_tx:          AddProPaymentUserTransaction,
-                   err:                 base.ErrorSink) -> RedeemPayment:
+def redeem_payment_tx(tx:                  base.SQLTransaction,
+                      master_pkey:         nacl.signing.VerifyKey,
+                      rotating_pkey:       nacl.signing.VerifyKey | None,
+                      signing_key:         nacl.signing.SigningKey | None,
+                      redeemed_unix_ts_ms: int,
+                      payment_tx:          AddProPaymentUserTransaction,
+                      err:                 base.ErrorSink) -> RedeemPayment:
 
+    assert tx.cursor is not None
     result                   = RedeemPayment()
     result.status            = RedeemPaymentStatus.Error
 
@@ -987,72 +998,75 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
     set_expr                 = ', '.join(fields) # Create '<field0> = ?, <field1> = ?, ...'
 
     if log.getEffectiveLevel() <= logging.INFO:
-        payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
-        log.info(f'Redeeming payment (master={bytes(master_pkey).hex()}, rotating={bytes(rotating_pkey).hex()}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, payment={payment_tx_label})')
+        payment_tx_label    = _add_pro_payment_user_tx_log_label(payment_tx)
+        rotating_pkey_label = bytes(rotating_pkey).hex() if rotating_pkey else '(none)'
+        log.info(f'Redeeming payment (master={bytes(master_pkey).hex()}, rotating={rotating_pkey_label}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, payment={payment_tx_label})')
 
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
+    # NOTE: We technically always allow a redeem of an unredeemed payment as long as the user
+    # knows the transaction ID (payment token/tx ID). If for example the user sits on the
+    # payment and doesn't redeem it and it expires but the expiry task hasn't been run yet, the
+    # user can still redeem the payment, they won't be allowed to use the proof because it has
+    # expired, but, they can register their public key for the payment and associate it with
+    # their account.
+    #
+    # The payment will now show up in their cross-platform payment history and visible across
+    # all the Session devices they have.
+    #
+    # TODO: What if the payment was expired and it has no master public key? Following the same
+    # train of thought it would be nice to let the user claim that payment so that they have
+    # the ability to maintain proper-book-keeping, but it's not clear to me if its even possible
+    # for that to happen. Maybe more realistically a payment could get revoked before it was
+    # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
+    # account.
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        _ = tx.cursor.execute(f'''
+            UPDATE payments
+            SET    {set_expr}
+            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status = ?
+        ''', (# SET values
+              master_pkey_bytes,
+              int(base.PaymentStatus.Redeemed.value),
+              redeemed_unix_ts_ms,
+              # WHERE values
+              int(payment_tx.provider.value),
+              payment_tx.google_payment_token,
+              payment_tx.google_order_id,
+              int(base.PaymentStatus.Unredeemed.value)))
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        _ = tx.cursor.execute(f'''
+            UPDATE payments
+            SET    {set_expr}
+            WHERE  payment_provider = ? AND apple_tx_id = ? AND status = ?
+        ''', (# SET fields
+              master_pkey_bytes,
+              int(base.PaymentStatus.Redeemed.value),
+              redeemed_unix_ts_ms,
+              # WHERE fields
+              int(payment_tx.provider.value),
+              payment_tx.apple_tx_id,
+              int(base.PaymentStatus.Unredeemed.value)))
+    else:
+        err.msg_list.append('Payment to register specifies an unknown payment provider')
 
-        # NOTE: We technically always allow a redeem of an unredeemed payment as long as the user
-        # knows the transaction ID (payment token/tx ID). If for example the user sits on the
-        # payment and doesn't redeem it and it expires but the expiry task hasn't been run yet, the
-        # user can still redeem the payment, they won't be allowed to use the proof because it has
-        # expired, but, they can register their public key for the payment and associate it with
-        # their account.
+    if tx.cursor.rowcount >= 1:
+        assert tx.cursor.rowcount == 1
+        if tx.cursor.rowcount > 1:
+            err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {tx.cursor.rowcount}')
+
+        # NOTE: Payment has been registered, give the user a new generation index. Subsequent
+        # proofs will be given a new gen index hash. We used to revoke the old gen index hash
+        # but there's no need for that and creates churn in the revoke list. The user will hold
+        # onto their proof until it expires and simply request a new one.
         #
-        # The payment will now show up in their cross-platform payment history and visible across
-        # all the Session devices they have.
-        #
-        # TODO: What if the payment was expired and it has no master public key? Following the same
-        # train of thought it would be nice to let the user claim that payment so that they have
-        # the ability to maintain proper-book-keeping, but it's not clear to me if its even possible
-        # for that to happen. Maybe more realistically a payment could get revoked before it was
-        # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
-        # account.
-        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET    {set_expr}
-                WHERE  payment_provider = ? AND google_payment_token = ? AND status = ?
-            ''', (# SET values
-                  master_pkey_bytes,
-                  int(base.PaymentStatus.Redeemed.value),
-                  redeemed_unix_ts_ms,
-                  # WHERE values
-                  int(payment_tx.provider.value),
-                  payment_tx.google_payment_token,
-                  int(base.PaymentStatus.Unredeemed.value)))
-        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-            _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET    {set_expr}
-                WHERE  payment_provider = ? AND apple_tx_id = ? AND status = ?
-            ''', (# SET fields
-                  master_pkey_bytes,
-                  int(base.PaymentStatus.Redeemed.value),
-                  redeemed_unix_ts_ms,
-                  # WHERE fields
-                  int(payment_tx.provider.value),
-                  payment_tx.apple_tx_id,
-                  int(base.PaymentStatus.Unredeemed.value)))
-        else:
-            err.msg_list.append('Payment to register specifies an unknown payment provider')
-
-        if tx.cursor.rowcount >= 1:
-            assert tx.cursor.rowcount == 1
-            if tx.cursor.rowcount > 1:
-                err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {tx.cursor.rowcount}')
-
-            # NOTE: Payment has been registered, give the user a new generation index. Subsequent
-            # proofs will be given a new gen index hash. We used to revoke the old gen index hash
-            # but there's no need for that and creates churn in the revoke list. The user will hold
-            # onto their proof until it expires and simply request a new one.
-            #
-            # The key change leading to not requiring a revoke is that we separated the idea that a
-            # proof is related to, but not representative of a user's pro payment information (e.g.
-            #the proof expiry may or may not co-incide with the pro-plan they are entitled to).
-            allocated: AllocatedGenID = _allocate_new_gen_id_if_master_pkey_has_payments(tx, master_pkey)
-            if allocated.found:
+        # The key change leading to not requiring a revoke is that we separated the idea that a
+        # proof is related to, but not representative of a user's pro payment information (e.g.
+        #the proof expiry may or may not co-incide with the pro-plan they are entitled to).
+        allocated: AllocatedGenID = _allocate_new_gen_id_if_master_pkey_has_payments(tx, master_pkey)
+        if allocated.found:
+            # NOTE: Only generate the proof if a rotating public key otherwise skip it (i.e.
+            # its possible to redeem a payment without automatically creating the corresponding proof)
+            if rotating_pkey:
+                assert signing_key, "Rotating public key and signing key have to be given in tandem, either both set or both set to nil"
                 proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
                 if base.DEV_BACKEND_MODE:
                     proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
@@ -1065,31 +1079,30 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
 
                 if not base.DEV_BACKEND_MODE:
                     assert result.proof.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {result.proof.expiry_unix_ts_ms}"
-            else:
-                err.msg_list.append(f'Failed to update DB after new payment was redeemed for {master_pkey}')
-
-            assert allocated.found, "We just added the user's payment we expect to find the latest expiry date for the pkey"
-
         else:
-            # NOTE: We dump the payment TX to the error list. This does not leak
-            # any information because this is all data populated by the user who
-            # is sending the redeeming request.
+            err.msg_list.append(f'Failed to update DB after new payment was redeemed for {master_pkey}')
 
-            if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-                _ = tx.cursor.execute(f'''
-                    SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND google_payment_token = ? AND status > ? AND master_pkey = ?
-                ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
-            elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-                _ = tx.cursor.execute(f'''
-                    SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND apple_tx_id = ? AND status > ? AND master_pkey = ?
-                ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+        assert allocated.found, "We just added the user's payment we expect to find the latest expiry date for the pkey"
 
-            if tx.cursor.fetchone()[0] > 0:
-                err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
-                result.status = RedeemPaymentStatus.AlreadyRedeemed
-            else:
-                err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
-                result.status = RedeemPaymentStatus.Error
+    else:
+        # NOTE: We dump the payment TX to the error list. This does not leak
+        # any information because this is all data populated by the user who
+        # is sending the redeeming request.
+        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+            _ = tx.cursor.execute(f'''
+                SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status > ? AND master_pkey = ?
+            ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+            _ = tx.cursor.execute(f'''
+                SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND apple_tx_id = ? AND status > ? AND master_pkey = ?
+            ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+
+        if tx.cursor.fetchone()[0] > 0:
+            err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
+            result.status = RedeemPaymentStatus.AlreadyRedeemed
+        else:
+            err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
+            result.status = RedeemPaymentStatus.Error
 
     if not err.has():
         assert result.status == RedeemPaymentStatus.Error
@@ -1288,9 +1301,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
             SELECT 1
             FROM payments
             WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-        ''', (int(payment_tx.provider.value),
-              payment_tx.google_payment_token,
-              payment_tx.google_order_id))
+        ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
 
         record = tx.cursor.fetchone()
         if not record:
@@ -1350,6 +1361,93 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   unredeemed_unix_ts_ms,
                   1, # auto_renewing is enabled by default until notified otherwise by Apple
                   ))
+
+    # NOTE: Find the latest master pkey associated with the common payment identifier (google payment
+    # token or apple original tx id). Then find the user if it exists, if the user is still entitled
+    # to Session Pro or is in grace, or in account hold, then, we've noticed a new payment for their
+    # account.
+    #
+    # For UX we will automatically redeem the payment in this window and assign it to that public
+    # key so that they automatically continue their Pro entitlement across the billing cycle without
+    # needing their originating device to be on to "claim" the payment (because only the originating
+    # device and the backend knows the confidential payment data it needs to provide to redeem).
+    #
+    # If the user is no outside of the account hold windows or cancelled their subscription then,
+    # the next time they purchase a pro membership the Session account that the purchase was made
+    # under will be the one that claims the initial payment. The auto-redeeming will be disabled
+    # because the user is not in the auto-redeeming window.
+    #
+    # So the backend tries automatically redeem the payment on behalf of the user (if it seems
+    # reasonable to do so according to that heuristic) for UX.
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        _ = tx.cursor.execute(f'''
+            SELECT   master_pkey
+            FROM     payments
+            WHERE    payment_provider = ? AND google_payment_token = ? AND master_pkey IS NOT NULL
+            ORDER BY id DESC
+            LIMIT    1
+        ''', (int(payment_tx.provider.value), payment_tx.google_payment_token))
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        _ = tx.cursor.execute(f'''
+            SELECT   master_pkey
+            FROM     payments
+            WHERE    payment_provider = ? AND apple_original_tx_id = ? AND master_pkey IS NOT NULL
+            ORDER BY id DESC
+            LIMIT    1
+        ''', (int(payment_tx.provider.value), payment_tx.apple_original_tx_id))
+
+    master_pkey_record = typing.cast(tuple[bytes] | None, tx.cursor.fetchone())
+    if master_pkey_record and master_pkey_record[0]:
+        master_pkey   = nacl.signing.VerifyKey(master_pkey_record[0])
+        user: UserRow = get_user_from_sql_tx(tx, master_pkey)
+        if user.found:
+            auto_redeem_deadline_unix_ts_ms = 0
+            if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+                # NOTE: Account hold as described by google
+                #
+                #   > [...] we’re increasing the default account hold duration on December 1, 2025.
+                #   > Starting on this date, by default account hold durations will be automatically
+                #   > calculated. Initially, the calculation will be 60 days minus any grace period
+                #   > duration, but we may change these calculations in the future to further
+                #   > improve recovery performance
+                #
+                # Source: https://support.google.com/googleplay/android-developer/answer/16631229
+                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms + 60 * base.MILLISECONDS_IN_DAY - user.grace_period_duration_ms
+            else:
+                assert payment_tx.provider == base.PaymentProvider.iOSAppStore
+                # NOTE: We don't currently configure a grace period/account hold period for Apple
+                # hnote the grace and account hold concept is merged together in Apple).
+                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms + user.grace_period_duration_ms
+
+            # NOTE: Unredeemed unix timestamp represents now (as this is the timestamp we are marking
+            # the payment as having been registered), so we compare (now) to the deadline. If we are
+            # before the deadline we are eligible to auto-redeem this payment and assign it to the
+            # previous known master public key.
+            if unredeemed_unix_ts_ms <= auto_redeem_deadline_unix_ts_ms:
+                add_pro_payment_user_tx                      = AddProPaymentUserTransaction()
+                add_pro_payment_user_tx.provider             = payment_tx.provider
+                add_pro_payment_user_tx.apple_tx_id          = payment_tx.apple_tx_id
+                add_pro_payment_user_tx.google_payment_token = payment_tx.google_payment_token
+                add_pro_payment_user_tx.google_order_id      = payment_tx.google_order_id
+
+                # NOTE: We use a temp error sink as we don't mind if auto-redeeming failed the user
+                # can always try manually by claiming the payment themselves. If this errors
+                # returning that to the platform layers (google and apple) can stall them
+                # unnecessarily.
+                #
+                # For internal logging though however, we can report this
+                tmp_err = base.ErrorSink()
+                _ = redeem_payment_tx(tx                  = tx,
+                                      master_pkey         = master_pkey,
+                                      rotating_pkey       = None,
+                                      signing_key         = None,
+                                      redeemed_unix_ts_ms = convert_unix_ts_ms_to_redeemed_unix_ts_ms(unredeemed_unix_ts_ms),
+                                      payment_tx          = add_pro_payment_user_tx,
+                                      err                 = tmp_err)
+
+                if tmp_err.has():
+                    err_str = '\n'.join(tmp_err.msg_list)
+                    log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
 
 def add_unredeemed_payment(sql_conn:                          sqlite3.Connection,
                            payment_tx:                        PaymentProviderTransaction,
@@ -1513,7 +1611,8 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
         log.info(f'Add payment (dev={base.DEV_BACKEND_MODE}, version={version}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, master={bytes(master_pkey).hex()}, payment={payment_tx_label})')
 
-    result = RedeemPayment()
+    result        = RedeemPayment()
+    result.status = RedeemPaymentStatus.Error
 
     # In developer mode, the server is intended to be launched locally and we
     # typically run libsession tests against it (to get accurate request and
@@ -1545,7 +1644,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             internal_payment_tx.google_payment_token        = payment_tx.google_payment_token
-            internal_payment_tx.google_order_id             = payment_tx.google_payment_token
+            internal_payment_tx.google_order_id             = payment_tx.google_order_id
         elif internal_payment_tx.provider == base.PaymentProvider.iOSAppStore:
             internal_payment_tx.apple_tx_id                 = payment_tx.apple_tx_id
             internal_payment_tx.apple_web_line_order_tx_id  = ''
@@ -1554,9 +1653,10 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         already_exists = False
         for it in get_unredeemed_payments_list(sql_conn):
             if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-                if it.google_payment_token == payment_tx.google_payment_token:
+                if it.google_payment_token == payment_tx.google_payment_token and it.google_order_id == payment_tx.google_order_id:
                     already_exists = True
-                elif it.apple.tx_id == payment_tx.apple_tx_id:
+            else:
+                if it.apple.tx_id == payment_tx.apple_tx_id:
                     already_exists = True
 
             if already_exists:
@@ -1580,18 +1680,18 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                                             err=err)
 
     # Verify some of the request parameters
-    hash_to_sign: bytes = make_add_pro_payment_hash(version=version,
-                                                    master_pkey=master_pkey,
-                                                    rotating_pkey=rotating_pkey,
-                                                    payment_tx=payment_tx)
+    hash_to_sign: bytes = make_add_pro_payment_hash(version       = version,
+                                                    master_pkey   = master_pkey,
+                                                    rotating_pkey = rotating_pkey,
+                                                    payment_tx    = payment_tx)
 
-    _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key=signing_key,
-                                                                   master_pkey=master_pkey,
-                                                                   rotating_pkey=rotating_pkey,
-                                                                   hash_to_sign=hash_to_sign,
-                                                                   master_sig=master_sig,
-                                                                   rotating_sig=rotating_sig,
-                                                                   err=err)
+    _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key   = signing_key,
+                                                                   master_pkey   = master_pkey,
+                                                                   rotating_pkey = rotating_pkey,
+                                                                   hash_to_sign  = hash_to_sign,
+                                                                   master_sig    = master_sig,
+                                                                   rotating_sig  = rotating_sig,
+                                                                   err           = err)
     # Then verify version and time
     if version != 0:
         err.msg_list.append(f'Unrecognised version {version} was given')
@@ -1609,13 +1709,14 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                 "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
-    result = redeem_payment(sql_conn            = sql_conn,
-                            master_pkey         = master_pkey,
-                            rotating_pkey       = rotating_pkey,
-                            signing_key         = signing_key,
-                            redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                            payment_tx          = payment_tx,
-                            err                 = err)
+    with base.SQLTransaction(sql_conn) as tx:
+        result = redeem_payment_tx(tx                  = tx,
+                                   master_pkey         = master_pkey,
+                                   rotating_pkey       = rotating_pkey,
+                                   signing_key         = signing_key,
+                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                   payment_tx          = payment_tx,
+                                   err                 = err)
     return result
 
 def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:

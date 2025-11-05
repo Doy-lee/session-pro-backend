@@ -38,7 +38,11 @@ JSONValue:     typing.TypeAlias = JSONPrimitive | dict[str, 'JSONValue'] | list[
 JSONObject:    typing.TypeAlias = dict[str, JSONValue]
 JSONArray:     typing.TypeAlias = list[JSONValue]
 
-class PaymentProvider(enum.IntEnum):
+@dataclasses.dataclass
+class PaymentProviderData:
+    id: int = 0
+
+class PaymentProvider(enum.Enum):
     Nil             = 0
     GooglePlayStore = 1
     iOSAppStore     = 2
@@ -386,7 +390,7 @@ def json_dict_require_str(d: JSONObject, key: str, err: ErrorSink) -> str:
         else:
             err.msg_list.append(f'Key "{key}" value was not a string: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_int(d: JSONObject, key: str, err: ErrorSink) -> int:
@@ -397,7 +401,7 @@ def json_dict_require_int(d: JSONObject, key: str, err: ErrorSink) -> int:
         else:
             err.msg_list.append(f'Key "{key}" value was not an integer: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_bool(d: JSONObject, key: str, err: ErrorSink) -> bool:
@@ -408,7 +412,7 @@ def json_dict_require_bool(d: JSONObject, key: str, err: ErrorSink) -> bool:
         else:
             err.msg_list.append(f'Key "{key}" value was not a bool: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_array(d: JSONObject, key: str, err: ErrorSink) -> JSONArray:
@@ -419,7 +423,7 @@ def json_dict_require_array(d: JSONObject, key: str, err: ErrorSink) -> JSONArra
         else:
             err.msg_list.append(f'Key "{key}" value was not an array: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> JSONObject:
@@ -430,7 +434,7 @@ def json_dict_require_obj(d: dict[str, JSONValue], key: str, err: ErrorSink) -> 
         else:
             err.msg_list.append(f'Key "{key}" value was not an object: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
     return result
 
 def json_dict_require_str_coerce_to_int(d: JSONObject, key: str, err: ErrorSink) -> int:
@@ -458,7 +462,7 @@ def json_dict_require_int_coerce_to_enum(d: JSONObject, key: str, my_enum: typin
         else:
             err.msg_list.append(f'Key "{key}" value was not an integer: "{safe_get_dict_value_type(d, key)}"')
     else:
-        err.msg_list.append(f'Required key "{key}" is missing from: {safe_dump_dict_keys_or_data(d)}')
+        err.msg_list.append(f'Required key "{key}" is missing from JSON: {safe_dump_dict_keys_or_data(d)}')
 
     if result_int is not None:
         result = my_enum._value2member_map_.get(result_int)

@@ -464,12 +464,17 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                                                               platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
                                                               err                               = err)
 
-                        # NOTE: Update grace and set to auto-renewing
+                        # NOTE: Update grace period, note we do not update the auto-renewing flag
+                        # because it is set on by default for new subscription payments (by
+                        # definition, paying for a subscription means the user is enrolling into
+                        # auto-renewing payments at the subsequent billing cycle so that's the
+                        # default behaviour of the backend which is to set that flag on the payment
+                        # immediately)
                         if not err.has():
                             _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                                        payment_tx               = payment_tx,
                                                                        grace_period_duration_ms = GRACE_PERIOD_DURATION_MS,
-                                                                       auto_renewing            = True,
+                                                                       auto_renewing            = None,
                                                                        err                      = err)
                         sql_tx.cancel = err.has()
 

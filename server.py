@@ -58,6 +58,8 @@ API
                               transaction ID string.
         google_payment_token: When provider is set to the Google Play Store, set this field to the
                               purchase token string.
+        google_order_id:      When provider is set to the Google Play Store, set this field to the
+                              order id string.
       master_sig:    64 byte signature over the hash of the contents of the request proving that the
                      user knows the secret component to the `master_pkey` and hence the caller is
                      authorised to pair a new `rotating_pkey` to this payment
@@ -479,7 +481,7 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
 
     return result
 
-def make_get_pro_status(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, count: int) -> bytes:
+def make_get_pro_status_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, count: int) -> bytes:
     hasher: hashlib.blake2b = backend.make_blake2b_hasher()
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
@@ -520,7 +522,7 @@ def add_pro_payment():
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
-    base.verify_payment_provider(payment_provider=payment_provider, err=err)
+    _ = base.verify_payment_provider(payment_provider=payment_provider, err=err)
 
     # Build payment TX
     if len(err.msg_list):
@@ -530,6 +532,7 @@ def add_pro_payment():
     user_payment.provider = base.PaymentProvider(payment_provider)
     if user_payment.provider == base.PaymentProvider.GooglePlayStore:
         user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
+        user_payment.google_order_id      = base.json_dict_require_str(d=payment_tx, key='google_order_id', err=err)
     elif user_payment.provider == base.PaymentProvider.iOSAppStore:
         user_payment.apple_tx_id = base.json_dict_require_str(d=payment_tx, key='apple_tx_id', err=err)
 
@@ -544,10 +547,7 @@ def add_pro_payment():
     # Submit the payment to the DB
     redeemed_payment = backend.RedeemPayment()
     with open_db_from_flask_request_context(flask.current_app) as db:
-        unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
-        if base.DEV_BACKEND_MODE:
-            unix_ts_ms = int(time.time() * 1000)
-
+        unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(int(time.time() * 1000))
         redeemed_payment = backend.add_pro_payment(sql_conn            = db.sql_conn,
                                                    version             = version,
                                                    signing_key         = db.runtime.backend_key,
@@ -719,7 +719,7 @@ def get_pro_status():
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
-    hash_to_verify: bytes = make_get_pro_status(version=version, master_pkey=master_pkey_nacl, unix_ts_ms=unix_ts_ms, count=count)
+    hash_to_verify: bytes = make_get_pro_status_hash(version=version, master_pkey=master_pkey_nacl, unix_ts_ms=unix_ts_ms, count=count)
     try:
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception as e:
