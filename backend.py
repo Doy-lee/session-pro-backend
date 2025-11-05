@@ -9,7 +9,6 @@ import datetime
 import dataclasses
 import random
 import logging
-import traceback
 
 import base
 
@@ -1026,14 +1025,19 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
             err.msg_list.append('Payment to register specifies an unknown payment provider')
 
         if tx.cursor.rowcount >= 1:
+            assert tx.cursor.rowcount == 1
             if tx.cursor.rowcount > 1:
-                # TODO: Be more robust here, abort the update if there was more than 1 row, DB is in
-                # an unexpected state
                 err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {tx.cursor.rowcount}')
 
-            # NOTE: Payment has been registered, issue a revocation for the old proof if the
-            # user had one as a new proof will be generated
-            allocated: AllocatedGenID = revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
+            # NOTE: Payment has been registered, give the user a new generation index. Subsequent
+            # proofs will be given a new gen index hash. We used to revoke the old gen index hash
+            # but there's no need for that and creates churn in the revoke list. The user will hold
+            # onto their proof until it expires and simply request a new one.
+            #
+            # The key change leading to not requiring a revoke is that we separated the idea that a
+            # proof is related to, but not representative of a user's pro payment information (e.g.
+            #the proof expiry may or may not co-incide with the pro-plan they are entitled to).
+            allocated: AllocatedGenID = _allocate_new_gen_id_if_master_pkey_has_payments(tx, master_pkey)
             if allocated.found:
                 proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
                 if base.DEV_BACKEND_MODE:
@@ -1572,13 +1576,13 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                 "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
-    proof: ProSubscriptionProof = redeem_payment(sql_conn=sql_conn,
-                                                 master_pkey=master_pkey,
-                                                 rotating_pkey=rotating_pkey,
-                                                 signing_key=signing_key,
-                                                 redeemed_unix_ts_ms=redeemed_unix_ts_ms,
-                                                 payment_tx=payment_tx,
-                                                 err=err)
+    proof: ProSubscriptionProof = redeem_payment(sql_conn            = sql_conn,
+                                                 master_pkey         = master_pkey,
+                                                 rotating_pkey       = rotating_pkey,
+                                                 signing_key         = signing_key,
+                                                 redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                 payment_tx          = payment_tx,
+                                                 err                 = err)
     if len(err.msg_list) > 0:
         return result
 

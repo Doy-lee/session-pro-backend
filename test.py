@@ -233,15 +233,13 @@ def test_backend_same_user_stacks_subscription():
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.sql_conn)
-    assert len(revocation_list)                            == 1
-    assert revocation_list[0].gen_index                    == 0
-    assert revocation_list[0].expiry_unix_ts_ms            == scenarios[0].expiry_unix_ts_ms
+    assert len(revocation_list)                            == 0
 
     expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(db.sql_conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
     assert expire_result.already_done_by_someone_else      == False
     assert expire_result.success                           == True
     assert expire_result.payments                          == 1
-    assert expire_result.revocations                       == 1
+    assert expire_result.revocations                       == 0
     assert expire_result.users                             == 0
 
     # NOTE: Update the latest payments grace period but set auto-renewing off
@@ -336,8 +334,6 @@ def test_server_add_payment_flow():
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
-    first_gen_index_hash:   bytes = b''
-    first_expiry_unix_ts_ms: int = 0
     if 1: # Grab the pro status before anything has happened
         version:      int   = 0
         count:        int   = 10_000
@@ -403,6 +399,7 @@ def test_server_add_payment_flow():
                                                       }
                                                   })
 
+
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
         onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
@@ -445,8 +442,9 @@ def test_server_add_payment_flow():
                                                      result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
-        first_gen_index_hash   = result_gen_index_hash
-        first_expiry_unix_ts_ms = result_expiry_unix_ts_ms
+        with base.SQLTransaction(db.sql_conn) as tx:
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+            assert get_user.user.gen_index == 0
 
     if 1: # Authorise a new rotated key for the pro subscription
         new_rotating_key    = nacl.signing.SigningKey.generate()
@@ -512,6 +510,8 @@ def test_server_add_payment_flow():
                                               result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
+    new_add_pro_payment_tx      = backend.AddProPaymentUserTransaction()
+    new_proof_expiry_unix_ts_ms = 0
     if 1: # Register another payment on the same user, this will revoke the old proof
         version: int                        = 0
         new_payment_tx                      = backend.PaymentProviderTransaction()
@@ -526,7 +526,6 @@ def test_server_add_payment_flow():
                                        platform_refund_expiry_unix_ts_ms=0,
                                        err=err)
 
-        new_add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
         new_add_pro_payment_tx.provider             = new_payment_tx.provider
         new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
         payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
@@ -576,6 +575,8 @@ def test_server_add_payment_flow():
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
+        new_proof_expiry_unix_ts_ms = result_expiry_unix_ts_ms
+
         # Parse hex fields to bytes
         result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
         result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
@@ -594,7 +595,7 @@ def test_server_add_payment_flow():
 
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
-        request_body={'version': 0, 'ticket':  0}
+        request_body={'version': 0, 'ticket':  curr_revocation_ticket}
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
                                                   endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
@@ -618,23 +619,80 @@ def test_server_add_payment_flow():
         result_json = response_json['result']
 
         # Extract the fields
-        result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
-        result_items                               = base.json_dict_require_array(d=result_json, key='items', err=err)
-        result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+        result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
+        result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
+        result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
         assert result_version == 0
-        assert result_ticket  == 1
+        assert result_ticket  == 0
         curr_revocation_ticket = result_ticket
 
-        # Check that the server returned the revocation list with the initial
-        # payment that got revoked after we stacked a new subscription ontop
-        assert len(result_items) == 1
-        for it in result_items:
-            it: dict[str, int | str]
-            assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
-            assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
-            assert it['gen_index_hash']   == first_gen_index_hash.hex()
-            assert it['expiry_unix_ts_ms'] == first_expiry_unix_ts_ms
+        # Check that the server returned an empty revocation list, we no longer revoke the old
+        # payment but we _do_ increment the user's generation index
+        assert len(result_items) == 0
+
+        # Grab the generation index, and then calculate the expected generation index hash
+        gen_index = 0
+        with base.SQLTransaction(db.sql_conn) as tx:
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+            assert get_user.user.gen_index == 1
+            gen_index = get_user.user.gen_index
+
+        runtime:                    backend.RuntimeRow = backend.get_runtime(db.sql_conn)
+        post_revoke_gen_index_hash: bytes              = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
+
+        # We will now manually revoke the user and check the revocation list again
+        with base.SQLTransaction(db.sql_conn) as tx:
+            revoked = backend.add_google_revocation_tx(tx=tx,
+                                                       google_payment_token=new_add_pro_payment_tx.google_payment_token,
+                                                       revoke_unix_ts_ms=unix_ts_ms,
+                                                       err=err)
+            assert revoked
+            assert not err.has()
+
+        if 1: # Get the revocation list, again
+            request_body={'version': 0, 'ticket':  curr_revocation_ticket}
+            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                      request_body=request_body)
+
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+            # Parse status from response
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
+
+            # Extract the fields
+            result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
+            result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
+            result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+            assert result_version == 0
+            assert result_ticket  == 1
+            curr_revocation_ticket = result_ticket
+
+            # Check that the server returned an empty revocation list, we no longer revoke the old
+            # payment but we _do_ increment the user's generation index
+            assert len(result_items) == 1
+
+            for it in result_items:
+                it: dict[str, int | str]
+                assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
+                assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
+                assert it['gen_index_hash']    == post_revoke_gen_index_hash.hex()
+                assert it['expiry_unix_ts_ms'] == new_proof_expiry_unix_ts_ms
 
     # Try grabbing the revocation again with the current ticket (we should get
     # an empty list because we passed in the most up to date ticket)
