@@ -119,26 +119,26 @@ def test_backend_same_user_stacks_subscription():
     class Scenario:
         google_payment_token:     str                          = ''
         google_order_id:          str                          = ''
-        plan:                     base.ProPlan             = base.ProPlan.Nil
+        plan:                     base.ProPlan                 = base.ProPlan.Nil
         proof:                    backend.ProSubscriptionProof = dataclasses.field(default_factory=backend.ProSubscriptionProof)
         payment_provider:         base.PaymentProvider         = base.PaymentProvider.Nil
         expiry_unix_ts_ms:        int                          = 0
         grace_period_duration_ms: int                          = 0
 
     scenarios: list[Scenario] = [
-        Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 plan                    = base.ProPlan.OneMonth,
-                 expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
-                 grace_period_duration_ms        = 0,
-                 payment_provider        = base.PaymentProvider.GooglePlayStore),
+        Scenario(google_payment_token     = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 plan                     = base.ProPlan.OneMonth,
+                 expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
+                 grace_period_duration_ms = 0,
+                 payment_provider         = base.PaymentProvider.GooglePlayStore),
 
-        Scenario(google_payment_token    = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 google_order_id         = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 plan                    = base.ProPlan.TwelveMonth,
-                 expiry_unix_ts_ms       = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
-                 grace_period_duration_ms        = 0,
-                 payment_provider        = base.PaymentProvider.GooglePlayStore)
+        Scenario(google_payment_token     = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 plan                     = base.ProPlan.TwelveMonth,
+                 expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
+                 grace_period_duration_ms = 0,
+                 payment_provider         = base.PaymentProvider.GooglePlayStore)
     ]
 
     for index, it in enumerate(scenarios):
@@ -182,20 +182,39 @@ def test_backend_same_user_stacks_subscription():
                                                                     rotating_pkey=rotating_key.verify_key,
                                                                     payment_tx=add_pro_payment_tx)
 
-        it.proof = backend.add_pro_payment(version             = version,
-                                           sql_conn            = db.sql_conn,
-                                           signing_key         = backend_key,
-                                           redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                           master_pkey         = master_key.verify_key,
-                                           rotating_pkey       = rotating_key.verify_key,
-                                           payment_tx          = add_pro_payment_tx,
-                                           master_sig          = master_key.sign(add_payment_hash).signature,
-                                           rotating_sig        = rotating_key.sign(add_payment_hash).signature,
-                                           err                 = err)
+        redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
+                                                                          sql_conn            = db.sql_conn,
+                                                                          signing_key         = backend_key,
+                                                                          redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                                          master_pkey         = master_key.verify_key,
+                                                                          rotating_pkey       = rotating_key.verify_key,
+                                                                          payment_tx          = add_pro_payment_tx,
+                                                                          master_sig          = master_key.sign(add_payment_hash).signature,
+                                                                          rotating_sig        = rotating_key.sign(add_payment_hash).signature,
+                                                                          err                 = err)
+        it.proof = redeemed_payment.proof
 
         # Verify payment was redeemed
         unredeemed_payment_list = backend.get_unredeemed_payments_list(db.sql_conn)
         assert len(unredeemed_payment_list) == 0
+        assert redeemed_payment.status == backend.RedeemPaymentStatus.Success
+
+        # Try claiming it again, this should fail because it has already been claimed
+        redeemed_payment_2nd = backend.add_pro_payment(version             = version,
+                                                       sql_conn            = db.sql_conn,
+                                                       signing_key         = backend_key,
+                                                       redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                       master_pkey         = master_key.verify_key,
+                                                       rotating_pkey       = rotating_key.verify_key,
+                                                       payment_tx          = add_pro_payment_tx,
+                                                       master_sig          = master_key.sign(add_payment_hash).signature,
+                                                       rotating_sig        = rotating_key.sign(add_payment_hash).signature,
+                                                       err                 = err)
+
+        assert err.has()
+        assert redeemed_payment_2nd.status                    == backend.RedeemPaymentStatus.AlreadyRedeemed, err.msg_list
+        assert len(redeemed_payment_2nd.proof.gen_index_hash) == 0
+        err.msg_list.clear()
 
     runtime: backend.RuntimeRow                             = backend.get_runtime(db.sql_conn)
     assert runtime.gen_index                               == 2

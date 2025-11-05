@@ -9,6 +9,7 @@ import datetime
 import dataclasses
 import random
 import logging
+import enum
 
 import base
 
@@ -45,18 +46,28 @@ class ProSubscriptionProof:
 
 @dataclasses.dataclass
 class LookupUserExpiryUnixTsMs:
-    expiry_unix_ts_ms_from_redeemed:   int  = 0
-    grace_duration_ms_from_redeemed:   int  = 0
-    auto_renewing_from_redeemed:       bool = False
+    expiry_unix_ts_ms_from_redeemed:           int  = 0
+    grace_duration_ms_from_redeemed:           int  = 0
+    auto_renewing_from_redeemed:               bool = False
 
-    expiry_unix_ts_ms_from_expired_or_revoked:    int  = 0
-    grace_duration_ms_from_expired_or_revoked:    int  = 0
-    auto_renewing_from_expired_or_revoked:        bool = False
+    expiry_unix_ts_ms_from_expired_or_revoked: int  = 0
+    grace_duration_ms_from_expired_or_revoked: int  = 0
+    auto_renewing_from_expired_or_revoked:     bool = False
 
-    best_expiry_unix_ts_ms:            int  = 0
-    best_grace_duration_ms:            int  = 0
-    best_auto_renewing:                bool = False
+    best_expiry_unix_ts_ms:                    int  = 0
+    best_grace_duration_ms:                    int  = 0
+    best_auto_renewing:                        bool = False
 
+class RedeemPaymentStatus(enum.Enum):
+    Nil             = 0
+    Error           = 1
+    Success         = 2
+    AlreadyRedeemed = 3
+
+@dataclasses.dataclass
+class RedeemPayment:
+    proof:  ProSubscriptionProof = dataclasses.field(default_factory=ProSubscriptionProof)
+    status: RedeemPaymentStatus  = RedeemPaymentStatus.Success
 
 @dataclasses.dataclass
 class SQLField:
@@ -966,8 +977,11 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
                    signing_key:         nacl.signing.SigningKey,
                    redeemed_unix_ts_ms: int,
                    payment_tx:          AddProPaymentUserTransaction,
-                   err:                 base.ErrorSink) -> ProSubscriptionProof:
-    result                   = ProSubscriptionProof()
+                   err:                 base.ErrorSink) -> RedeemPayment:
+
+    result                   = RedeemPayment()
+    result.status            = RedeemPaymentStatus.Error
+
     master_pkey_bytes: bytes = bytes(master_pkey)
     fields                   = ['master_pkey = ?', 'status = ?', 'redeemed_unix_ts_ms = ?']
     set_expr                 = ', '.join(fields) # Create '<field0> = ?, <field1> = ?, ...'
@@ -1043,14 +1057,14 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
                 if base.DEV_BACKEND_MODE:
                     proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
 
-                result = build_proof(gen_index         = allocated.gen_index,
-                                     rotating_pkey     = rotating_pkey,
-                                     expiry_unix_ts_ms = proof_expiry_unix_ts_ms,
-                                     signing_key       = signing_key,
-                                     gen_index_salt    = allocated.gen_index_salt)
+                result.proof = build_proof(gen_index         = allocated.gen_index,
+                                           rotating_pkey     = rotating_pkey,
+                                           expiry_unix_ts_ms = proof_expiry_unix_ts_ms,
+                                           signing_key       = signing_key,
+                                           gen_index_salt    = allocated.gen_index_salt)
 
                 if not base.DEV_BACKEND_MODE:
-                    assert result.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {result.expiry_unix_ts_ms}"
+                    assert result.proof.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {result.proof.expiry_unix_ts_ms}"
             else:
                 err.msg_list.append(f'Failed to update DB after new payment was redeemed for {master_pkey}')
 
@@ -1060,7 +1074,26 @@ def redeem_payment(sql_conn:            sqlite3.Connection,
             # NOTE: We dump the payment TX to the error list. This does not leak
             # any information because this is all data populated by the user who
             # is sending the redeeming request.
-            err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
+
+            if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+                _ = tx.cursor.execute(f'''
+                    SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND google_payment_token = ? AND status > ? AND master_pkey = ?
+                ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+            elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+                _ = tx.cursor.execute(f'''
+                    SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND apple_tx_id = ? AND status > ? AND master_pkey = ?
+                ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+
+            if tx.cursor.fetchone()[0] > 0:
+                err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
+                result.status = RedeemPaymentStatus.AlreadyRedeemed
+            else:
+                err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
+                result.status = RedeemPaymentStatus.Error
+
+    if not err.has():
+        assert result.status == RedeemPaymentStatus.Error
+        result.status = RedeemPaymentStatus.Success
 
     return result
 
@@ -1474,13 +1507,13 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                     payment_tx:          AddProPaymentUserTransaction,
                     master_sig:          bytes,
                     rotating_sig:        bytes,
-                    err:                 base.ErrorSink) -> ProSubscriptionProof:
+                    err:                 base.ErrorSink) -> RedeemPayment:
 
     if log.getEffectiveLevel() <= logging.INFO:
         payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
         log.info(f'Add payment (dev={base.DEV_BACKEND_MODE}, version={version}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, master={bytes(master_pkey).hex()}, payment={payment_tx_label})')
 
-    result: ProSubscriptionProof = ProSubscriptionProof()
+    result = RedeemPayment()
 
     # In developer mode, the server is intended to be launched locally and we
     # typically run libsession tests against it (to get accurate request and
@@ -1576,17 +1609,13 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                 "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
-    proof: ProSubscriptionProof = redeem_payment(sql_conn            = sql_conn,
-                                                 master_pkey         = master_pkey,
-                                                 rotating_pkey       = rotating_pkey,
-                                                 signing_key         = signing_key,
-                                                 redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                                 payment_tx          = payment_tx,
-                                                 err                 = err)
-    if len(err.msg_list) > 0:
-        return result
-
-    result = proof
+    result = redeem_payment(sql_conn            = sql_conn,
+                            master_pkey         = master_pkey,
+                            rotating_pkey       = rotating_pkey,
+                            signing_key         = signing_key,
+                            redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                            payment_tx          = payment_tx,
+                            err                 = err)
     return result
 
 def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
