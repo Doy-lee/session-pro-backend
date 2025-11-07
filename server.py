@@ -460,10 +460,10 @@ RESPONSE_PARSE_ERROR   = 2
 
 class AddProPaymentStatus(enum.Enum):
     Success         = RESPONSE_SUCCESS
+    Error           = RESPONSE_GENERIC_ERROR
     ParseError      = RESPONSE_PARSE_ERROR
-    Error           = 100
-    AlreadyRedeemed = 101
-    UnknownPayment  = 102
+    AlreadyRedeemed = 100
+    UnknownPayment  = 101
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Session Pro Backend client requests.
