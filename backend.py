@@ -63,6 +63,7 @@ class RedeemPaymentStatus(enum.Enum):
     Error           = 1
     Success         = 2
     AlreadyRedeemed = 3
+    UnknownPayment  = 4
 
 @dataclasses.dataclass
 class RedeemPayment:
@@ -1102,7 +1103,7 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
             result.status = RedeemPaymentStatus.AlreadyRedeemed
         else:
             err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
-            result.status = RedeemPaymentStatus.Error
+            result.status = RedeemPaymentStatus.UnknownPayment
 
     if not err.has():
         assert result.status == RedeemPaymentStatus.Error
