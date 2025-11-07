@@ -930,7 +930,7 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 1,     f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
             assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
             assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
@@ -958,7 +958,7 @@ def test_server_add_payment_flow():
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == 1,     f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
             assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
             assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 

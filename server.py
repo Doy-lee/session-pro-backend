@@ -448,17 +448,22 @@ FLASK_ROUTE_GET_PRO_PROOF       = '/get_pro_proof'
 FLASK_ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
 FLASK_ROUTE_GET_PRO_STATUS      = '/get_pro_status'
 
-RESPONSE_SUCCESS          = 0
-
 # How many seconds can the timestamp in the get all payments route can drift
 # from the current server's timestamp before it's flat out rejected
 GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
 
+# Generic response codes, note that we don't overlap custom status codes with these generic ones
+# to try defensively avoid response handling code for callers.
+RESPONSE_SUCCESS       = 0
+RESPONSE_GENERIC_ERROR = 1
+RESPONSE_PARSE_ERROR   = 2
+
 class AddProPaymentStatus(enum.Enum):
-    Success         = 0
-    Error           = 1
-    AlreadyRedeemed = 2
-    UnknownPayment  = 3
+    Success         = RESPONSE_SUCCESS
+    ParseError      = RESPONSE_PARSE_ERROR
+    Error           = 100
+    AlreadyRedeemed = 101
+    UnknownPayment  = 102
 
 # The object containing routes that you register onto a Flask app to turn it
 # into an app that accepts Session Pro Backend client requests.
@@ -511,7 +516,7 @@ def add_pro_payment():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return make_error_response(status=1, errors=[get.err_msg])
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=[get.err_msg])
 
     # Extract values from JSON
     err                                         = base.ErrorSink()
@@ -523,7 +528,7 @@ def add_pro_payment():
     payment_tx:       dict[str, base.JSONValue] = base.json_dict_require_obj(d=get.json,   key='payment_tx',    err=err)
     payment_provider: int                       = base.json_dict_require_int(d=payment_tx, key='provider',      err=err)
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -532,7 +537,7 @@ def add_pro_payment():
 
     # Build payment TX
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     user_payment          = backend.AddProPaymentUserTransaction()
     user_payment.provider = base.PaymentProvider(payment_provider)
@@ -548,7 +553,7 @@ def add_pro_payment():
     master_sig_bytes    = base.hex_to_bytes(hex=master_sig,    label='Master key signature',   hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Submit the payment to the DB
     redeemed_payment = backend.RedeemPayment()
@@ -590,7 +595,7 @@ def get_pro_proof() -> flask.Response:
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return make_error_response(status=1, errors=[get.err_msg])
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=[get.err_msg])
 
     # Extract values from JSON
     err                = base.ErrorSink()
@@ -601,7 +606,7 @@ def get_pro_proof() -> flask.Response:
     master_sig:    str = base.json_dict_require_str(d=get.json, key='master_sig',    err=err)
     rotating_sig:  str = base.json_dict_require_str(d=get.json, key='rotating_sig',  err=err)
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -624,7 +629,7 @@ def get_pro_proof() -> flask.Response:
         err.msg_list.append(f'Nonce timestamp is too far in the future: {unix_ts_ms} (max {max_unix_ts_ms})')
 
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Request proof from the backend
     with open_db_from_flask_request_context(flask.current_app) as db:
@@ -640,7 +645,7 @@ def get_pro_proof() -> flask.Response:
                                       err            = err)
 
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     result = make_success_response(dict_result=proof.to_dict())
     return result
@@ -650,20 +655,20 @@ def get_pro_revocations():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return make_error_response(status=1, errors=[get.err_msg])
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=[get.err_msg])
 
     # Extract values from JSON
     err          = base.ErrorSink()
     version: int = base.json_dict_require_int(d=get.json, key='version', err=err)
     ticket:  int = base.json_dict_require_int(d=get.json, key='ticket',  err=err)
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
@@ -684,7 +689,7 @@ def get_pro_revocations():
                     })
 
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result
@@ -694,7 +699,7 @@ def get_pro_status():
     # Get JSON from request
     get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        return make_error_response(status=1, errors=[get.err_msg])
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=[get.err_msg])
 
     # Extract values from JSON
     err               = base.ErrorSink()
@@ -704,7 +709,7 @@ def get_pro_status():
     unix_ts_ms:  int  = base.json_dict_require_int(d=get.json,  key='unix_ts_ms',  err=err)
     count:       int  = base.json_dict_require_int(d=get.json, key='count',       err=err)
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Parse and validate values
     if version != 0:
@@ -724,7 +729,7 @@ def get_pro_status():
         err.msg_list.append(f'Timestamp is too old to permit retrieval of payments, delta was {timestamp_delta}ms')
 
     if len(err.msg_list):
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
@@ -733,7 +738,7 @@ def get_pro_status():
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception as e:
         err.msg_list.append('Signature failed to be verified')
-        return make_error_response(status=1, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     items:           list[dict[str, str | int | bool]] = []
     user_pro_status: UserProStatus                     = UserProStatus.NeverBeenPro
