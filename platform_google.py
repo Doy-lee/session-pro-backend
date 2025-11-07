@@ -253,8 +253,6 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                     payment: backend.PaymentRow | None = backend.get_payment_tx(tx=tx, payment_tx=tx_payment, err=err)
                     if payment is None or err.has():
                         err.msg_list.append(f"Failed to get payment details for potential revocation!")
-                    elif payment.status == base.PaymentStatus.Unredeemed:
-                        err.msg_list.append("Found payment status Unredeemed in potential EXPIRED or ON_HOLD revocation. This should not be possible!")
 
                     if not err.has():
                         assert payment is not None
