@@ -163,7 +163,13 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                         tx.cancel = err.has()
 
                         if not err.has():
+                            sub_data_before: SubscriptionV2Data = platform.google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
+                            log.debug(f'Before acknowledge @@@@@@@@@@@@@@@ {err.msg_list}\n' + json.dumps(sub_data_before, indent=1))
+
                             platform_google_api.subscription_v1_acknowledge(purchase_token=tx_payment.google_payment_token, err=err)
+
+                            sub_data_after: SubscriptionV2Data = platform.google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
+                            log.debug(f'After acknowledge $$$$$$$$$$$$$$$$$ {err.msg_list}\n' + json.dumps(sub_data_after, indent=1))
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:

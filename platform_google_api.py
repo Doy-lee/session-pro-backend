@@ -350,6 +350,7 @@ def subscription_v1_acknowledge(purchase_token: str, err: ErrorSink):
         subscriptionId="",
         token=purchase_token,
     ).execute()
+
     # Google returns an empty string response for a success
     if response != "":
         err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {purchase_token}')
