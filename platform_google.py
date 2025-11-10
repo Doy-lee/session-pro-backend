@@ -160,18 +160,11 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             err                               = err,
                         )
 
-                        # NOTE: On error rollback changes made to the DB
-                        tx.cancel = err.has()
-
                         if not err.has():
-                            sub_data_before = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
-                            log.debug(f'Before acknowledge @@@@@@@@@@@@@@@ {err.msg_list}\n {sub_data_before}' + sub_data_before)
-
                             platform_google_api.subscription_v1_acknowledge(purchase_token=tx_payment.google_payment_token, err=err)
 
-                            sub_data_after = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
-                            log.debug(f'After acknowledge $$$$$$$$$$$$$$$$$ {err.msg_list}\n {sub_data_after}')
-
+                        # NOTE: On error rollback changes made to the DB
+                        tx.cancel = err.has()
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
