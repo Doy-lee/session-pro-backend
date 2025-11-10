@@ -159,6 +159,9 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             err                               = err,
                         )
 
+                        # NOTE: On error rollback changes made to the DB
+                        tx.cancel = err.has()
+
                         if not err.has():
                             sub_data_before = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
                             log.debug(f'Before acknowledge @@@@@@@@@@@@@@@ {err.msg_list}\n' + json.dumps(sub_data_before, indent=1))
@@ -168,9 +171,6 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             sub_data_after = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
                             log.debug(f'After acknowledge $$$$$$$$$$$$$$$$$ {err.msg_list}\n' + json.dumps(sub_data_after, indent=1))
 
-
-                        # NOTE: On error rollback changes made to the DB
-                        tx.cancel = err.has()
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
@@ -403,6 +403,9 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
     return result
 
 def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
+    message.ack()
+    return
+
     body: typing.Any = json.loads(message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
