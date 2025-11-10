@@ -5,6 +5,7 @@ it and process said payments into the database layer (backend.py)
 '''
 
 import json
+import traceback
 import logging
 import sqlite3
 import threading
@@ -366,7 +367,7 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
             handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
             result.ack = not err.has()
         except Exception:
-            err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
+            err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
 
     elif is_voided_notification:
         result.purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
