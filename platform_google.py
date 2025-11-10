@@ -159,9 +159,6 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             err                               = err,
                         )
 
-                        # NOTE: On error rollback changes made to the DB
-                        tx.cancel = err.has()
-
                         if not err.has():
                             sub_data_before = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
                             log.debug(f'Before acknowledge @@@@@@@@@@@@@@@ {err.msg_list}\n' + json.dumps(sub_data_before, indent=1))
@@ -170,6 +167,10 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
 
                             sub_data_after = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
                             log.debug(f'After acknowledge $$$$$$$$$$$$$$$$$ {err.msg_list}\n' + json.dumps(sub_data_after, indent=1))
+
+
+                        # NOTE: On error rollback changes made to the DB
+                        tx.cancel = err.has()
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
@@ -343,6 +344,9 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
             return result
 
         validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+        if err.has():
+            return result
+
         version                        = json_dict_require_str(subscription, "version",  err)
         subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
         details                        = platform_google_api.fetch_subscription_v2_details(package_name, result.purchase_token, err)
@@ -367,6 +371,9 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
             return result
 
         validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+        if err.has():
+            return result
+
         order_id        = json_dict_require_str(voided_purchase, "orderId", err)
         product_type    = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
         refund_type     = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
