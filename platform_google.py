@@ -5,6 +5,7 @@ it and process said payments into the database layer (backend.py)
 '''
 
 import json
+import traceback
 import logging
 import sqlite3
 import threading
@@ -159,17 +160,11 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             err                               = err,
                         )
 
-                        # NOTE: On error rollback changes made to the DB
-                        tx.cancel = err.has()
-
                         if not err.has():
-                            sub_data_before = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
-                            log.debug(f'Before acknowledge @@@@@@@@@@@@@@@ {err.msg_list}\n' + json.dumps(sub_data_before, indent=1))
-
                             platform_google_api.subscription_v1_acknowledge(purchase_token=tx_payment.google_payment_token, err=err)
 
-                            sub_data_after = platform_google_api.fetch_subscription_v2_details(platform_google_api.package_name, tx_payment.google_payment_token, err)
-                            log.debug(f'After acknowledge $$$$$$$$$$$$$$$$$ {err.msg_list}\n' + json.dumps(sub_data_after, indent=1))
+                        # NOTE: On error rollback changes made to the DB
+                        tx.cancel = err.has()
 
         case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
@@ -342,49 +337,61 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
         if err.has():
             return result
 
-        validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-        version                        = json_dict_require_str(subscription, "version",  err)
-        subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
-        details                        = platform_google_api.fetch_subscription_v2_details(package_name, result.purchase_token, err)
-        assert version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
-        if err.has():
-            err.msg_list.append(f'Parsing subscriptionv2 response failed')
-            return result
+        try:
+            validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+            if err.has():
+                return result
 
-        assert details is not None and isinstance(subscription_notification_type, SubscriptionNotificationType)
-        tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=result.purchase_token, details=details, err=err)
-        tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type, err=err)
-        if err.has():
-            err.msg_list.append(f'Parsing data from subscriptionv2 failed')
-            return result
+            version                        = json_dict_require_str(subscription, "version",  err)
+            subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
+            details                        = platform_google_api.fetch_subscription_v2_details(package_name, result.purchase_token, err)
+            assert version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
+            if err.has():
+                err.msg_list.append(f'Parsing subscriptionv2 response failed')
+                return result
 
-        handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
-        result.ack = not err.has()
+            assert details is not None and isinstance(subscription_notification_type, SubscriptionNotificationType)
+            tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=result.purchase_token, details=details, err=err)
+            tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type, err=err)
+            if err.has():
+                err.msg_list.append(f'Parsing data from subscriptionv2 failed')
+                return result
+
+            handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
+            result.ack = not err.has()
+        except Exception:
+            err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
 
     elif is_voided_notification:
         result.purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
         if err.has():
             return result
 
-        validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-        order_id        = json_dict_require_str(voided_purchase, "orderId", err)
-        product_type    = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
-        refund_type     = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
-        if err.has():
-            err.msg_list.append(f'Parsing data from subscriptionv2 failed')
-            return result
+        try:
+            validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+            if err.has():
+                return result
 
-        assert refund_type is not None and product_type is not None and len(result.purchase_token) > 0 and \
-        len(order_id) > 0 and isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)
-        tx = VoidedPurchaseTxFields(
-            purchase_token=result.purchase_token,
-            order_id=order_id,
-            event_ts_ms=event_time_millis,
-            product_type=product_type,
-            refund_type=refund_type,
-        )
-        handle_voided_notification(tx, err)
-        result.ack = not err.has()
+            order_id        = json_dict_require_str(voided_purchase, "orderId", err)
+            product_type    = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
+            refund_type     = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
+            if err.has():
+                err.msg_list.append(f'Parsing data from subscriptionv2 failed')
+                return result
+
+            assert refund_type is not None and product_type is not None and len(result.purchase_token) > 0 and \
+            len(order_id) > 0 and isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)
+            tx = VoidedPurchaseTxFields(
+                purchase_token=result.purchase_token,
+                order_id=order_id,
+                event_ts_ms=event_time_millis,
+                product_type=product_type,
+                refund_type=refund_type,
+            )
+            handle_voided_notification(tx, err)
+            result.ack = not err.has()
+        except Exception:
+            err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
 
     elif is_one_time_product_notification:
         err.msg_list.append(f'one time product is not supported!')

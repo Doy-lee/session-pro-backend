@@ -1893,8 +1893,9 @@ def add_user_error(sql_conn: sqlite3.Connection, error: UserError, unix_ts_ms: i
 
 def has_user_error_tx(tx: base.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     assert tx.cursor is not None
-    _ = tx.cursor.execute('SELECT 1 FROM user_errors WHERE payment_id = ? AND payment_provider = ?', (payment_id, int(payment_provider.value),))
-    result = tx.cursor.rowcount > 0
+    _                      = tx.cursor.execute('SELECT 1 FROM user_errors WHERE payment_id = ? AND payment_provider = ?', (payment_id, int(payment_provider.value),))
+    row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+    result                 = row is not None
     return result;
 
 def has_user_error_from_master_pkey_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> bool:
