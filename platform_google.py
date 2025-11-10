@@ -403,9 +403,6 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
     return result
 
 def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
-    message.ack()
-    return
-
     body: typing.Any = json.loads(message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
