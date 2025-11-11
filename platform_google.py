@@ -12,6 +12,7 @@ import threading
 import dataclasses
 import typing
 import time
+import sys
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
@@ -42,11 +43,18 @@ log = logging.Logger('GOOGLE')
 class ThreadContext:
     thread:      threading.Thread | None = None
     kill_thread: bool                    = False
+    sleep_event: threading.Event         = threading.Event()
 
 @dataclasses.dataclass
 class GoogleHandleNotificationResult:
     purchase_token: str  = ""
     ack:            bool = False
+
+@dataclasses.dataclass
+class TimestampedData:
+    event_unix_ts_ms:   int        = 0
+    received_unix_ts_s: float        = 0
+    body:               typing.Any = None
 
 def init(project_name:            str,
          package_name:            str,
@@ -73,17 +81,115 @@ def init(project_name:            str,
     return result
 
 def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
-    # NOTE: Start pulling subscriber from Google endpoints with the streaming pull client
-    # By default this starts a thread pool to handle the messages and blocks on the future
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
             sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
-            future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
+            # future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
+
+            # NOTE: We have a little bit of a problem here in terms of ordering. Google
+            # notifications for payments can come out of order and if we miss them, they can also be
+            # replayed out of order. Unfortunately in our initial designs we intended events to be
+            # processed in order, this is a natural tendency that seems to be ill-suited for
+            # integrating with Google given these behaviours.
+            #
+            # In Google payment notifications do not set the ordering keys such that an order can be
+            # enforced for the same user's event I have witnessed notifications coming out of order
+            # in replays and out of order within the same batch of messages downloaded at a time. We
+            # are forced to then sort by event timestamp after the fact with some reasonable buffer
+            # which adds to latency but will produce the desired outcomes.
+            #
+            # What maybe the more natural way to approach this system was to build an idempotent
+            # notification handling system with the following pattern:
+            #
+            #  - Getting a notification
+            #  - Compare last event timestamp we processed for the purchase token, ignore if it's
+            #    too old
+            #  - Get subscription details for the notification
+            #  - Create the row if it doesn't exist in the state that google says it should be in,
+            #    or, if already exists- state transition it into the state that google says it
+            #    should be and ignore any violations of invariants (the final state it ends up in
+            #    should be valid though)
+            #  - Repeat
+            #
+            # TODO: Idempotency would remove the hard requirement on having to witness events in
+            # order since they recommend we always reconcile with the state stored on the play
+            # store, this seems doable but needs a longer time budget.
+            #
+            # Example payload:
+            #
+            #   received_messages {
+            #     ack_id: "HxknBUxeR..."
+            #     message {
+            #       data: "{\"version\":\"1.0\",\"packageName\":\"network.loki.messenger\",\"eventTimeMillis\":\"1762752016420\",...}"
+            #       message_id: "17064522705211191"
+            #       publish_time {
+            #         seconds: 1762752016
+            #         nanos: 631000000
+            #       }
+            #     }
+            #   }
+
+            # NOTE: How long after receiving an event do we want before executing it. The time
+            # inbetween is reserved to allow the Google pub/sub client to pull more messages which
+            # can potentially come out of order. Increasing this increases the latency of when
+            # a event is finalised in the system!! Putting this too low might mean that we observe
+            # events out of order!! The system is configured to halt processing of events if
+            # a message received out of order transitions a subscription into an invalid state!
+            #
+            # 8 seconds is an eternity, yes, but I have witnessed events coming as late as 3-4
+            # seconds, oh well.
+            TIME_BEFORE_HANDLING_EVENT_S = 8
+
+            # NOTE: How often to poll Google for events in seconds
+            POLL_FREQUENCY_S = 2
+
+            ordered_msg_list:     list[TimestampedData] = []
+            last_event_processed: TimestampedData       = TimestampedData()
             while context.kill_thread == False:
-                try:
-                    future.result(timeout=0.5)
-                except TimeoutError:
-                    pass
+                log.info("pulling")
+                result = client.pull(subscription=sub_path,
+                                     return_immediately=True,
+                                     max_messages=64)
+
+                now: float = time.time()
+                if len(result.received_messages) > 0:
+                    # NOTE: Generate the list of messages sorted by their event time stamp
+                    err        = base.ErrorSink()
+                    for index, it in enumerate(result.received_messages):
+                        body:          typing.Any = json.loads(it.message.data)
+                        event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
+                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it.message))
+                        log.info("received event")
+
+                    # NOTE: Sort the events we've added
+                    ordered_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
+
+                # NOTE: Process events
+                index = 0
+                while index < len(ordered_msg_list):
+                    msg                   = ordered_msg_list[index]
+                    time_since_received_s = now - msg.received_unix_ts_s
+                    if time_since_received_s < TIME_BEFORE_HANDLING_EVENT_S:
+                        break
+
+                    if last_event_processed.event_unix_ts_ms > msg.event_unix_ts_ms:
+                        log.warning(f'The last event we processed came after the next event we ' +
+                                     'processed (poll_freq={POLL_FREQUENCY_S}s, delay_before_handling_event_s={TIME_BEFORE_HANDLING_EVENT_S}\n' +
+                                     'Previous event was:\n{last_event_processed}\nCurrent event was\n:{msg}')
+
+                    last_event_processed = msg
+                    handled              = handle_sub_message(msg.body)
+                    if not handled:
+                        log.warning(f'Discarding event because handling of it failed (message will be re-notified by google) {msg}')
+                        _ = ordered_msg_list.pop(index)
+                        continue
+
+                    index += 1
+
+                # NOTE: Erase the processed events
+                ordered_msg_list = ordered_msg_list[index:]
+                log.info("sleeping")
+                _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
 def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
@@ -402,30 +508,31 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 
     return result
 
-def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
+def handle_sub_message(message: google.cloud.pubsub_v1.subscriber.message.Message) -> bool:
+    result = False
     body: typing.Any = json.loads(message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
-        return
+        return result
 
     # NOTE: Process the notification
     err    = base.ErrorSink()
-    result = GoogleHandleNotificationResult()
+    notif_result = GoogleHandleNotificationResult()
     with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
         body   = typing.cast(JSONObject, body)
-        result = handle_notification(body, db.sql_conn, err)
+        notif_result = handle_notification(body, db.sql_conn, err)
 
-    if not result.ack and not err.has():
+    if not notif_result.ack and not err.has():
         err.msg_list.append("Notification wasnt marked to be acknowledged but contained no errors! What happened?")
 
     # NOTE: Record the error under the payment token if possible to propagate to clients
-    if err.has() and len(result.purchase_token):
-        err.msg_list.append(f'Failed to process event for purchase token: {result.purchase_token}')
+    if err.has() and len(notif_result.purchase_token):
+        err.msg_list.append(f'Failed to process event for purchase token: {notif_result.purchase_token}')
 
         # NOTE: Record the error
         user_error = UserError(
             provider             = base.PaymentProvider.GooglePlayStore,
-            google_payment_token = result.purchase_token,
+            google_payment_token = notif_result.purchase_token,
         )
         with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
             backend.add_user_error(sql_conn=db.sql_conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
@@ -434,6 +541,10 @@ def callback(message: google.cloud.pubsub_v1.subscriber.message.Message):
         # NOTE: Log the error
         err_msg = '\n'.join(err.msg_list)
         logging.error(f'{err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
-    elif result.ack:
+        result = False
+    elif notif_result.ack:
         # NOTE: Acknowledge the notification
         message.ack()
+        result = True
+
+    return result
