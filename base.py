@@ -375,7 +375,7 @@ def safe_dump_dict_keys_or_data(d: dict[str, typing.Any] | None) -> str:
 
 def safe_dump_arbitrary_value_or_type(v: typing.Any) -> str:  # pyright: ignore[reportAny]
     """Dump the value or just its type if UNSAFE_LOGGING is set"""
-    result = f'({t}) {v}' if UNSAFE_LOGGING else f'{type(v)}'
+    result = f'({type(v)}) {v}' if UNSAFE_LOGGING else f'{type(v)}'
     return result
 
 def safe_get_dict_value_type(d: dict[str, typing.Any], key: str) -> str:

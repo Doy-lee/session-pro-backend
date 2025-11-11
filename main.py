@@ -79,9 +79,9 @@ def signal_handler(sig: int, _frame: types.FrameType | None):
         proof_expiry_thread_cv.notify_all()
 
     # NOTE: Also kill the google-thread if there's one was initiated. The google thread is sleeping
-    # on a Future that has a timeout. We don't have a way to signal the thread to wake up but it
-    # is configured with a short timeout.
+    # on a condition that has a timeout that we trigger.
     google_thread_context.kill_thread = True
+    google_thread_context.sleep_event.set()
 
     # NOTE: Unregister handler and resume the default handler by re-raising it
     _ = signal.signal(sig, signal.SIG_DFL)
