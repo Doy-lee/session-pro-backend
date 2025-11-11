@@ -49,6 +49,8 @@ class ParsedArgs:
     platform_testing_env:                bool                                   = False
     delete_user_errors:                  str                                    = ''
     parsed_delete_user_errors:           list[tuple[base.PaymentProvider, str]] = dataclasses.field(default_factory=list)
+    session_webhook_url:                 str                                    = ''
+    session_webhook_name:                str                                    = ''
 
     apple_key_id:                        str                                    = ''
     apple_issuer_id:                     str                                    = ''
@@ -163,15 +165,17 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         _                                          = ini_parser.read(filenames=result.ini_path)
 
         base_section: configparser.SectionProxy    = ini_parser['base']
-        result.db_path                             = base_section.get(option='db_path',                        fallback='')
-        result.db_path_is_uri                      = base_section.getboolean(option='db_path_is_uri',          fallback=False)
-        result.print_tables                        = base_section.getboolean(option='print_tables',            fallback=False)
-        result.dev                                 = base_section.getboolean(option='dev',                     fallback=False)
-        result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',          fallback=False)
-        result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',     fallback=False)
-        result.with_platform_google                = base_section.getboolean(option='with_platform_google',    fallback=False)
-        result.platform_testing_env                = base_section.getboolean(option='platform_testing_env',    fallback=False)
-        result.delete_user_errors                  = base_section.get(option='delete_user_errors',             fallback='')
+        result.db_path                             = base_section.get(option='db_path',                     fallback='')
+        result.db_path_is_uri                      = base_section.getboolean(option='db_path_is_uri',       fallback=False)
+        result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
+        result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
+        result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',       fallback=False)
+        result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',  fallback=False)
+        result.with_platform_google                = base_section.getboolean(option='with_platform_google', fallback=False)
+        result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
+        result.delete_user_errors                  = base_section.get(option='delete_user_errors',          fallback='')
+        result.session_webhook_url                 = base_section.get(option='session_webhook_url',         fallback='')
+        result.session_webhook_name                = base_section.get(option='session_webhook_name',        fallback='')
 
         if result.with_platform_apple:
             if 'apple' in ini_parser:
@@ -209,6 +213,8 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
     result.delete_user_errors        = os.getenv('SESH_PRO_BACKEND_DELETE_USER_ERRORS',                 result.delete_user_errors)
     result.parsed_delete_user_errors = parse_delete_user_error_arg(result.delete_user_errors, err)
+    result.session_webhook_url       = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_URL',                result.session_webhook_url)
+    result.session_webhook_name      = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME',               result.session_webhook_name)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -296,6 +302,21 @@ def entry_point() -> flask.Flask:
     if err.has():
         log.error(f'Failed to startup, invalid configuration options:\n  ' + '\n  '.join(err.msg_list))
         sys.exit(1)
+
+    # NOTE: Equip the session webhook URL if it's configured
+    if len(parsed_args.session_webhook_url) > 0:
+        webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
+                                                            display_name='Session Pro Backend')
+        webhook_logger.setLevel(logging.WARNING)
+        webhook_logger.setFormatter(
+            logging.Formatter('%(levelname)s [%(filename)s:%(lineno)d] %(message)s')
+        )
+
+        # NOTE: Setup loggers (main, backend, google, apple)
+        log.addHandler(webhook_logger)
+        backend.log.addHandler(webhook_logger)
+        platform_google.log.addHandler(webhook_logger)
+        platform_apple.log.addHandler(webhook_logger)
 
     # NOTE: Ensure the path is setup for writing the database
     try:
