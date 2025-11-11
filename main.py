@@ -267,11 +267,11 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     return result
 
 def entry_point() -> flask.Flask:
+    log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
     if 1: # NOTE: Setup logger
         console_logger = logging.StreamHandler()
         file_logger    = logging.handlers.RotatingFileHandler(filename='session_backend_pro.log', maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
 
-        log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
         console_logger.setFormatter(log_formatter)
         file_logger.setFormatter(log_formatter)
 
@@ -304,13 +304,12 @@ def entry_point() -> flask.Flask:
         sys.exit(1)
 
     # NOTE: Equip the session webhook URL if it's configured
+    webhook_logger: base.AsyncSessionWebhookLogHandler | None = None
     if len(parsed_args.session_webhook_url) > 0:
         webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
                                                             display_name='Session Pro Backend')
         webhook_logger.setLevel(logging.WARNING)
-        webhook_logger.setFormatter(
-            logging.Formatter('%(levelname)s [%(filename)s:%(lineno)d] %(message)s')
-        )
+        webhook_logger.setFormatter(log_formatter)
 
         # NOTE: Setup loggers (main, backend, google, apple)
         log.addHandler(webhook_logger)
@@ -351,36 +350,43 @@ def entry_point() -> flask.Flask:
         log.error(f"{err.msg_list}")
         sys.exit(1)
 
+    startup_log = '\n'
     if parsed_args.dev:
-        log.info("######################################")
-        log.info("###                                ###")
-        log.info("###        Dev Mode Enabled        ###")
-        log.info("###                                ###")
-        log.info("######################################")
+        startup_log += "######################################\n"
+        startup_log += "###                                ###\n"
+        startup_log += "###        Dev Mode Enabled        ###\n"
+        startup_log += "###                                ###\n"
+        startup_log += "######################################\n"
 
-    log.info(f'Session Pro Backend\n{info_string}')
-    log.info(f'  Features:')
+    startup_log += f'Session Pro Backend\n{info_string}\n'
+    startup_log += f'  Features:\n'
     if len(parsed_args.ini_path) > 0:
-        log.info(f'    Config .INI file loaded: {parsed_args.ini_path}')
+        startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
     if 1:
         label = ' (URI)' if parsed_args.db_path_is_uri else ''
-        log.info(f'    DB loaded from: {db.path}{label}')
+        startup_log += f'    DB loaded from: {db.path}{label}\n'
     if parsed_args.unsafe_logging:
-        log.info(f'    Unsafe logging enabled (this must NOT be used in production)')
+        startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
     if parsed_args.platform_testing_env:
-        log.info(f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)')
+        startup_log += f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)\n'
     if parsed_args.with_platform_apple:
         label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
-        log.info(f'    Platform: {label} Apple iOS App Store notification handling enabled')
+        startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
     if parsed_args.with_platform_google:
-        log.info(f'    Platform: Google Play Store notification handling enabled')
+        startup_log += f'    Platform: Google Play Store notification handling enabled\n'
+    if webhook_logger:
+        startup_log += f'    Webhook Logger: Enabled (display name: {parsed_args.session_webhook_name})\n'
 
     if parsed_args.dev:
-        log.info("######################################")
-        log.info("###                                ###")
-        log.info("###        Dev Mode Enabled        ###")
-        log.info("###                                ###")
-        log.info("######################################")
+        startup_log += "######################################\n"
+        startup_log += "###                                ###\n"
+        startup_log += "###        Dev Mode Enabled        ###\n"
+        startup_log += "###                                ###\n"
+        startup_log += "######################################\n"
+
+    log.info(startup_log)
+    if webhook_logger:
+        webhook_logger.emit_text(startup_log)
 
     # NOTE: Handle printing of the DB to standard out if requested
     if parsed_args.print_tables:
