@@ -111,6 +111,12 @@ unsafe_logging               = false
 # user should contact support, hence clearing this value may clear the error prompt for said user.
 delete_user_errors           =
 
+# Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime
+session_webhook_url          = <url...>
+
+# Set the display name of the bot to receive the webhook message from on Session
+session_webhook_name         = Session Pro Backend Dev
+
 # NOTE: The [apple] section and its fields are only required if `with_platform_apple` is defined
 [apple]
 
@@ -163,6 +169,8 @@ SESH_PRO_BACKEND_DEV                  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_APPLE  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE = [0|1]
 SESH_PRO_BACKEND_DELETE_USER_ERRORS   = <...>
+SESH_PRO_BACKEND_WEBHOOK_URL          = https://...
+SESH_PRO_BACKEND_WEBHOOK_NAME         = Session Pro Backend Dev
 ```
 
 ## Build and run

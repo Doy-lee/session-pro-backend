@@ -14,6 +14,9 @@ import logging
 import math
 import typing_extensions
 import os
+import urllib3
+import queue
+import threading
 
 # NOTE: Constants
 SECONDS_IN_DAY:        int     = 60 * 60 * 24
@@ -132,6 +135,89 @@ class SQLTransaction:
 class TableStrings:
     name:     str = ''
     contents: list[list[str]] = dataclasses.field(default_factory=list)
+
+class AsyncSessionWebhookLogHandler(logging.Handler):
+    webhook_url:    str
+    display_name:   str
+    timeout:        int
+    flush_interval: float
+    queue:          queue.Queue
+    _thread:        threading.Thread
+    _stop_event:    threading.Event
+    http:           urllib3.PoolManager
+
+    def __init__(self, webhook_url: str, display_name: str, timeout: int = 5, queue_size: int = 100, flush_interval: float = 1.0):
+        super().__init__()
+        self.webhook_url  = webhook_url
+        self.display_name = display_name
+        self.timeout      = timeout
+
+        # Queue for log records
+        self.queue          = queue.Queue(maxsize=queue_size)
+        self.flush_interval = flush_interval
+
+        # Background thread
+        self._thread     = threading.Thread(target=self._worker, daemon=True)
+        self._stop_event = threading.Event()
+        self._thread.start()
+
+        # HTTP pool (thread-safe)
+        self.http = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=timeout, read=timeout),
+            maxsize=10,
+            retries=urllib3.Retry(total=1, backoff_factor=0.1)
+        )
+
+    @typing_extensions.override
+    def emit(self, record: logging.LogRecord):
+        if record.levelno < logging.WARNING:
+            return
+        try:
+            log_entry = self.format(record)[:2000]
+            payload = { "text": log_entry, "display_name": self.display_name }
+            self.queue.put_nowait(payload)
+        except queue.Full:
+            pass
+        except Exception:
+            self.handleError(record)
+
+    def _worker(self):
+        while not self._stop_event.is_set():
+            try:
+                # Collect all pending logs
+                payloads = []
+                while len(payloads) < 10:  # Batch up to 10
+                    try:
+                        payloads.append(self.queue.get_nowait())
+                    except queue.Empty:
+                        break
+
+                for payload in payloads:
+                    try:
+                        self.http.request(method  = 'POST',
+                                          url     = self.webhook_url,
+                                          body    = json.dumps(payload).encode('utf-8'),
+                                          headers = {'Content-Type': 'application/json'})
+                    except Exception as e:
+                        print(f"[AsyncWebhook] Send failed: {e}", file=sys.stderr)
+                    finally:
+                        try:
+                            self.queue.task_done()
+                        except:
+                            pass
+
+                # Wait before next batch
+                self._stop_event.wait(self.flush_interval)
+            except Exception as e:
+                print(f"[AsyncWebhook] Worker error: {e}", file=sys.stderr)
+                time.sleep(1)
+
+    @typing_extensions.override
+    def close(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
+        super().close()
 
 def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink | None) -> bool:
     result = False
