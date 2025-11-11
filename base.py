@@ -174,12 +174,20 @@ class AsyncSessionWebhookLogHandler(logging.Handler):
             return
         try:
             log_entry = self.format(record)[:2000]
-            payload = { "text": log_entry, "display_name": self.display_name }
+            payload = { "text": "```\n" + log_entry + "\n```", "display_name": self.display_name }
             self.queue.put_nowait(payload)
         except queue.Full:
             pass
         except Exception:
             self.handleError(record)
+
+    def emit_text(self, text: str):
+        try:
+            text = text[:2000]
+            payload = { "text": "```\n" + text + "\n```", "display_name": self.display_name }
+            self.queue.put_nowait(payload)
+        except Exception:
+            pass
 
     def _worker(self):
         while not self._stop_event.is_set():
