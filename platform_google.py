@@ -12,7 +12,6 @@ import threading
 import dataclasses
 import typing
 import time
-import sys
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
@@ -21,7 +20,7 @@ import googleapiclient.discovery
 
 import backend
 import base
-from backend import OpenDBAtPath, PaymentProviderTransaction, UserError
+from backend import OpenDBAtPath, UserError
 from base import (
     ProPlan,
     JSONObject,
@@ -191,7 +190,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                 log.info("sleeping")
                 _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
-def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
+def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
     return backend.update_payment_renewal_info(
         sql_conn                 = sql_conn,
@@ -201,12 +200,12 @@ def _update_payment_renewal_info(tx_payment: PaymentProviderTransaction, auto_re
         err                      = err,
     )
 
-def set_payment_auto_renew(tx_payment: PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, auto_renewing, None, sql_conn, err)
     if not success:
         err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
-def set_purchase_grace_period_duration(tx_payment: PaymentProviderTransaction, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, sql_conn, err)
     if not success:
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
@@ -216,7 +215,7 @@ def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sql
     if result:
         err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 
-def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink): 
+def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink): 
     match tx_event.notification:
         case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
             """
@@ -265,9 +264,6 @@ def handle_subscription_notification(tx_payment: PaymentProviderTransaction, tx_
                             platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
                             err                               = err,
                         )
-
-                        if not err.has():
-                            platform_google_api.subscription_v1_acknowledge(purchase_token=tx_payment.google_payment_token, err=err)
 
                         # NOTE: On error rollback changes made to the DB
                         tx.cancel = err.has()
