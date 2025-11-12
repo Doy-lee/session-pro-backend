@@ -145,7 +145,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             ordered_msg_list:     list[TimestampedData] = []
             last_event_processed: TimestampedData       = TimestampedData()
             while context.kill_thread == False:
-                log.info("pulling")
                 result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,
                                                                           return_immediately = True,
                                                                           max_messages       = 64)
@@ -157,7 +156,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         body:          typing.Any = json.loads(it.message.data)
                         event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
                         ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
-                        log.info("received event")
 
                     # NOTE: Sort the events we've added
                     ordered_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
@@ -172,8 +170,8 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                     if last_event_processed.event_unix_ts_ms > msg.event_unix_ts_ms:
                         log.warning(f'The last event we processed came after the next event we ' +
-                                     'processed (poll_freq={POLL_FREQUENCY_S}s, delay_before_handling_event_s={TIME_BEFORE_HANDLING_EVENT_S}\n' +
-                                     'Previous event was:\n{last_event_processed}\nCurrent event was\n:{msg}')
+                                    f'processed (poll_freq={POLL_FREQUENCY_S}s, delay_before_handling_event_s={TIME_BEFORE_HANDLING_EVENT_S}\n' +
+                                    f'Previous event was:\n{last_event_processed}\nCurrent event was\n:{msg}')
 
                     last_event_processed = msg
                     handled              = handle_sub_message(msg.body)
@@ -188,7 +186,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                 # NOTE: Erase the processed events
                 ordered_msg_list = ordered_msg_list[index:]
-                log.info("sleeping")
                 _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
 def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
@@ -507,7 +504,6 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 
 def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
     result = False
-    print('$$$$$$$$$$$$', message)
     body: typing.Any = json.loads(message.message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
