@@ -5,11 +5,11 @@ Functionality to query the Google APIs and parse it
 import dataclasses
 import typing
 import base
-from backend import PaymentProviderTransaction
 from base import (
     ProPlan,
     ErrorSink,
     PaymentProvider,
+    PaymentProviderTransaction,
     handle_not_implemented,
     json_dict_optional_bool,
     json_dict_optional_obj,

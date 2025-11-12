@@ -107,7 +107,7 @@ def init(key_id: str, issuer_id: str, bundle_id: str, app_id: int | None, key_by
         result.notification_retry_duration_ms += (30 * 60) * 1000
     return result
 
-def payment_tx_id_label(tx: backend.PaymentProviderTransaction) -> str:
+def payment_tx_id_label(tx: base.PaymentProviderTransaction) -> str:
     result = f'TX ID (orig/tx/web) {tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}'
     return result
 
@@ -743,7 +743,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
         if not err.has():
             assert renewal
             assert tx
-            payment_tx: backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
+            payment_tx: base.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(tx, err)
             if not err.has():
                 if not decoded_notification.body.subtype:
                     log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Grace period ended')
@@ -770,7 +770,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
          decoded_notification.body.notificationType == AppleNotificationV2.PRICE_INCREASE:
 
         tx         = decoded_notification.tx_info
-        payment_tx = backend.PaymentProviderTransaction()
+        payment_tx = base.PaymentProviderTransaction()
         if tx:
             payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
         else:
@@ -862,7 +862,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
          decoded_notification.body.notificationType == AppleNotificationV2.RENEWAL_EXTENSION:
 
         if decoded_notification.tx_info:
-            payment_tx: backend.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(decoded_notification.tx_info, err)
+            payment_tx: base.PaymentProviderTransaction = payment_tx_from_apple_jws_transaction(decoded_notification.tx_info, err)
             log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: No-op')
 
         if decoded_notification.body.notificationType == AppleNotificationV2.EXTERNAL_PURCHASE_TOKEN:
@@ -1055,8 +1055,8 @@ def decoded_notification_from_apple_response_body_v2(body: AppleResponseBodyV2De
 
     return result
 
-def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> backend.PaymentProviderTransaction:
-    result = backend.PaymentProviderTransaction()
+def payment_tx_from_apple_jws_transaction(tx: AppleJWSTransactionDecodedPayload, err: base.ErrorSink) -> base.PaymentProviderTransaction:
+    result = base.PaymentProviderTransaction()
     if not tx.transactionId:
         err.msg_list.append('Failed to convert Apple TX to payment TX, transaction ID is missing')
     if not tx.originalTransactionId:

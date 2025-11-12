@@ -50,6 +50,15 @@ class PaymentProvider(enum.Enum):
     GooglePlayStore = 1
     iOSAppStore     = 2
 
+@dataclasses.dataclass
+class PaymentProviderTransaction:
+    provider:                   PaymentProvider = PaymentProvider.Nil
+    apple_original_tx_id:       str = ''
+    apple_tx_id:                str = ''
+    apple_web_line_order_tx_id: str = ''
+    google_payment_token:       str = ''
+    google_order_id:            str = ''
+
 class PaymentStatus(enum.IntEnum):
     Nil        = 0
     Unredeemed = 1

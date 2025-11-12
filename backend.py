@@ -11,6 +11,7 @@ import random
 import logging
 import enum
 
+import platform_google_api
 import base
 
 ZERO_BYTES32        = bytes(32)
@@ -141,16 +142,6 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
 AddRevocationIterator:             typing.TypeAlias = tuple[int,          # (row) id
                                                             bytes | None, # master_pkey
                                                             int]          # expiry_unix_ts_ms
-
-
-@dataclasses.dataclass
-class PaymentProviderTransaction:
-    provider:                   base.PaymentProvider = base.PaymentProvider.Nil
-    apple_original_tx_id:       str = ''
-    apple_tx_id:                str = ''
-    apple_web_line_order_tx_id: str = ''
-    google_payment_token:       str = ''
-    google_order_id:            str = ''
 
 @dataclasses.dataclass
 class UserError:
@@ -311,7 +302,7 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
-def payment_provider_tx_log_label(tx: PaymentProviderTransaction):
+def payment_provider_tx_log_label(tx: base.PaymentProviderTransaction):
     result = f'{tx.provider.name}, apple (orig/tx/web)=({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google=({tx.google_payment_token}/{tx.google_order_id})'
     return result
 
@@ -1111,7 +1102,7 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
 
     return result
 
-def verify_payment_provider_tx(payment_tx: PaymentProviderTransaction, err: base.ErrorSink):
+def verify_payment_provider_tx(payment_tx: base.PaymentProviderTransaction, err: base.ErrorSink):
     base.verify_payment_provider(payment_tx.provider, err)
     match payment_tx.provider:
         case base.PaymentProvider.GooglePlayStore:
@@ -1193,7 +1184,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     return result
 
 def update_payment_renewal_info_tx(tx:                       base.SQLTransaction,
-                                   payment_tx:               PaymentProviderTransaction,
+                                   payment_tx:               base.PaymentProviderTransaction,
                                    grace_period_duration_ms: int  | None,
                                    auto_renewing:            bool | None,
                                    err:                      base.ErrorSink) -> bool:
@@ -1268,7 +1259,7 @@ def update_payment_renewal_info_tx(tx:                       base.SQLTransaction
     return result
 
 def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
-                                payment_tx:               PaymentProviderTransaction,
+                                payment_tx:               base.PaymentProviderTransaction,
                                 grace_period_duration_ms: int  | None,
                                 auto_renewing:            bool | None,
                                 err:                      base.ErrorSink) -> bool:
@@ -1279,7 +1270,7 @@ def update_payment_renewal_info(sql_conn:                 sqlite3.Connection,
     return result
 
 def add_unredeemed_payment_tx(tx:                                base.SQLTransaction,
-                              payment_tx:                        PaymentProviderTransaction,
+                              payment_tx:                        base.PaymentProviderTransaction,
                               plan:                              base.ProPlan,
                               expiry_unix_ts_ms:                 int,
                               unredeemed_unix_ts_ms:             int,
@@ -1451,7 +1442,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                     log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
 
 def add_unredeemed_payment(sql_conn:                          sqlite3.Connection,
-                           payment_tx:                        PaymentProviderTransaction,
+                           payment_tx:                        base.PaymentProviderTransaction,
                            plan:                              base.ProPlan,
                            expiry_unix_ts_ms:                 int,
                            unredeemed_unix_ts_ms:             int,
@@ -1630,6 +1621,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
     # any other context having this turn on would be a critical failure and
     # would allow someone to register arbitrary Session Pro subscriptions
     # without a valid payment.
+    THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool = False
     if base.DEV_BACKEND_MODE:
         runtime_row: RuntimeRow = get_runtime(sql_conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
@@ -1640,7 +1632,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         # for transaction data.
         #
         # For the order id, we duplicate the unredeemed token to mock that
-        internal_payment_tx          = PaymentProviderTransaction()
+        internal_payment_tx          = base.PaymentProviderTransaction()
         internal_payment_tx.provider = payment_tx.provider
 
         if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
@@ -1664,6 +1656,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                 break
 
         if not already_exists:
+            THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION = True
             expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
             add_unredeemed_payment(sql_conn                          = sql_conn,
                                    payment_tx                        = internal_payment_tx,
@@ -1699,6 +1692,22 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
     if len(err.msg_list) > 0:
         return result
+
+    # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
+    # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
+    # the most sensible option and binds the Session client's knowledge of their own payment and
+    # that the backend acknowledges the payment in the same step which simplifies implementation
+    # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
+    # acknowledged yet so it needs to poll the server e.t.c.
+    #
+    # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
+    # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
+    # cannot be claimed and should be re-attempted.
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore and \
+       THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
+        platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
+        if len(err.msg_list) > 0:
+            return result
 
     # Note being able to pass in the creation unix timestamp is mainly for
     # testing purposes to allow time-travel. User space should never be
@@ -1929,7 +1938,7 @@ def delete_user_errors(sql_conn: sqlite3.Connection, payment_provider: base.Paym
     return result
 
 def get_payment_tx(tx:          base.SQLTransaction,
-                   payment_tx:  PaymentProviderTransaction,
+                   payment_tx:  base.PaymentProviderTransaction,
                    err:         base.ErrorSink) -> PaymentRow | None:
     result = None
     verify_payment_provider_tx(payment_tx, err)
@@ -1969,7 +1978,7 @@ def get_payment_tx(tx:          base.SQLTransaction,
     return result
 
 def get_payment(sql_conn:   sqlite3.Connection,
-                payment_tx: PaymentProviderTransaction,
+                payment_tx: base.PaymentProviderTransaction,
                 err:        base.ErrorSink) -> PaymentRow | None:
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None

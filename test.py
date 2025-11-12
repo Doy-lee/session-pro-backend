@@ -101,7 +101,12 @@ class TestingContext:
         base.PLATFORM_TESTING_ENV = False
         return False
 
-def test_backend_same_user_stacks_subscription_and_auto_redeem():
+def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
+    monkeypatch.setattr(
+        "platform_google_api.subscription_v1_acknowledge",
+        lambda *args, **kwargs: None
+    )
+
     # Test that the user's subscription stacks if they purchase two subscription with different
     # payment tokens.
 
@@ -148,7 +153,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem():
         # Add the "unredeemed" version of the payment, e.g. mock the notification from
         # IOS App Store/Google Play Store
         assert it.payment_provider == base.PaymentProvider.GooglePlayStore, "Currently only google is mocked"
-        payment_tx                      = backend.PaymentProviderTransaction()
+        payment_tx                      = base.PaymentProviderTransaction()
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
@@ -267,7 +272,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem():
     assert expire_result.users                             == 0
 
     # NOTE: Update the latest payments grace period but set auto-renewing off
-    payment_tx                                              = backend.PaymentProviderTransaction()
+    payment_tx                                              = base.PaymentProviderTransaction()
     payment_tx.provider                                     = scenarios[1].payment_provider
     payment_tx.google_payment_token                         = scenarios[1].google_payment_token
     payment_tx.google_order_id                              = scenarios[1].google_order_id
@@ -348,7 +353,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem():
         # Add the "unredeemed" version of the payment, e.g. mock the notification from
         # IOS App Store/Google Play Store
         assert it.payment_provider == base.PaymentProvider.GooglePlayStore, "Currently only google is mocked"
-        payment_tx                      = backend.PaymentProviderTransaction()
+        payment_tx                      = base.PaymentProviderTransaction()
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
@@ -425,7 +430,12 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem():
             assert payments_list[3].auto_renewing            == True
             assert payments_list[3].grace_period_duration_ms == auto_redeem_scenarios[1].grace_period_duration_ms
 
-def test_server_add_payment_flow():
+def test_server_add_payment_flow(monkeypatch):
+    monkeypatch.setattr(
+        "platform_google_api.subscription_v1_acknowledge",
+        lambda *args, **kwargs: None
+    )
+
     # Setup DB
     err                       = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path='file:test_server_db?mode=memory&cache=shared', uri=True, err=err)
@@ -450,7 +460,7 @@ def test_server_add_payment_flow():
     next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     master_key                      = nacl.signing.SigningKey.generate()
     rotating_key                    = nacl.signing.SigningKey.generate()
-    payment_tx                      = backend.PaymentProviderTransaction()
+    payment_tx                      = base.PaymentProviderTransaction()
     payment_tx.provider             = base.PaymentProvider.GooglePlayStore
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     payment_tx.google_order_id      = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
@@ -644,7 +654,7 @@ def test_server_add_payment_flow():
     new_proof_expiry_unix_ts_ms = 0
     if 1: # Register another payment on the same user, this will revoke the old proof
         version: int                        = 0
-        new_payment_tx                      = backend.PaymentProviderTransaction()
+        new_payment_tx                      = base.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
         new_payment_tx.google_order_id      = os.urandom(len(payment_tx.google_payment_token)).hex()
@@ -1006,7 +1016,7 @@ def test_server_add_payment_flow():
                 last_payment = payment_it
 
         # NOTE: Add a grace period
-        payment_tx                            = backend.PaymentProviderTransaction()
+        payment_tx                            = base.PaymentProviderTransaction()
         payment_tx.provider                   = last_payment.payment_provider
         payment_tx.apple_original_tx_id       = last_payment.apple.original_tx_id
         payment_tx.apple_tx_id                = last_payment.apple.tx_id
