@@ -53,7 +53,7 @@ class GoogleHandleNotificationResult:
 class TimestampedData:
     event_unix_ts_ms:   int                              = 0
     received_unix_ts_s: float                            = 0
-    body:               google.pubsub_v1.ReceivedMessage = google.pubsub_v1.ReceivedMessage()
+    body:               google.pubsub_v1.ReceivedMessage = dataclasses.field(default_factory=google.pubsub_v1.ReceivedMessage)
 
 def init(project_name:            str,
          package_name:            str,
