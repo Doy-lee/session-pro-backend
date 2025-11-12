@@ -307,7 +307,7 @@ def entry_point() -> flask.Flask:
     webhook_logger: base.AsyncSessionWebhookLogHandler | None = None
     if len(parsed_args.session_webhook_url) > 0:
         webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
-                                                            display_name='Session Pro Backend')
+                                                            display_name=parsed_args.session_webhook_name)
         webhook_logger.setLevel(logging.WARNING)
         webhook_logger.setFormatter(log_formatter)
 
