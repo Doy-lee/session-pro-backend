@@ -475,6 +475,15 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
             result.append(item)
     return result;
 
+def is_gen_index_revoked_tx(sql_conn: sqlite3.Connection, gen_index : int) -> bool:
+    result = False
+    with base.SQLTransaction(sql_conn) as tx:
+        assert tx.cursor is not None
+        _  = tx.cursor.execute('SELECT 1 FROM revocations WHERE gen_index = ?', (gen_index,))
+        row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+        result                 = row is not None
+    return result
+
 def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
     result: int = 0
     with base.SQLTransaction(sql_conn) as tx:
@@ -977,9 +986,19 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
                       master_pkey:         nacl.signing.VerifyKey,
                       rotating_pkey:       nacl.signing.VerifyKey | None,
                       signing_key:         nacl.signing.SigningKey | None,
+                      unix_ts_ms:          int,
                       redeemed_unix_ts_ms: int,
                       payment_tx:          AddProPaymentUserTransaction,
                       err:                 base.ErrorSink) -> RedeemPayment:
+    """
+    unix_ts_ms: The timestamp typically accurate to the current time, used as a frame-of-reference
+    to clamp the duration of the proof returned to the user to at most 1 month, also used to mask
+    metadata about the type of subscription a user is currently using.
+
+    redeemed_unix_ts_ms: Timestamp to mark as the time in point in which the payment was redeemed.
+    This timestamp is typically rounded up by using 'convert_unix_ts_ms_to_redeemed_unix_ts_ms' to
+    #mask metadata about the time the user redeemed the payment.
+    """
 
     assert tx.cursor is not None
     result                   = RedeemPayment()
@@ -1059,13 +1078,13 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
             # its possible to redeem a payment without automatically creating the corresponding proof)
             if rotating_pkey:
                 assert signing_key, "Rotating public key and signing key have to be given in tandem, either both set or both set to nil"
-                proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
+                proposed_proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
                 if base.DEV_BACKEND_MODE:
-                    proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
+                    proposed_proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
 
                 result.proof = build_proof(gen_index         = allocated.gen_index,
                                            rotating_pkey     = rotating_pkey,
-                                           expiry_unix_ts_ms = proof_expiry_unix_ts_ms,
+                                           expiry_unix_ts_ms = _build_proof_clamped_expiry_time(unix_ts_ms=unix_ts_ms, proposed_expiry_unix_ts_ms=proposed_proof_expiry_unix_ts_ms),
                                            signing_key       = signing_key,
                                            gen_index_salt    = allocated.gen_index_salt)
 
@@ -1433,6 +1452,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                                       master_pkey         = master_pkey,
                                       rotating_pkey       = None,
                                       signing_key         = None,
+                                      unix_ts_ms          = unredeemed_unix_ts_ms,
                                       redeemed_unix_ts_ms = convert_unix_ts_ms_to_redeemed_unix_ts_ms(unredeemed_unix_ts_ms),
                                       payment_tx          = add_pro_payment_user_tx,
                                       err                 = tmp_err)
@@ -1521,6 +1541,13 @@ def build_proof_hash(version:           int,
     result: bytes = hasher.digest()
     return result
 
+def _build_proof_clamped_expiry_time(unix_ts_ms: int, proposed_expiry_unix_ts_ms: int):
+    # NOTE: Clamp the expiry time of the proof to 1 month and also make it land on the day boundary
+    # to reduce metadata leakage.
+    clamped_expiry_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms + base.MILLISECONDS_IN_MONTH)
+    result: int               = min(clamped_expiry_unix_ts_ms, proposed_expiry_unix_ts_ms)
+    return result
+
 def build_proof(gen_index:         int,
                 rotating_pkey:     nacl.signing.VerifyKey,
                 expiry_unix_ts_ms: int,
@@ -1591,6 +1618,7 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
 def add_pro_payment(sql_conn:            sqlite3.Connection,
                     version:             int,
                     signing_key:         nacl.signing.SigningKey,
+                    unix_ts_ms:          int,
                     redeemed_unix_ts_ms: int,
                     master_pkey:         nacl.signing.VerifyKey,
                     rotating_pkey:       nacl.signing.VerifyKey,
@@ -1598,6 +1626,15 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                     master_sig:          bytes,
                     rotating_sig:        bytes,
                     err:                 base.ErrorSink) -> RedeemPayment:
+    """
+    unix_ts_ms: The timestamp typically accurate to the current time, used as a frame-of-reference
+    to clamp the duration of the proof returned to the user to at most 1 month, also used to mask
+    metadata about the type of subscription a user is currently using.
+
+    redeemed_unix_ts_ms: Timestamp to mark as the time in point in which the payment was redeemed.
+    This timestamp is typically rounded up by using 'convert_unix_ts_ms_to_redeemed_unix_ts_ms' to
+    #mask metadata about the time the user redeemed the payment.
+    """
 
     if log.getEffectiveLevel() <= logging.INFO:
         payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
@@ -1724,6 +1761,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                                    master_pkey         = master_pkey,
                                    rotating_pkey       = rotating_pkey,
                                    signing_key         = signing_key,
+                                   unix_ts_ms          = unix_ts_ms,
                                    redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                    payment_tx          = payment_tx,
                                    err                 = err)
@@ -1834,15 +1872,20 @@ def get_pro_proof(sql_conn:       sqlite3.Connection,
         get_user = get_user_and_payments(tx, master_pkey)
 
     if get_user.user.master_pkey == bytes(master_pkey):
-        proof_deadline_unix_ts_ms: int = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms
-        if unix_ts_ms <= proof_deadline_unix_ts_ms:
-            result = build_proof(gen_index         = get_user.user.gen_index,
-                                 rotating_pkey     = rotating_pkey,
-                                 expiry_unix_ts_ms = proof_deadline_unix_ts_ms,
-                                 signing_key       = signing_key,
-                                 gen_index_salt    = gen_index_salt);
+        # Check that the gen index hash is not revoked
+        if is_gen_index_revoked_tx(sql_conn, get_user.user.gen_index):
+            err.msg_list.append(f'User {bytes(master_pkey).hex()} payment has been revoked')
         else:
-            err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(proof_deadline_unix_ts_ms)} ({base.readable_unix_ts_ms(get_user.user.expiry_unix_ts_ms)} + {get_user.user.grace_period_duration_ms})')
+            proof_deadline_unix_ts_ms: int = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms
+            proof_expiry_unix_ts_ms:   int = _build_proof_clamped_expiry_time(unix_ts_ms=unix_ts_ms, proposed_expiry_unix_ts_ms=proof_deadline_unix_ts_ms)
+            if unix_ts_ms <= proof_expiry_unix_ts_ms:
+                result = build_proof(gen_index         = get_user.user.gen_index,
+                                     rotating_pkey     = rotating_pkey,
+                                     expiry_unix_ts_ms = proof_expiry_unix_ts_ms,
+                                     signing_key       = signing_key,
+                                     gen_index_salt    = gen_index_salt);
+            else:
+                err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(proof_deadline_unix_ts_ms)} ({base.readable_unix_ts_ms(get_user.user.expiry_unix_ts_ms)} + {get_user.user.grace_period_duration_ms})')
     else:
         err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(get_user.user.master_pkey).hex()} {get_user.user.gen_index} {get_user.user.expiry_unix_ts_ms}')
 

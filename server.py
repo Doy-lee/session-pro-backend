@@ -558,11 +558,13 @@ def add_pro_payment():
     # Submit the payment to the DB
     redeemed_payment = backend.RedeemPayment()
     with open_db_from_flask_request_context(flask.current_app) as db:
-        unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(int(time.time() * 1000))
+        unix_ts_ms          = int(time.time() * 1000)
+        redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
         redeemed_payment = backend.add_pro_payment(sql_conn            = db.sql_conn,
                                                    version             = version,
                                                    signing_key         = db.runtime.backend_key,
-                                                   redeemed_unix_ts_ms = unix_ts_ms,
+                                                   unix_ts_ms          = unix_ts_ms,
+                                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                                    master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
                                                    rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
                                                    payment_tx          = user_payment,
@@ -645,7 +647,7 @@ def get_pro_proof() -> flask.Response:
                                       err            = err)
 
     if len(err.msg_list):
-        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
 
     result = make_success_response(dict_result=proof.to_dict())
     return result
@@ -689,7 +691,7 @@ def get_pro_revocations():
                     })
 
     if len(err.msg_list):
-        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+        return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
 
     result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
     return result

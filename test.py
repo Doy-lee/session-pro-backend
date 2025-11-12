@@ -193,6 +193,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
                                                                           sql_conn            = db.sql_conn,
                                                                           signing_key         = backend_key,
+                                                                          unix_ts_ms          = unix_ts_ms,
                                                                           redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                                                           master_pkey         = master_key.verify_key,
                                                                           rotating_pkey       = rotating_key.verify_key,
@@ -211,6 +212,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         redeemed_payment_2nd = backend.add_pro_payment(version             = version,
                                                        sql_conn            = db.sql_conn,
                                                        signing_key         = backend_key,
+                                                       unix_ts_ms          = unix_ts_ms,
                                                        redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                                        master_pkey         = master_key.verify_key,
                                                        rotating_pkey       = rotating_key.verify_key,
@@ -387,6 +389,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
             redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
                                                                               sql_conn            = db.sql_conn,
                                                                               signing_key         = backend_key,
+                                                                              unix_ts_ms          = unix_ts_ms,
                                                                               redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                                                               master_pkey         = auto_redeem_user_master_key.verify_key,
                                                                               rotating_pkey       = auto_redeem_user_rotating_key.verify_key,
@@ -456,7 +459,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                    server_x25519_pkey=server_x25519_skey.public_key)
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
-    unix_ts_ms: int                 = int(time.time() * 1000)
+    start_unix_ts_ms: int           = int(time.time() * 1000)
+    unix_ts_ms: int                 = start_unix_ts_ms
     next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     master_key                      = nacl.signing.SigningKey.generate()
     rotating_key                    = nacl.signing.SigningKey.generate()
@@ -468,7 +472,7 @@ def test_server_add_payment_flow(monkeypatch):
                                    payment_tx=payment_tx,
                                    plan=base.ProPlan.OneMonth,
                                    unredeemed_unix_ts_ms=unix_ts_ms,
-                                   expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                   expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 90) * 1000),
                                    platform_refund_expiry_unix_ts_ms=0,
                                    err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
@@ -599,7 +603,7 @@ def test_server_add_payment_flow(monkeypatch):
             'version':       version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
-            'unix_ts_ms':     unix_ts_ms,
+            'unix_ts_ms':    unix_ts_ms,
             'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
             'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
         }
@@ -630,7 +634,7 @@ def test_server_add_payment_flow(monkeypatch):
         result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
         result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
         result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:   int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
@@ -650,10 +654,14 @@ def test_server_add_payment_flow(monkeypatch):
                                               result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
-    new_add_pro_payment_tx      = backend.AddProPaymentUserTransaction()
-    new_proof_expiry_unix_ts_ms = 0
-    if 1: # Register another payment on the same user, this will revoke the old proof
-        version: int                        = 0
+        # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
+        # overrun of 30 days we round up to 31 days)
+        assert result_expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0
+        assert result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 31)) or \
+               result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 30))
+
+    new_add_pro_payment_tx                = backend.AddProPaymentUserTransaction()
+    if 1: # Register another payment on the same user, this will stack the duration
         new_payment_tx                      = base.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
@@ -717,8 +725,6 @@ def test_server_add_payment_flow(monkeypatch):
         result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
         assert len(err.msg_list) == 0, '{err.msg_list}'
 
-        new_proof_expiry_unix_ts_ms = result_expiry_unix_ts_ms
-
         # Parse hex fields to bytes
         result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
         result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
@@ -730,9 +736,9 @@ def test_server_add_payment_flow(monkeypatch):
 
         # Check that the server signed our proof w/ their public key
         proof_hash: bytes = backend.build_proof_hash(result_version,
-                                                        result_gen_index_hash,
-                                                        result_rotating_pkey,
-                                                        result_expiry_unix_ts_ms)
+                                                     result_gen_index_hash,
+                                                     result_rotating_pkey,
+                                                     result_expiry_unix_ts_ms)
         _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0
@@ -785,19 +791,19 @@ def test_server_add_payment_flow(monkeypatch):
 
         # We will now manually revoke the user and check the revocation list again
         with base.SQLTransaction(db.sql_conn) as tx:
-            revoked = backend.add_google_revocation_tx(tx=tx,
-                                                       google_payment_token=new_add_pro_payment_tx.google_payment_token,
-                                                       revoke_unix_ts_ms=unix_ts_ms,
-                                                       err=err)
+            revoked = backend.add_google_revocation_tx(tx                   = tx,
+                                                       google_payment_token = new_add_pro_payment_tx.google_payment_token,
+                                                       revoke_unix_ts_ms    = unix_ts_ms,
+                                                       err                  = err)
             assert revoked
             assert not err.has()
 
         if 1: # Get the revocation list, again
             request_body={'version': 0, 'ticket':  curr_revocation_ticket}
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                      shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
-                                                      request_body=request_body)
+                                                      shared_key   = shared_key,
+                                                      endpoint     = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                      request_body = request_body)
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -829,12 +835,17 @@ def test_server_add_payment_flow(monkeypatch):
             # payment but we _do_ increment the user's generation index
             assert len(result_items) == 1
 
+            with base.SQLTransaction(db.sql_conn) as tx:
+                get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+
             for it in result_items:
                 it: dict[str, int | str]
                 assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
                 assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
                 assert it['gen_index_hash']    == post_revoke_gen_index_hash.hex()
-                assert it['expiry_unix_ts_ms'] == new_proof_expiry_unix_ts_ms
+                assert it['expiry_unix_ts_ms'] == get_user.user.expiry_unix_ts_ms
+
+        assert not err.has()
 
     # Try grabbing the revocation again with the current ticket (we should get
     # an empty list because we passed in the most up to date ticket)
@@ -1094,6 +1105,51 @@ def test_server_add_payment_flow(monkeypatch):
         except:
             failed = True
         assert err.has() and failed
+        err.msg_list.clear()
+
+    if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
+        with base.SQLTransaction(db.sql_conn) as tx:
+            revoked = backend.add_google_revocation_tx(tx                   = tx,
+                                                       google_payment_token = payment_tx.google_payment_token,
+                                                       revoke_unix_ts_ms    = start_unix_ts_ms,
+                                                       err                  = err)
+        assert revoked
+        assert not err.has()
+
+        # Try requesting a proof normally which should now fail as everything has been revoked
+        get_pro_proof_hash_version = 0
+        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version       = get_pro_proof_hash_version,
+                                                              master_pkey   = master_key.verify_key,
+                                                              rotating_pkey = rotating_key.verify_key,
+                                                              unix_ts_ms    = start_unix_ts_ms)
+
+        request_body = {
+            'version':       get_pro_proof_hash_version,
+            'master_pkey':   bytes(master_key.verify_key).hex(),
+            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+            'unix_ts_ms':    start_unix_ts_ms,
+            'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
+            'rotating_sig':  bytes(rotating_key.sign(hash_to_sign).signature).hex(),
+        }
+
+        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                  shared_key      = shared_key,
+                                                  endpoint        = server.FLASK_ROUTE_GET_PRO_PROOF,
+                                                  request_body    = request_body)
+
+        # POST and get response for pro proof
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON from the pro proof response
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+        # Parse status from the pro proof response
+        assert response_json['status'] == server.RESPONSE_GENERIC_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
