@@ -156,7 +156,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     for index, it in enumerate(result.received_messages):
                         body:          typing.Any = json.loads(it.message.data)
                         event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
-                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it.message))
+                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
                         log.info("received event")
 
                     # NOTE: Sort the events we've added
