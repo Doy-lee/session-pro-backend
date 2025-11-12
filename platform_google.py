@@ -15,7 +15,7 @@ import time
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
-import google.cloud.pubsub_v1.subscriber.message
+import google.pubsub_v1.types
 import googleapiclient.discovery
 
 import backend
@@ -51,9 +51,9 @@ class GoogleHandleNotificationResult:
 
 @dataclasses.dataclass
 class TimestampedData:
-    event_unix_ts_ms:   int        = 0
-    received_unix_ts_s: float        = 0
-    body:               typing.Any = None
+    event_unix_ts_ms:   int                              = 0
+    received_unix_ts_s: float                            = 0
+    body:               google.pubsub_v1.ReceivedMessage = google.pubsub_v1.ReceivedMessage()
 
 def init(project_name:            str,
          package_name:            str,
@@ -146,10 +146,9 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             last_event_processed: TimestampedData       = TimestampedData()
             while context.kill_thread == False:
                 log.info("pulling")
-                result = client.pull(subscription=sub_path,
-                                     return_immediately=True,
-                                     max_messages=64)
-
+                result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,
+                                                                          return_immediately = True,
+                                                                          max_messages       = 64)
                 now: float = time.time()
                 if len(result.received_messages) > 0:
                     # NOTE: Generate the list of messages sorted by their event time stamp
@@ -183,6 +182,8 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         _ = ordered_msg_list.pop(index)
                         continue
 
+                    # NOTE: Acknowledge the message
+                    client.acknowledge(subscription = sub_path, ack_ids = [msg.body.ack_id])
                     index += 1
 
                 # NOTE: Erase the processed events
@@ -504,15 +505,15 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 
     return result
 
-def handle_sub_message(message: google.cloud.pubsub_v1.subscriber.message.Message) -> bool:
+def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
     result = False
-    body: typing.Any = json.loads(message.data)  # pyright: ignore[reportAny]
+    body: typing.Any = json.loads(message.message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
         return result
 
     # NOTE: Process the notification
-    err    = base.ErrorSink()
+    err          = base.ErrorSink()
     notif_result = GoogleHandleNotificationResult()
     with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
         body   = typing.cast(JSONObject, body)
@@ -539,8 +540,6 @@ def handle_sub_message(message: google.cloud.pubsub_v1.subscriber.message.Messag
         logging.error(f'{err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
         result = False
     elif notif_result.ack:
-        # NOTE: Acknowledge the notification
-        message.ack()
         result = True
 
     return result
