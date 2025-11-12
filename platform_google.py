@@ -507,6 +507,7 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 
 def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
     result = False
+    print('$$$$$$$$$$$$', message)
     body: typing.Any = json.loads(message.message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
