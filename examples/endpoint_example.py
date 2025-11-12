@@ -18,10 +18,12 @@ get_revocations_list_example        = True
 # NOTE: CLI handler
 parser = argparse.ArgumentParser()
 parser.add_argument( '-u', '--url', type=str, required=True, help='URL to the server to run the example on')
+parser.add_argument( '-p', '--master-priv-key-hex', type=str, required=False, help='Master private key hex (64 chars)')
 args = parser.parse_args()
 
 # NOTE: Start executing example
-master_key   = nacl.signing.SigningKey.generate()
+master_key_hex = args.master_priv_key_hex
+master_key = nacl.signing.SigningKey( bytes.fromhex(master_key_hex) if master_key_hex else nacl.signing.SigningKey.generate() )
 rotating_key = nacl.signing.SigningKey.generate()
 print('Master SKey: ' + bytes(master_key).hex())
 print('Master PKey: ' + bytes(master_key.verify_key).hex())
