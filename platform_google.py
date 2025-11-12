@@ -53,7 +53,7 @@ class GoogleHandleNotificationResult:
 class TimestampedData:
     event_unix_ts_ms:   int                              = 0
     received_unix_ts_s: float                            = 0
-    body:               google.pubsub_v1.ReceivedMessage = google.pubsub_v1.ReceivedMessage()
+    body:               google.pubsub_v1.ReceivedMessage = dataclasses.field(default_factory=google.pubsub_v1.ReceivedMessage)
 
 def init(project_name:            str,
          package_name:            str,
@@ -156,7 +156,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     for index, it in enumerate(result.received_messages):
                         body:          typing.Any = json.loads(it.message.data)
                         event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
-                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it.message))
+                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
                         log.info("received event")
 
                     # NOTE: Sort the events we've added
@@ -507,6 +507,7 @@ def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: bas
 
 def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
     result = False
+    print('$$$$$$$$$$$$', message)
     body: typing.Any = json.loads(message.message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
         logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
