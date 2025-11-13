@@ -398,17 +398,24 @@ def format_bytes(size: int):
             return f'{formatted_size:.2f} {prefix}'
     return '0.00 B'
 
-def format_seconds(duration_s: int):
-    hours   = duration_s // 3600
-    minutes = (duration_s % 3600) // 60
+def format_seconds(duration_s: float) -> str:
+    hours = int(duration_s // 3600)
+    minutes = int((duration_s % 3600) // 60)
     seconds = duration_s % 60
     result = ''
     if hours > 0:
         result += f"{hours}h"
     if minutes > 0:
-        result += "{}{}m".format(" " if len(result) > 0 else "", minutes)
-    result += "{}{}s".format(" " if len(result) > 0 else "", seconds)
-    return result
+        result += f"{' ' if result else ''}{minutes}m"
+    # For seconds: show decimals only if there's a fractional part
+    if seconds >= 1 or result == '':  # Always show seconds if no higher units
+        if seconds == int(seconds):
+            sec_str = str(int(seconds))
+        else:
+            # Show up to 3 decimal places, strip trailing zeros
+            sec_str = f"{seconds:.3f}".rstrip('0').rstrip('.')
+        result += f"{' ' if result else ''}{sec_str}s"
+    return result if result else '0s'
 
 def obfuscate(val: str) -> str:
     """

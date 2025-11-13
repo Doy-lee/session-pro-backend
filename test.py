@@ -1150,7 +1150,6 @@ def test_server_add_payment_flow(monkeypatch):
         assert response_json['status'] == server.RESPONSE_GENERIC_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
         assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
-
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
     # maintaining a bleeding edge version of it).

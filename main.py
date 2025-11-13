@@ -95,10 +95,10 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
     global stop_proof_expiry_thread
 
     while not stop_proof_expiry_thread:
-        start_unix_ts_s:    int = int(time.time())
-        next_day_unix_ts_s: int = int(base.round_unix_ts_ms_to_next_day(start_unix_ts_s * 1000) / 1000)
-        sleep_time_s:       int = next_day_unix_ts_s - start_unix_ts_s
-        next_day_str:       str = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%Y-%m-%d')
+        start_unix_ts_s:    float = time.time()
+        next_day_unix_ts_s: float = base.round_unix_ts_ms_to_next_day(int(start_unix_ts_s * 1000)) / 1000.0
+        sleep_time_s:       float = next_day_unix_ts_s - start_unix_ts_s
+        next_day_str:       str   = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%Y-%m-%d')
 
         # Sleep on CV until sleep time has elapsed, or, we get woken up by SIG handler.
         while sleep_time_s > 0 and not stop_proof_expiry_thread:
@@ -114,7 +114,7 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             expire_result = backend.ExpireResult()
             with backend.OpenDBAtPath(db_path=db_path) as db:
                 expire_result = backend.expire_payments_revocations_and_users(sql_conn=db.sql_conn,
-                                                                              unix_ts_ms=next_day_unix_ts_s * 1000)
+                                                                              unix_ts_ms=int(next_day_unix_ts_s * 1000))
 
             yesterday_str: str = datetime.datetime.fromtimestamp(next_day_unix_ts_s - base.SECONDS_IN_DAY).strftime('%Y-%m-%d')
             today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
