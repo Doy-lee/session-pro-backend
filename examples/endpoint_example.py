@@ -23,7 +23,8 @@ args = parser.parse_args()
 
 # NOTE: Start executing example
 master_key_hex = args.master_priv_key_hex
-master_key = nacl.signing.SigningKey( bytes.fromhex(master_key_hex) if master_key_hex else nacl.signing.SigningKey.generate() )
+print(type(master_key_hex))
+master_key = nacl.signing.SigningKey(bytes.fromhex(master_key_hex)) if master_key_hex else nacl.signing.SigningKey.generate()
 rotating_key = nacl.signing.SigningKey.generate()
 print('Master SKey: ' + bytes(master_key).hex())
 print('Master PKey: ' + bytes(master_key.verify_key).hex())
