@@ -8,8 +8,8 @@ import argparse
 
 # NOTE: Setup variables
 request_version                     = 0
-get_pro_proof_example               = True
-get_pro_status_example              = True
+generate_pro_proof_example          = True
+get_pro_details_example             = True
 add_pro_payment_example             = True
 add_pro_payment_example_with_google = True
 add_pro_payment_example_with_apple  = True
@@ -92,7 +92,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             response_data = json.loads(response.read().decode('utf-8'))
             print(f"Response: {json.dumps(response_data, indent=1)}")
 
-if get_pro_proof_example:
+if generate_pro_proof_example:
     version         = 0
     unix_ts_ms      = int(time.time() * 1000)
 
@@ -116,13 +116,13 @@ if get_pro_proof_example:
     print('Get Pro Proof')
     print('Request:\n' + json.dumps(request_body, indent=1))
 
-    request = urllib.request.Request(f'{args.url}/get_pro_proof', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
+    request = urllib.request.Request(f'{args.url}/generate_pro_proof', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request) as response:
         response_data = json.loads(response.read().decode('utf-8'))
         print(f"Response: {json.dumps(response_data, indent=1)}")
 
 
-if get_pro_status_example:
+if get_pro_details_example:
     version:    int = 0
     unix_ts_ms: int = int(time.time() * 1000)
     count:      int = 2
@@ -144,7 +144,7 @@ if get_pro_status_example:
     print('Get Pro Status')
     print('Request:\n' + json.dumps(request_body, indent=1))
 
-    request = urllib.request.Request(f'{args.url}/get_pro_status', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
+    request = urllib.request.Request(f'{args.url}/get_pro_details', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request) as response:
         response_data = json.loads(response.read().decode('utf-8'))
         print(f"Response: {json.dumps(response_data, indent=1)}")

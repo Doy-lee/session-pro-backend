@@ -480,7 +480,7 @@ def test_server_add_payment_flow(monkeypatch):
     if 1: # Grab the pro status before anything has happened
         version:      int   = 0
         count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_status_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
                       'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -489,7 +489,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -594,10 +594,10 @@ def test_server_add_payment_flow(monkeypatch):
         new_rotating_key    = nacl.signing.SigningKey.generate()
         version             = 0
         unix_ts_ms          = int(time.time() * 1000)
-        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version=version,
-                                                              master_pkey=master_key.verify_key,
-                                                              rotating_pkey=new_rotating_key.verify_key,
-                                                              unix_ts_ms=unix_ts_ms)
+        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version=version,
+                                                                   master_pkey=master_key.verify_key,
+                                                                   rotating_pkey=new_rotating_key.verify_key,
+                                                                   unix_ts_ms=unix_ts_ms)
 
         request_body = {
             'version':       version,
@@ -610,7 +610,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_PROOF,
+                                                  endpoint=server.FLASK_ROUTE_GENERATE_PRO_PROOF,
                                                   request_body=request_body)
 
         # POST and get response
@@ -890,7 +890,7 @@ def test_server_add_payment_flow(monkeypatch):
         version:      int   = 0
         unix_ts_ms:   int   = int(time.time() * 1000)
         count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_status_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
 
         request_body={'version':     version,
                       'master_pkey': bytes(master_key.verify_key).hex(),
@@ -900,7 +900,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                   shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
+                                                  endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
                                                   request_body=request_body)
 
         # POST and get response
@@ -931,10 +931,10 @@ def test_server_add_payment_flow(monkeypatch):
         # Retry the request but use a too old timestamp
         if 1:
             unix_ts_ms:   int   = int((time.time() * 1000) + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS * 2))
-            hash_to_sign: bytes = server.make_get_pro_status_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -959,10 +959,10 @@ def test_server_add_payment_flow(monkeypatch):
         if 1:
             unix_ts_ms:    int   = int(time.time() * 1000)
             count:         int   = 10_000
-            hash_to_sign:  bytes = server.make_get_pro_status_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            hash_to_sign:  bytes = server.make_get_pro_details_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -987,10 +987,10 @@ def test_server_add_payment_flow(monkeypatch):
         if 1:
             unix_ts_ms:   int   = int(time.time() * 1000)
             count:        int   = 0
-            hash_to_sign: bytes = server.make_get_pro_status_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request       = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_STATUS,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
                                                       request_body={'version':     version,
                                                                     'master_pkey': bytes(master_key.verify_key).hex(),
                                                                     'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -1051,21 +1051,21 @@ def test_server_add_payment_flow(monkeypatch):
         # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
         request_version: int   = 0
         unix_ts_ms:      int   = pro_proof_deadline_unix_ts_ms
-        hash_to_sign:    bytes = backend.make_get_pro_proof_hash(version       = request_version,
+        hash_to_sign:    bytes = backend.make_generate_pro_proof_hash(version       = request_version,
                                                                  master_pkey   = master_key.verify_key,
                                                                  rotating_pkey = rotating_key.verify_key,
                                                                  unix_ts_ms    = unix_ts_ms)
 
-        proof: backend.ProSubscriptionProof = backend.get_pro_proof(sql_conn       = db.sql_conn,
-                                                                    version        = request_version,
-                                                                    signing_key    = db.runtime.backend_key,
-                                                                    gen_index_salt = db.runtime.gen_index_salt,
-                                                                    master_pkey    = master_key.verify_key,
-                                                                    rotating_pkey  = rotating_key.verify_key,
-                                                                    unix_ts_ms     = unix_ts_ms,
-                                                                    master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                                                    rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                                                    err            = err)
+        proof: backend.ProSubscriptionProof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
+                                                                         version        = request_version,
+                                                                         signing_key    = db.runtime.backend_key,
+                                                                         gen_index_salt = db.runtime.gen_index_salt,
+                                                                         master_pkey    = master_key.verify_key,
+                                                                         rotating_pkey  = rotating_key.verify_key,
+                                                                         unix_ts_ms     = unix_ts_ms,
+                                                                         master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                                                         rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                                                         err            = err)
         assert not err.has()
 
         # NOTE: Check that the proof is invalid
@@ -1078,21 +1078,21 @@ def test_server_add_payment_flow(monkeypatch):
 
         # NOTE: Try to generate a proof after the deadline (should fail)
         unix_ts_ms: int = pro_proof_deadline_unix_ts_ms + 1
-        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version       = request_version,
+        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = request_version,
                                                               master_pkey   = master_key.verify_key,
                                                               rotating_pkey = rotating_key.verify_key,
                                                               unix_ts_ms    = unix_ts_ms)
 
-        proof = backend.get_pro_proof(sql_conn       = db.sql_conn,
-                                      version        = request_version,
-                                      signing_key    = db.runtime.backend_key,
-                                      gen_index_salt = db.runtime.gen_index_salt,
-                                      master_pkey    = master_key.verify_key,
-                                      rotating_pkey  = rotating_key.verify_key,
-                                      unix_ts_ms     = unix_ts_ms,
-                                      master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                      rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                      err            = err)
+        proof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
+                                           version        = request_version,
+                                           signing_key    = db.runtime.backend_key,
+                                           gen_index_salt = db.runtime.gen_index_salt,
+                                           master_pkey    = master_key.verify_key,
+                                           rotating_pkey  = rotating_key.verify_key,
+                                           unix_ts_ms     = unix_ts_ms,
+                                           master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                           rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                           err            = err)
 
         proof_hash = backend.build_proof_hash(proof.version,
                                               proof.gen_index_hash,
@@ -1117,14 +1117,14 @@ def test_server_add_payment_flow(monkeypatch):
         assert not err.has()
 
         # Try requesting a proof normally which should now fail as everything has been revoked
-        get_pro_proof_hash_version = 0
-        hash_to_sign: bytes = backend.make_get_pro_proof_hash(version       = get_pro_proof_hash_version,
-                                                              master_pkey   = master_key.verify_key,
-                                                              rotating_pkey = rotating_key.verify_key,
-                                                              unix_ts_ms    = start_unix_ts_ms)
+        generate_pro_proof_hash_version = 0
+        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = generate_pro_proof_hash_version,
+                                                                   master_pkey   = master_key.verify_key,
+                                                                   rotating_pkey = rotating_key.verify_key,
+                                                                   unix_ts_ms    = start_unix_ts_ms)
 
         request_body = {
-            'version':       get_pro_proof_hash_version,
+            'version':       generate_pro_proof_hash_version,
             'master_pkey':   bytes(master_key.verify_key).hex(),
             'rotating_pkey': bytes(rotating_key.verify_key).hex(),
             'unix_ts_ms':    start_unix_ts_ms,
@@ -1134,7 +1134,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
                                                   shared_key      = shared_key,
-                                                  endpoint        = server.FLASK_ROUTE_GET_PRO_PROOF,
+                                                  endpoint        = server.FLASK_ROUTE_GENERATE_PRO_PROOF,
                                                   request_body    = request_body)
 
         # POST and get response for pro proof
@@ -3310,17 +3310,17 @@ def test_google_platform_handle_notification(monkeypatch):
     Testing Interaction Utility Functions
     """
 
-    def get_pro_status(user_ctx: TestUserCtx, ctx: TestingContext) -> base.JSONObject:
+    def get_pro_details(user_ctx: TestUserCtx, ctx: TestingContext) -> base.JSONObject:
         unix_ts_ms:   int   = int(time.time() * 1000)
         version:      int   = 0
         count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_status_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
         request_body={'version':     version,
                       'master_pkey': bytes(user_ctx.master_key.verify_key).hex(),
                       'master_sig':  bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
                       'unix_ts_ms':  unix_ts_ms,
                       'count':       count}
-        response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_GET_PRO_STATUS, json=request_body)
+        response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_GET_PRO_DETAILS, json=request_body)
         response_json = response.json
         assert response_json is not None
         return response_json
@@ -3422,8 +3422,8 @@ def test_google_platform_handle_notification(monkeypatch):
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
         assert user.expiry_unix_ts_ms == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
 
-    def assert_pro_status(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
-        status                       = get_pro_status(user_ctx=user_ctx, ctx=ctx)
+    def assert_pro_details(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
+        status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx)
         err                          = base.ErrorSink()
         result                       = base.json_dict_require_obj(status, "result", err)
         res_auto_renewing            = base.json_dict_require_bool(result, "auto_renewing", err)
@@ -3482,7 +3482,7 @@ def test_google_platform_handle_notification(monkeypatch):
         user_ctx.payments += 1
         assert_has_payment(tx=tx, plan=plan, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         assert_has_user(tx=tx, user_ctx=user_ctx, ctx=ctx)
-        assert_pro_status(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         return tx, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
@@ -3516,36 +3516,36 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User cancels"""
         _ = test_notification(cancel, ctx)
-        assert_pro_status(tx                                = tx_subscribe, 
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_subscribe, 
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
 
         """3. User un-cancels"""
         _ = test_notification(uncancel, ctx)
-        assert_pro_status(tx                                = tx_subscribe,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = True,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx = ctx)
+        assert_pro_details(tx                                = tx_subscribe,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = True,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx = ctx)
 
         """4. User refunds"""
         _ = test_notification(refund, ctx)
-        assert_pro_status(tx                                = tx_subscribe,
-                          pro_status                        = server.UserProStatus.Expired,
-                          payment_status                    = base.PaymentStatus.Revoked,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_subscribe,
+                           pro_status                        = server.UserProStatus.Expired,
+                           payment_status                    = base.PaymentStatus.Revoked,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3583,27 +3583,27 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx                                = tx_subscribe,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = True,
-                          grace_duration_ms                 = test_product_details.grace_period.milliseconds,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_subscribe,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = True,
+                           grace_duration_ms                 = test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
 
         # Expire payments at the EOD of the resubscribe expiry_ts (note the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx                                = tx_subscribe,
-                          pro_status                        = server.UserProStatus.Expired,
-                          payment_status                    = base.PaymentStatus.Expired,
-                          auto_renew                        = True,
-                          grace_duration_ms                 = test_product_details.grace_period.milliseconds,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_subscribe,
+                           pro_status                        = server.UserProStatus.Expired,
+                           payment_status                    = base.PaymentStatus.Expired,
+                           auto_renew                        = True,
+                           grace_duration_ms                 = test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
 
         """3. User renews"""
         # NOTE: We don't check that the payment is unredeemed because this renewal will get
@@ -3614,36 +3614,36 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """4. User cancels"""
         _ = test_notification(cancel, ctx)
-        assert_pro_status(tx                                = tx_renew,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_renew,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
 
         """5. Subscription expires"""
         tx_expire = test_notification(expire, ctx)
         # status isnt expired yet as the rounded expiry time hasnt happend and the sweeper hasn't run, so there should be no status change
-        assert_pro_status(tx                                = tx_renew,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_renew,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx                                = tx_renew,
-                          pro_status                        = server.UserProStatus.Expired,
-                          payment_status                    = base.PaymentStatus.Expired,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0, 
-                          redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          =user_ctx, ctx=ctx)
+        assert_pro_details(tx                                = tx_renew,
+                           pro_status                        = server.UserProStatus.Expired,
+                           payment_status                    = base.PaymentStatus.Expired,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0, 
+                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          =user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3716,20 +3716,20 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         """4. User cancels"""
         # NOTE: Auto-redeem uses the unredeemed timestamp rounded up whereas if you claim it manually, it uses the server's time
         _ = test_notification(cancel, ctx)
-        assert_pro_status(tx                                = tx_renew_2,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx,
-                          ctx                               = ctx)
+        assert_pro_details(tx                                = tx_renew_2,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx)
 
         """5. Subscription expires"""
         tx_expire = test_notification(expire, ctx)
         # status isnt expired yet as the rounded expiry time hasn't happened and the sweeper hasn't run, so there should be no status change
-        assert_pro_status(tx                                = tx_renew_2,
+        assert_pro_details(tx                                = tx_renew_2,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = False,
@@ -3742,15 +3742,15 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         # Expire payments
         backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
         # Now that payments up to the expiry time has been expired, this user's status should be expired
-        assert_pro_status(tx                                = tx_renew_2,
-                          pro_status                        = server.UserProStatus.Expired,
-                          payment_status                    = base.PaymentStatus.Expired,
-                          auto_renew                        = False,
-                          grace_duration_ms                 = 0,
-                          redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx,
-                          ctx                               = ctx)
+        assert_pro_details(tx                                = tx_renew_2,
+                           pro_status                        = server.UserProStatus.Expired,
+                           payment_status                    = base.PaymentStatus.Expired,
+                           auto_renew                        = False,
+                           grace_duration_ms                 = 0,
+                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx)
 
         """6. User purchased (SUBSCRIPTION_PURCHASED)"""
         tx_resubscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase = resubscribe,
@@ -3760,28 +3760,28 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """7. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx                                = tx_resubscribe,
-                          pro_status                        = server.UserProStatus.Active,
-                          payment_status                    = base.PaymentStatus.Redeemed,
-                          auto_renew                        = True,
-                          grace_duration_ms                 = test_product_details.grace_period.milliseconds,
-                          redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded, # TODO: This is not a good design, should not use real-time timestamps
-                          platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                          user_ctx                          = user_ctx,
-                          ctx                               = ctx)
+        assert_pro_details(tx                                = tx_resubscribe,
+                           pro_status                        = server.UserProStatus.Active,
+                           payment_status                    = base.PaymentStatus.Redeemed,
+                           auto_renew                        = True,
+                           grace_duration_ms                 = test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded, # TODO: This is not a good design, should not use real-time timestamps
+                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
         # Now that payments up to the expiry time has been expired, this user's status should be expired
-        assert_pro_status(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """8. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_status(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """9. User fails to renew, cancelling and expiring"""
         _ = test_notification(fail_after_hold_a, ctx)
         _ = test_notification(fail_after_hold_b, ctx)
-        assert_pro_status(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3813,15 +3813,15 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """3. User cancels, exiting grace period"""
         _ = test_notification(cancel_after_grace_a, ctx)
         _ = test_notification(cancel_after_grace_b, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3858,20 +3858,20 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         # Expire payments at the EOD of the resubscribe expiry_ts (not the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """4. User cancels"""
         _ = test_notification(cancel_after_hold_a, ctx)
         _ = test_notification(cancel_after_hold_b, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3904,14 +3904,14 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """4. User renews (SUBSCRIPTION_RECOVERED)"""
         # NOTE: Auto-redeem kicks in
@@ -3931,7 +3931,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                         user_ctx = user_ctx,
                         ctx      = ctx)
 
-        assert_pro_status(tx                                = tx,
+        assert_pro_details(tx                                = tx,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
@@ -3985,7 +3985,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                         user_ctx = user_ctx,
                         ctx      = ctx)
 
-        assert_pro_status(tx                                = tx,
+        assert_pro_details(tx                                = tx,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
@@ -4034,11 +4034,11 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """3. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_change_plan, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
         # Now that payments up to the expiry time has been expired, this user's status should be expired
-        assert_pro_status(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """4. User renews"""
         # NOTE: Auto-renew kicks in
@@ -4052,7 +4052,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                         user_ctx = user_ctx,
                         ctx      = ctx)
 
-        assert_pro_status(tx                                = tx,
+        assert_pro_details(tx                                = tx,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
@@ -4107,14 +4107,14 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User fails to renew (enter grace period)"""
         tx_grace = test_notification(grace, ctx)
-        assert_pro_status(tx=tx_change_plan, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
         # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_status(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_status(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
         """4. User renews"""
         # NOTE: Auto-renew kicks in
@@ -4128,7 +4128,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                         user_ctx = user_ctx,
                         ctx      = ctx)
 
-        assert_pro_status(tx                                = tx,
+        assert_pro_details(tx                                = tx,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
@@ -4197,7 +4197,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                         user_ctx = user_ctx,
                         ctx      = ctx)
 
-        assert_pro_status(tx                                = tx,
+        assert_pro_details(tx                                = tx,
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
@@ -4265,7 +4265,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         _ = test_notification(refund_a, ctx)
         _ = test_notification(refund_b, ctx)
 
-        assert_pro_status(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=0, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """

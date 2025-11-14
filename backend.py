@@ -1513,7 +1513,7 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, ma
 
     return result
 
-def make_get_pro_proof_hash(version:       int,
+def make_generate_pro_proof_hash(version:       int,
                             master_pkey:   nacl.signing.VerifyKey,
                             rotating_pkey: nacl.signing.VerifyKey,
                             unix_ts_ms:    int) -> bytes:
@@ -1831,21 +1831,21 @@ def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider:
         result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     return result_unix_ts_ms
 
-def get_pro_proof(sql_conn:       sqlite3.Connection,
-                  version:        int,
-                  signing_key:    nacl.signing.SigningKey,
-                  gen_index_salt: bytes,
-                  master_pkey:    nacl.signing.VerifyKey,
-                  rotating_pkey:  nacl.signing.VerifyKey,
-                  unix_ts_ms:     int,
-                  master_sig:     bytes,
-                  rotating_sig:   bytes,
-                  err:            base.ErrorSink) -> ProSubscriptionProof:
+def generate_pro_proof(sql_conn:       sqlite3.Connection,
+                       version:        int,
+                       signing_key:    nacl.signing.SigningKey,
+                       gen_index_salt: bytes,
+                       master_pkey:    nacl.signing.VerifyKey,
+                       rotating_pkey:  nacl.signing.VerifyKey,
+                       unix_ts_ms:     int,
+                       master_sig:     bytes,
+                       rotating_sig:   bytes,
+                       err:            base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
     log.info(f'Get pro proof (version={version}, master={bytes(master_pkey).hex()}, ts={base.readable_unix_ts_ms(unix_ts_ms)})')
 
     # Verify some of the request parameters
-    hash_to_sign: bytes = make_get_pro_proof_hash(version       = version,
+    hash_to_sign: bytes = make_generate_pro_proof_hash(version       = version,
                                                   master_pkey   = master_pkey,
                                                   rotating_pkey = rotating_pkey,
                                                   unix_ts_ms    = unix_ts_ms)
