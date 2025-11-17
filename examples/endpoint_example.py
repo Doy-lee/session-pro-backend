@@ -33,9 +33,9 @@ print('Rotating PKey: ' + bytes(rotating_key.verify_key).hex())
 
 if add_pro_payment_example: # Register a fake payment on google and apple respectively
     if add_pro_payment_example_with_google:
-        google_enum               = 1                           # equivalent to => int(base.PaymentProvider.GooglePlayStore.value)
-        google_payment_token: str = os.urandom(8).hex()         # For the payment token, anything is accepted on a development server
-        google_order_id:      str = 'DEV' + os.urandom(8).hex() # For the order ID, anything is accepted on a development server
+        google_enum               = 1                            # equivalent to => int(base.PaymentProvider.GooglePlayStore.value)
+        google_payment_token: str = os.urandom(8).hex()          # For the payment token, anything is accepted on a development server
+        google_order_id:      str = 'DEV.' + os.urandom(8).hex() # For the order ID, anything is accepted on a development server
 
         hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
@@ -64,8 +64,8 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             print(f"Response: {json.dumps(response_data, indent=1)}")
 
     if add_pro_payment_example_with_apple: # apple
-        apple_enum       = 2                           # equivalent to => int(base.PaymentProvider.iOSAppStore.value)
-        apple_tx_id: str = 'DEV' + os.urandom(8).hex() # For the tx id, anything is accepted on a development server
+        apple_enum       = 2                            # equivalent to => int(base.PaymentProvider.iOSAppStore.value)
+        apple_tx_id: str = 'DEV.' + os.urandom(8).hex() # For the tx id, anything is accepted on a development server
 
         hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
