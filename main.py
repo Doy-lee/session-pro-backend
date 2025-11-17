@@ -432,11 +432,13 @@ def entry_point() -> flask.Flask:
                     label += f' (skipped)'
                 else:
                     backend.add_user_error(sql_conn = db.sql_conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                    count +=1
                     label += f' (added)'
             else:
                 if backend.delete_user_errors(sql_conn         = db.sql_conn,
                                               payment_provider = it.payment_provider,
                                               payment_id       = it.payment_id):
+                    count +=1
                     label += f' (deleted)'
                 else:
                     label += f' (skipped)'
