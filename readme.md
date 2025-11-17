@@ -96,20 +96,21 @@ unsafe_logging               = false
 # A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
 # in the DB on startup. This value must be of the format
 #
-#   "<payment_provider integer>:<payment_id>, ..."
+#   "<payment_provider integer>:<payment_id>=[true|false], ..."
 #
 # For example
 #
-#   "1:the_google_order_id,2:the_apple_order_id"
+#   "1:the_google_order_id=true,2:the_apple_order_id=false"
 #
-# Which will delete the row that has a payment provider of 1 (which corresponds to the Google Play
-# Store) has a payment ID that matches "google_order_id" and so forth.
+# Which will add the row that has a payment provider of 1 (which corresponds to the Google Play
+# Store) and has a payment ID that matches "google_order_id" to have an error. For the next entry
+# similarly it will set the Apple row to false (e.g. delete the row from the DB)
 #
 # Keep this as an empty string to opt out this functionality. This is intended to be used to flush
 # errors from the DB if they are encountered during the handling of payment notifications for a
 # specific user. Platform clients may be using the error table to populate UI that indicates that a
 # user should contact support, hence clearing this value may clear the error prompt for said user.
-delete_user_errors           =
+set_user_errors              =
 
 # Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime
 session_webhook_url          = <url...>
@@ -168,7 +169,7 @@ SESH_PRO_BACKEND_PRINT_TABLES         = [0|1]
 SESH_PRO_BACKEND_DEV                  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_APPLE  = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE = [0|1]
-SESH_PRO_BACKEND_DELETE_USER_ERRORS   = <...>
+SESH_PRO_BACKEND_SET_USER_ERRORS      = <...>
 SESH_PRO_BACKEND_WEBHOOK_URL          = https://...
 SESH_PRO_BACKEND_WEBHOOK_NAME         = Session Pro Backend Dev
 ```

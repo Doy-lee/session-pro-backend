@@ -37,38 +37,44 @@ log                   = logging.Logger('PRO')
 google_thread_context = platform_google.ThreadContext()
 
 @dataclasses.dataclass
+class SetUserErrorItem:
+    payment_provider: base.PaymentProvider
+    payment_id:       str
+    set_flag:         bool
+
+@dataclasses.dataclass
 class ParsedArgs:
-    ini_path:                            str                                    = ''
-    db_path:                             str                                    = ''
-    db_path_is_uri:                      bool                                   = False
-    print_tables:                        bool                                   = False
-    dev:                                 bool                                   = False
-    unsafe_logging:                      bool                                   = False
-    with_platform_apple:                 bool                                   = False
-    with_platform_google:                bool                                   = False
-    platform_testing_env:                bool                                   = False
-    delete_user_errors:                  str                                    = ''
-    parsed_delete_user_errors:           list[tuple[base.PaymentProvider, str]] = dataclasses.field(default_factory=list)
-    session_webhook_url:                 str                                    = ''
-    session_webhook_name:                str                                    = ''
+    ini_path:                            str                    = ''
+    db_path:                             str                    = ''
+    db_path_is_uri:                      bool                   = False
+    print_tables:                        bool                   = False
+    dev:                                 bool                   = False
+    unsafe_logging:                      bool                   = False
+    with_platform_apple:                 bool                   = False
+    with_platform_google:                bool                   = False
+    platform_testing_env:                bool                   = False
+    set_user_errors:                     str                    = ''
+    parsed_set_user_errors:              list[SetUserErrorItem] = dataclasses.field(default_factory=list)
+    session_webhook_url:                 str                    = ''
+    session_webhook_name:                str                    = ''
 
-    apple_key_id:                        str                                    = ''
-    apple_issuer_id:                     str                                    = ''
-    apple_bundle_id:                     str                                    = ''
-    apple_key_path:                      str                                    = ''
-    apple_root_cert_path:                str                                    = ''
-    apple_root_cert_ca_g2_path:          str                                    = ''
-    apple_root_cert_ca_g3_path:          str                                    = ''
-    apple_key:                           bytes                                  = b''
-    apple_root_certs:                    list[bytes]                            = dataclasses.field(default_factory=list)
-    apple_sandbox_env:                   bool                                   = False
-    apple_production_app_id:             int | None                             = None
+    apple_key_id:                        str                    = ''
+    apple_issuer_id:                     str                    = ''
+    apple_bundle_id:                     str                    = ''
+    apple_key_path:                      str                    = ''
+    apple_root_cert_path:                str                    = ''
+    apple_root_cert_ca_g2_path:          str                    = ''
+    apple_root_cert_ca_g3_path:          str                    = ''
+    apple_key:                           bytes                  = b''
+    apple_root_certs:                    list[bytes]            = dataclasses.field(default_factory=list)
+    apple_sandbox_env:                   bool                   = False
+    apple_production_app_id:             int | None             = None
 
-    google_package_name:                 str                                    = ''
-    google_application_credentials_path: str                                    = ''
-    google_project_name:                 str                                    = ''
-    google_subscription_name:            str                                    = ''
-    google_subscription_product_id:      str                                    = ''
+    google_package_name:                 str                    = ''
+    google_application_credentials_path: str                    = ''
+    google_project_name:                 str                    = ''
+    google_subscription_name:            str                    = ''
+    google_subscription_product_id:      str                    = ''
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
@@ -129,27 +135,38 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
             else:
                 log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
-def parse_delete_user_error_arg(arg: str, err: base.ErrorSink) -> list[tuple[base.PaymentProvider, str]]:
+def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
-    result: list[tuple[base.PaymentProvider, str]] = []
+    result: list[SetUserErrorItem] = []
     if len(arg) == 0:
         return result
 
     for item in arg.split(','):
         item = item.strip()
-        if ':' not in item:
-            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<payment_provider>:<payment_id>'.")
+        if ':' not in item or '=' not in item:
+            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<payment_provider>:<payment_id>=[true|false]'.")
             return result
-        payment_provider_str, payment_id = item.split(':', 1)
-        payment_provider_str             = payment_provider_str.strip()
-        payment_provider                 = base.PaymentProvider.Nil
+        payment_provider_str, remainder = item.split(':', 1)
+        payment_id, set_flag_str        = remainder.split('=', 1)
+        payment_provider_str            = payment_provider_str.strip()
+        payment_provider                = base.PaymentProvider.Nil
+
         try:
             payment_provider = base.PaymentProvider(int(payment_provider_str))
         except Exception:
             err.msg_list.append(f'Failed to parse payment provider ({payment_provider_str}) for item {item} (arg was: {arg})')
             return result
 
-        result.append((payment_provider, payment_id))
+        set_flag = False
+        if set_flag_str.lower() == 'true':
+            set_flag = True
+        elif set_flag_str.lower() == 'false':
+            set_flag = False
+        else:
+            err.msg_list.append(f'Failed to parse set flag ({set_flag_str}) for item {item} (arg was: {arg})')
+            return result
+
+        result.append(SetUserErrorItem(payment_provider=payment_provider, payment_id=payment_id, set_flag=set_flag))
     return result
 
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
@@ -173,7 +190,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',  fallback=False)
         result.with_platform_google                = base_section.getboolean(option='with_platform_google', fallback=False)
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
-        result.delete_user_errors                  = base_section.get(option='delete_user_errors',          fallback='')
+        result.set_user_errors                     = base_section.get(option='set_user_errors',             fallback='')
         result.session_webhook_url                 = base_section.get(option='session_webhook_url',         fallback='')
         result.session_webhook_name                = base_section.get(option='session_webhook_name',        fallback='')
 
@@ -211,8 +228,8 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.with_platform_apple       = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
     result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
     result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
-    result.delete_user_errors        = os.getenv('SESH_PRO_BACKEND_DELETE_USER_ERRORS',                 result.delete_user_errors)
-    result.parsed_delete_user_errors = parse_delete_user_error_arg(result.delete_user_errors, err)
+    result.set_user_errors           = os.getenv('SESH_PRO_BACKEND_SET_USER_ERRORS',                    result.set_user_errors)
+    result.parsed_set_user_errors    = parse_set_user_error_arg(result.set_user_errors, err)
     result.session_webhook_url       = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_URL',                result.session_webhook_url)
     result.session_webhook_name      = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME',               result.session_webhook_name)
 
@@ -394,21 +411,37 @@ def entry_point() -> flask.Flask:
         sys.exit(1)
 
     # NOTE: Delete user errors if there were some specified
-    if len(parsed_args.parsed_delete_user_errors) > 0:
-        delete_count = 0
-        delete_label = ''
-        for index, it in enumerate(parsed_args.parsed_delete_user_errors):
+    if len(parsed_args.parsed_set_user_errors) > 0:
+        count = 0
+        label = ''
+        for index, it in enumerate(parsed_args.parsed_set_user_errors):
             if index:
-                delete_label += f'\n'
-            delete_label += f'  {index:02d} {it[0].value}:{it[1]}'
-            if backend.delete_user_errors(sql_conn         = db.sql_conn,
-                                          payment_provider = it[0],
-                                          payment_id       = it[1]):
-                delete_label += f' (deleted)'
-            else:
-                delete_label += f' (skipped)'
+                label += f'\n'
+            label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
+            if it.set_flag:
+                error = backend.UserError(provider=it.payment_provider)
+                if it.payment_provider == base.PaymentProvider.GooglePlayStore:
+                    error.google_payment_token = it.payment_id
+                else:
+                    assert it.payment_provider == base.PaymentProvider.iOSAppStore
+                    error.apple_original_tx_id = it.payment_id
 
-        log.info(f"Deleted {delete_count}/{len(parsed_args.parsed_delete_user_errors)} user errors from the DB\n{delete_label}")
+                if backend.has_user_error(sql_conn=db.sql_conn,
+                                          payment_provider=it.payment_provider,
+                                          payment_id=it.payment_id):
+                    label += f' (skipped)'
+                else:
+                    backend.add_user_error(sql_conn = db.sql_conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                    label += f' (added)'
+            else:
+                if backend.delete_user_errors(sql_conn         = db.sql_conn,
+                                              payment_provider = it.payment_provider,
+                                              payment_id       = it.payment_id):
+                    label += f' (deleted)'
+                else:
+                    label += f' (skipped)'
+
+        log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
         sys.exit(1)
 
     # NOTE: Running the application just in Flask (e.g. local development) we
