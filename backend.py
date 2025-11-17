@@ -1412,7 +1412,9 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
         master_pkey   = nacl.signing.VerifyKey(master_pkey_record[0])
         user: UserRow = get_user_from_sql_tx(tx, master_pkey)
         if user.found:
-            auto_redeem_deadline_unix_ts_ms = 0
+            auto_redeem_deadline_unix_ts_ms: int = 0
+
+            # TODO: Handle the situation when a user cancels
             if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
                 # NOTE: Account hold as described by google
                 #
@@ -1423,12 +1425,16 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                 #   > improve recovery performance
                 #
                 # Source: https://support.google.com/googleplay/android-developer/answer/16631229
-                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms + 60 * base.MILLISECONDS_IN_DAY - user.grace_period_duration_ms
+                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
+                if user.auto_renewing:
+                    auto_redeem_deadline_unix_ts_ms += 60 * base.MILLISECONDS_IN_DAY - user.grace_period_duration_ms
             else:
                 assert payment_tx.provider == base.PaymentProvider.iOSAppStore
                 # NOTE: We don't currently configure a grace period/account hold period for Apple
                 # hnote the grace and account hold concept is merged together in Apple).
-                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms + user.grace_period_duration_ms
+                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
+                if user.auto_renewing:
+                    auto_redeem_deadline_unix_ts_ms += user.grace_period_duration_ms
 
             # NOTE: Unredeemed unix timestamp represents now (as this is the timestamp we are marking
             # the payment as having been registered), so we compare (now) to the deadline. If we are
