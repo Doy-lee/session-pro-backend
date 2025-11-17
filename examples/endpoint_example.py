@@ -35,7 +35,14 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
     if add_pro_payment_example_with_google:
         google_enum               = 1                            # equivalent to => int(base.PaymentProvider.GooglePlayStore.value)
         google_payment_token: str = os.urandom(8).hex()          # For the payment token, anything is accepted on a development server
-        google_order_id:      str = 'DEV.' + os.urandom(8).hex() # For the order ID, anything is accepted on a development server
+
+        # To register a payment directly without getting a google or apple notification from their
+        # app store (e.g. for testing on the development server and without connecting to their
+        # stores) you _have_ to submit an order ID that is prefixed with 'DEV.' for the payment to
+        # proceed. All other order IDs are rejected. This informs the server to bypasses the app
+        # store checks. The server _must_ also be running in development mode or otherwise the
+        # bypass fails.
+        google_order_id:      str = 'DEV.' + os.urandom(8).hex()
 
         hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
@@ -65,6 +72,13 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
 
     if add_pro_payment_example_with_apple: # apple
         apple_enum       = 2                            # equivalent to => int(base.PaymentProvider.iOSAppStore.value)
+
+        # To register a payment directly without getting a google or apple notification from their
+        # app store (e.g. for testing on the development server and without connecting to their
+        # stores) you _have_ to submit an order ID that is prefixed with 'DEV.' for the payment to
+        # proceed. All other order IDs are rejected. This informs the server to bypasses the app
+        # store checks. The server _must_ also be running in development mode or otherwise the
+        # bypass fails.
         apple_tx_id: str = 'DEV.' + os.urandom(8).hex() # For the tx id, anything is accepted on a development server
 
         hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
