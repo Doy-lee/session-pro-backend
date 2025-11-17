@@ -1659,7 +1659,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
     # would allow someone to register arbitrary Session Pro subscriptions
     # without a valid payment.
     THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool = False
-    if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV') or payment_tx.apple_tx_id.startswith('DEV')):
+    if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV.') or payment_tx.apple_tx_id.startswith('DEV.')):
         runtime_row: RuntimeRow = get_runtime(sql_conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
