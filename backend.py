@@ -1738,29 +1738,6 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
     if len(err.msg_list) > 0:
         return result
 
-    # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
-    # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
-    # the most sensible option and binds the Session client's knowledge of their own payment and
-    # that the backend acknowledges the payment in the same step which simplifies implementation
-    # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
-    # acknowledged yet so it needs to poll the server e.t.c.
-    #
-    # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
-    # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
-    # cannot be claimed and should be re-attempted.
-    if payment_tx.provider == base.PaymentProvider.GooglePlayStore and \
-       THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
-        sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
-                                                                                                                      purchase_token=payment_tx.google_payment_token,
-                                                                                                                      err=err)
-        if not sub_data:
-            return result
-
-        if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
-            platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
-            if len(err.msg_list) > 0:
-                return result
-
     # Note being able to pass in the creation unix timestamp is mainly for
     # testing purposes to allow time-travel. User space should never be
     # specifying this argument, so clients should not be specifying this time,
@@ -1780,6 +1757,31 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                                    redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                    payment_tx          = payment_tx,
                                    err                 = err)
+
+    if result.status == RedeemPaymentStatus.Success:
+        # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
+        # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
+        # the most sensible option and binds the Session client's knowledge of their own payment and
+        # that the backend acknowledges the payment in the same step which simplifies implementation
+        # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
+        # acknowledged yet so it needs to poll the server e.t.c.
+        #
+        # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
+        # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
+        # cannot be claimed and should be re-attempted.
+        if payment_tx.provider == base.PaymentProvider.GooglePlayStore and \
+           THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
+            sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
+                                                                                                                          purchase_token=payment_tx.google_payment_token,
+                                                                                                                          err=err)
+            if not sub_data:
+                return result
+
+            if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+                platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
+                if len(err.msg_list) > 0:
+                    return result
+
     return result
 
 def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
