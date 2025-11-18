@@ -314,17 +314,18 @@ def entry_point() -> flask.Flask:
 
     # NOTE: Equip the session webhook URL if it's configured
     webhook_logger: base.AsyncSessionWebhookLogHandler | None = None
-    if len(parsed_args.session_webhook_url) > 0:
-        webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
-                                                            display_name=parsed_args.session_webhook_name)
-        webhook_logger.setLevel(logging.WARNING)
-        webhook_logger.setFormatter(log_formatter)
+    if 0:
+        if len(parsed_args.session_webhook_url) > 0:
+            webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
+                                                                display_name=parsed_args.session_webhook_name)
+            webhook_logger.setLevel(logging.WARNING)
+            webhook_logger.setFormatter(log_formatter)
 
-        # NOTE: Setup loggers (main, backend, google, apple)
-        log.addHandler(webhook_logger)
-        backend.log.addHandler(webhook_logger)
-        platform_google.log.addHandler(webhook_logger)
-        platform_apple.log.addHandler(webhook_logger)
+            # NOTE: Setup loggers (main, backend, google, apple)
+            log.addHandler(webhook_logger)
+            backend.log.addHandler(webhook_logger)
+            platform_google.log.addHandler(webhook_logger)
+            platform_apple.log.addHandler(webhook_logger)
 
     # NOTE: Ensure the path is setup for writing the database
     try:
