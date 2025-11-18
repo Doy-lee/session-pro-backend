@@ -679,6 +679,7 @@ def get_pro_revocations():
 
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
+    begin = time.perf_counter()
     with open_db_from_flask_request_context(flask.current_app) as db:
         revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
         if ticket < revocation_ticket:
@@ -694,6 +695,8 @@ def get_pro_revocations():
                         'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
                         'gen_index_hash':    gen_index_hash.hex(),
                     })
+    duration = time.perf_counter() - begin
+    flask.current_app.logger.debug(f'Get pro revocations DB operations completed in: {duration}')
 
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
