@@ -78,13 +78,10 @@ class ParsedArgs:
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
-    global proof_expiry_thread_cv
-    global proof_expiry_thread_mutex
 
     # NOTE: Wake up the thread and set the flag to terminate it
-    with proof_expiry_thread_mutex:
-        stop_proof_expiry_thread = True
-        proof_expiry_thread_cv.notify_all()
+    stop_proof_expiry_thread = True
+    proof_expiry_thread_event.set()
 
     # NOTE: Also kill the google-thread if there's one was initiated. The google thread is sleeping
     # on a condition that has a timeout that we trigger.
@@ -96,10 +93,7 @@ def signal_handler(sig: int, _frame: types.FrameType | None):
     signal.raise_signal(sig)
 
 def backend_proof_expiry_thread_entry_point(db_path: str):
-    global proof_expiry_thread_cv
-    global proof_expiry_thread_mutex
     global stop_proof_expiry_thread
-
     while not stop_proof_expiry_thread:
         start_unix_ts_s:    float = time.time()
         next_day_unix_ts_s: float = base.round_unix_ts_ms_to_next_day(int(start_unix_ts_s * 1000)) / 1000.0
@@ -110,8 +104,7 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
         while sleep_time_s > 0 and not stop_proof_expiry_thread:
             assert sleep_time_s <= base.SECONDS_IN_DAY
             log.info(f'Sleeping for {base.format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
-            with proof_expiry_thread_mutex:
-                _ = proof_expiry_thread_cv.wait(timeout=sleep_time_s)
+            _ = proof_expiry_thread_event.wait(timeout=sleep_time_s)
             sleep_time_s = next_day_unix_ts_s - int(time.time())
 
         # We only reach here if the sleep time has elapsed OR woken up. If sleep time has elapsed,
@@ -285,12 +278,11 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
 
 def entry_point() -> flask.Flask:
     log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+    console_logger = logging.StreamHandler()
+    file_logger    = logging.handlers.RotatingFileHandler(filename='session_backend_pro.log', maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
+    console_logger.setFormatter(log_formatter)
+    file_logger.setFormatter(log_formatter)
     if 1: # NOTE: Setup logger
-        console_logger = logging.StreamHandler()
-        file_logger    = logging.handlers.RotatingFileHandler(filename='session_backend_pro.log', maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
-
-        console_logger.setFormatter(log_formatter)
-        file_logger.setFormatter(log_formatter)
 
         # NOTE: Equip handlers
         log.addHandler(console_logger)
@@ -505,6 +497,11 @@ def entry_point() -> flask.Flask:
                                       db_path_is_uri=parsed_args.db_path_is_uri,
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
 
+    # NOTE: Add flask to our global logger
+    if 1:
+        flask.current_app.logger.addHandler(console_logger)
+        flask.current_app.logger.addHandler(file_logger)
+
     # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
     # contact the endpoint when a notification is generated.
     if parsed_args.with_platform_apple:
@@ -545,6 +542,5 @@ def entry_point() -> flask.Flask:
 
 # Flask entry point
 stop_proof_expiry_thread  = False
-proof_expiry_thread_mutex = threading.Lock()
-proof_expiry_thread_cv    = threading.Condition(proof_expiry_thread_mutex)
+proof_expiry_thread_event = threading.Event()
 flask_app: flask.Flask    = entry_point()
