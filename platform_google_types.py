@@ -15,10 +15,11 @@ import base
 # RFC 3339, where generated output will always be Z-normalized and use 0, 3, 6 or 9 fractional
 # digits. Offsets other than "Z" are also accepted. Examples: "2014-10-02T15:01:23Z",
 # "2014-10-02T15:01:23.045123456Z" or "2014-10-02T15:01:23+05:30".
+@dataclasses.dataclass
 class GoogleTimestamp(Timestamp):
-    rfc3339: str
-    unix_milliseconds: int
-    unix_seconds: int
+    rfc3339:           str = ''
+    unix_milliseconds: int = 0
+    unix_seconds:      int = 0
 
     def __init__(self, rfc3339_timestamp: str, err: base.ErrorSink):
         self.rfc3339 = rfc3339_timestamp
@@ -410,15 +411,15 @@ class SubscriptionV2DataLineItem:
 class SubscriptionV2Data:
     """Status of a user's subscription purchase."""
     # This kind represents a SubscriptionPurchaseV2 object in the androidpublisher service.
-    kind: str
+    kind: str = ''
 
     # Item-level info for a subscription purchase. The items in the same purchase should be either all with AutoRenewingPlan or all with PrepaidPlan.
-    line_items: list[SubscriptionV2DataLineItem]
+    line_items: list[SubscriptionV2DataLineItem] = dataclasses.field(default_factory=list)
 
     # Time at which the subscription was granted. Not set for pending subscriptions (subscription
     # was created but awaiting payment during signup).
-    start_time:             GoogleTimestamp
-    subscription_state:     SubscriptionsV2SubscriptionStateType
+    start_time:             GoogleTimestamp | None               = None
+    subscription_state:     SubscriptionsV2SubscriptionStateType = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
 
     # The purchase token of the old subscription if this subscription is one of the following:
     # - Re-signup of a canceled but non-lapsed subscription 
@@ -426,18 +427,18 @@ class SubscriptionV2Data:
     # - Convert from prepaid to auto renewing subscription.
     # - Convert from an auto renewing subscription to prepaid.
     # - Topup a prepaid subscription.
-    linked_purchase_token:  str | None
+    linked_purchase_token:  str | None = None
 
     # Paused metadata, set if `subscription_state` is `SUBSCRIPTION_STATE_PAUSED`
-    paused_state_context:   SubscriptionsV2SubscriptionPausedStateContext | None
+    paused_state_context:   SubscriptionsV2SubscriptionPausedStateContext | None = None
 
     # Cancel metaddata, set if `subscription_state` is `SUBSCRIPTION_STATE_CANCELED` or
     # `SUBSCRIPTION_STATE_EXPIRED`.
-    canceled_state_context: SubscriptionsV2SubscriptionCanceledStateContext | None
+    canceled_state_context: SubscriptionsV2SubscriptionCanceledStateContext | None = None
 
-    test_purchase:          bool # Set if this subscription purchase is a test purchase
+    test_purchase:          bool = False # Set if this subscription purchase is a test purchase
 
-    acknowledgement_state:  SubscriptionsV2SubscriptionAcknowledgementStateType
+    acknowledgement_state:  SubscriptionsV2SubscriptionAcknowledgementStateType = SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_UNSPECIFIED
 
 @dataclasses.dataclass
 class Monetizationv3SubscriptionData:

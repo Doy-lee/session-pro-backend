@@ -27,6 +27,7 @@ import traceback
 
 import platform_google
 import platform_google_api
+import platform_google_types
 from platform_google_types import GoogleDuration, SubscriptionProductDetails 
 from vendor import onion_req
 import backend
@@ -107,6 +108,12 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         lambda *args, **kwargs: None
     )
 
+    dummy_sub_v2_data = platform_google_types.SubscriptionV2Data()
+    monkeypatch.setattr(
+        "platform_google_api.fetch_subscription_v2_details",
+        lambda *args, **kwargs: dummy_sub_v2_data
+    )
+
     # Test that the user's subscription stacks if they purchase two subscription with different
     # payment tokens.
 
@@ -135,14 +142,14 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
 
     scenarios: list[Scenario] = [
         Scenario(google_payment_token     = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  plan                     = base.ProPlan.OneMonth,
                  expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
                  grace_period_duration_ms = 0,
                  payment_provider         = base.PaymentProvider.GooglePlayStore),
 
         Scenario(google_payment_token     = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
-                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  plan                     = base.ProPlan.TwelveMonth,
                  expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
                  grace_period_duration_ms = 0,
@@ -338,13 +345,13 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     auto_redeem_user_rotating_key: nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
     auto_redeem_scenarios:         list[Scenario]          = [
         Scenario(google_payment_token     = auto_redeem_google_payment_token,
-                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  plan                     = base.ProPlan.OneMonth,
                  expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((30 * base.SECONDS_IN_DAY) * 1000),
                  grace_period_duration_ms = 0,
                  payment_provider         = base.PaymentProvider.GooglePlayStore),
         Scenario(google_payment_token     = auto_redeem_google_payment_token,
-                 google_order_id          = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
+                 google_order_id          = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex(),
                  plan                     = base.ProPlan.TwelveMonth,
                  expiry_unix_ts_ms        = redeemed_unix_ts_ms + ((31 * base.SECONDS_IN_DAY) * 1000),
                  grace_period_duration_ms = 0,
@@ -439,6 +446,13 @@ def test_server_add_payment_flow(monkeypatch):
         lambda *args, **kwargs: None
     )
 
+    dummy_sub_v2_data = platform_google_types.SubscriptionV2Data()
+    monkeypatch.setattr(
+        "platform_google_api.fetch_subscription_v2_details",
+        lambda *args, **kwargs: dummy_sub_v2_data
+    )
+
+
     # Setup DB
     err                       = base.ErrorSink()
     db: backend.SetupDBResult = backend.setup_db(path='file:test_server_db?mode=memory&cache=shared', uri=True, err=err)
@@ -467,7 +481,7 @@ def test_server_add_payment_flow(monkeypatch):
     payment_tx                      = base.PaymentProviderTransaction()
     payment_tx.provider             = base.PaymentProvider.GooglePlayStore
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    payment_tx.google_order_id      = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
+    payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                    payment_tx=payment_tx,
                                    plan=base.ProPlan.OneMonth,
@@ -665,7 +679,7 @@ def test_server_add_payment_flow(monkeypatch):
         new_payment_tx                      = base.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
-        new_payment_tx.google_order_id      = os.urandom(len(payment_tx.google_payment_token)).hex()
+        new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
         backend.add_unredeemed_payment(sql_conn=db.sql_conn,
                                        payment_tx=new_payment_tx,
                                        plan=base.ProPlan.OneMonth,
