@@ -689,6 +689,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         try:
             # NOTE: Bootstrap tables
             _ = tx.cursor.executescript(sql_stmt)
+            _ = tx.cursor.execute('''PRAGMA journal_mode=WAL''')
 
             # NOTE: Version migration
             if 1:
