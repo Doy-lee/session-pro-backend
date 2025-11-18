@@ -12,6 +12,7 @@ import logging
 import enum
 
 import platform_google_api
+import platform_google_types
 import base
 
 ZERO_BYTES32        = bytes(32)
@@ -1748,9 +1749,16 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
     # cannot be claimed and should be re-attempted.
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore and \
        THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
-        platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
-        if len(err.msg_list) > 0:
+        sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
+                                                                                                                      purchase_token=payment_tx.google_payment_token,
+                                                                                                                      err=err)
+        if not sub_data:
             return result
+
+        if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+            platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
+            if len(err.msg_list) > 0:
+                return result
 
     # Note being able to pass in the creation unix timestamp is mainly for
     # testing purposes to allow time-travel. User space should never be
