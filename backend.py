@@ -2060,7 +2060,7 @@ def apple_notification_uuid_is_in_db_tx(tx: base.SQLTransaction, uuid: str) -> b
             FROM   apple_notification_uuid_history
             WHERE  uuid = ?
     ''', (uuid,))
-    result = tx.cursor.rowcount > 0
+    result = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
     return result
 
 def set_apple_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkpoint_unix_ts_ms: int):
