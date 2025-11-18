@@ -498,9 +498,8 @@ def entry_point() -> flask.Flask:
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
 
     # NOTE: Add flask to our global logger
-    if 1:
-        flask.current_app.logger.addHandler(console_logger)
-        flask.current_app.logger.addHandler(file_logger)
+    result.logger.addHandler(console_logger)
+    result.logger.addHandler(file_logger)
 
     # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
     # contact the endpoint when a notification is generated.
