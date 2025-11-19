@@ -343,18 +343,18 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
                     if value is None:
                         content.append(str(value))
                     elif isinstance(value, bytes):
-                        looks_like_ascii = True
-                        for it in value:
-                            if not (it >= 32 and it <= 126):
-                                looks_like_ascii = False
-                                break
+                        try:
+                            text = value.decode('utf-8');
+                            text = text.replace('\n', '')
+                            text = text.replace('\r', '')
+                            text = text.replace('\t', '')
 
-                        if looks_like_ascii:
-                            if len(value) > 128:
-                                content.append(str(value[:128]) + f'... ({len(value)})')
+                            print_limit = 128
+                            if len(text) > print_limit:
+                                content.append(str(text[:print_limit]) + f'...({len(value)})')
                             else:
-                                content.append(str(value))
-                        else:
+                                content.append(str(text))
+                        except Exception:
                             content.append(value.hex())
                     elif col.endswith('unix_ts_ms'):
                         content.append(readable_unix_ts_ms(int(value)))
