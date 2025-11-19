@@ -20,6 +20,11 @@ BLAKE2B_DIGEST_SIZE = 32
 log                 = logging.Logger("BACKEND")
 
 @dataclasses.dataclass
+class GoogleNotificationMessageIDInDB:
+    present: bool = False
+    handled: bool = False
+
+@dataclasses.dataclass
 class ExpireResult:
     already_done_by_someone_else:    bool = False
     success:                         bool = False
@@ -2149,9 +2154,13 @@ def google_get_unhandled_notification_iterator(tx: base.SQLTransaction) -> colle
     result = typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], tx.cursor)
     return result
 
-def google_notification_message_id_is_in_db_tx(tx: base.SQLTransaction, message_id: int) -> bool:
+def google_notification_message_id_is_in_db_tx(tx: base.SQLTransaction, message_id: int) -> GoogleNotificationMessageIDInDB:
     assert tx.cursor
-    _      = tx.cursor.execute(f'''SELECT 1 FROM google_notification_history WHERE message_id = ?''', (message_id,))
+    _      = tx.cursor.execute(f'''SELECT handled FROM google_notification_history WHERE message_id = ?''', (message_id,))
     row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
     result = row is not None
+    result = GoogleNotificationMessageIDInDB()
+    if row is not None:
+        result.present = True
+        result.handled = row[0] > 0 # NOTE: Should always be 0 or 1 but we'll be extra careful
     return result

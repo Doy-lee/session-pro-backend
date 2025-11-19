@@ -239,7 +239,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                         with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
                             with base.SQLTransaction(db.sql_conn) as tx:
-                                if not backend.google_notification_message_id_is_in_db_tx(tx, message_id):
+                                if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
                                     # NOTE: Our message retention policy for this subscription is 7 days
                                     # (default). We add a little buffer as we don't know exactly which
                                     # timestamp Google uses.
@@ -252,7 +252,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     backend.google_add_notification_id_tx(tx                = tx,
                                                                           message_id        = message_id,
                                                                           expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
-                                                                          payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it).encode())
+                                                                          payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
 
                 # NOTE: Sort the messages we've added
                 if len(result.received_messages):
@@ -267,9 +267,23 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     msg:     SortedMessage = sorted_msg_list[index]
                     attempt: bool          = now > msg.next_retry_unix_ts_s
                     handled: bool          = False
+
+                    # NOTE: Attempt to process the message. Just before we execute it, we also check
+                    # that it hasn't been handled in the DB already. It's possible that someone
+                    # out-of-band executed the SET_GOOGLE_NOTIFICATION command via environment/.ini
+                    # file to mark a message as being done or handled so we check before proceeding.
                     if attempt:
                         with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                            handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
+                            with base.SQLTransaction(db.sql_conn) as tx:
+                                # NOTE: By definition to be in the sorted list, the message must
+                                # have also been submitted into the DB. So if for some reason the
+                                # notification doesn't exist anymore (maybe someone deleted it
+                                # out-of-band) then we skip the notification.
+                                lookup: backend.GoogleNotificationMessageIDInDB = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+                                if lookup.present and lookup.handled:
+                                    handled = True
+                                else:
+                                    handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
 
                     # NOTE: On success, we remove the message and add it to the acknowledge list
                     # (to stop Google resending it), or otherwise configure an exponential back-off
@@ -307,7 +321,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                             with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
                                 with base.SQLTransaction(db.sql_conn) as tx:
-                                    backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
+                                    _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
                         else:
                             if not user_is_in_error_state:
                                 user_error                      = backend.UserError()
