@@ -274,16 +274,18 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     # file to mark a message as being done or handled so we check before proceeding.
                     if attempt:
                         with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                            lookup = backend.GoogleNotificationMessageIDInDB()
                             with base.SQLTransaction(db.sql_conn) as tx:
                                 # NOTE: By definition to be in the sorted list, the message must
                                 # have also been submitted into the DB. So if for some reason the
                                 # notification doesn't exist anymore (maybe someone deleted it
                                 # out-of-band) then we skip the notification.
-                                lookup: backend.GoogleNotificationMessageIDInDB = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
-                                if lookup.present and lookup.handled:
-                                    handled = True
-                                else:
-                                    handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
+                                lookup = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+
+                            if lookup.present and lookup.handled:
+                                handled = True
+                            else:
+                                handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
 
                     # NOTE: On success, we remove the message and add it to the acknowledge list
                     # (to stop Google resending it), or otherwise configure an exponential back-off
