@@ -19,6 +19,7 @@ from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
 import google.pubsub_v1.types
 import googleapiclient.discovery
+import google.api_core.exceptions
 
 import backend
 import base
@@ -144,8 +145,8 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
         with base.SQLTransaction(db.sql_conn) as tx:
             db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
             for row in db_it:
-                message_id            = row[0]
-                payload: bytes | None = row[1]
+                message_id          = row[0]
+                payload: str | None = row[1]
                 if not payload:
                     continue
 
@@ -318,7 +319,17 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                 # NOTE: Acknowledge the messages we handled successfully to stop Google from
                 # resending it to us
                 if len(ack_ids):
-                    client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
+                    try:
+                        client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
+                    except google.api_core.exceptions.InvalidArgument:
+                        # NOTE: Ignore double-ack, especially if the notification we had was very
+                        # old and we only got around to completing it now rather than when it was
+                        # still ackable
+                        #
+                        #  InvalidArgument: 400 Some acknowledgement ids in the request were
+                        # invalid. This could be because the acknowledgement ids have expired or the
+                        # acknowledgement ids were malformed. [reason: "EXACTLY_ONCE_ACKID_FAILURE"
+                        pass
 
                 if not context.kill_thread:
                     _ = context.sleep_event.wait(POLL_FREQUENCY_S)

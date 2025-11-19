@@ -145,9 +145,9 @@ AddRevocationIterator:             typing.TypeAlias = tuple[int,          # (row
                                                             bytes | None, # master_pkey
                                                             int]          # expiry_unix_ts_ms
 
-GoogleUnhandledNotificationIterator: typing.TypeAlias = tuple[int,          # message_id
-                                                              bytes | None, # payload
-                                                              int]          # expiry_unix_ts_ms
+GoogleUnhandledNotificationIterator: typing.TypeAlias = tuple[int,        # message_id
+                                                              str | None, # payload
+                                                              int]        # expiry_unix_ts_ms
 
 
 @dataclasses.dataclass
@@ -575,7 +575,6 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         return result
 
     with base.SQLTransaction(result.sql_conn) as tx:
-        target_db_version = 2
         sql_stmt: str = f'''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY NOT NULL,
@@ -690,7 +689,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             CREATE TABLE IF NOT EXISTS google_notification_history (
                 message_id        INTEGER NOT NULL,
                 handled           INTEGER NOT NULL,
-                payload           BLOB,
+                payload           TEXT,
                 expiry_unix_ts_ms INTEGER NOT NULL
             );
 
@@ -724,6 +723,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             _ = tx.cursor.execute('''PRAGMA journal_mode=WAL''')
 
             # NOTE: Version migration
+            target_db_version = 3
             if 1:
                 db_version: int = tx.cursor.execute('PRAGMA user_version').fetchone()[0]  # pyright: ignore[reportAny]
 
@@ -747,6 +747,21 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                     ''')
                     db_version += 1 # NOTE: Bump the version
                     _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
+                if db_version == 2:
+                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                    _ = tx.cursor.executescript('''
+                        DROP TABLE google_notification_history;
+                        CREATE TABLE IF NOT EXISTS google_notification_history (
+                            message_id        INTEGER NOT NULL,
+                            handled           INTEGER NOT NULL,
+                            payload           TEXT,
+                            expiry_unix_ts_ms INTEGER NOT NULL
+                        );
+                    ''')
+                    db_version += 3 # NOTE: Bump the version
+                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
 
 
                 # NOTE: Verify that the DB was migrated to the target version
@@ -2107,10 +2122,10 @@ def apple_set_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkp
             SET    apple_notification_checkpoint_unix_ts_ms = ?
     ''', (checkpoint_unix_ts_ms,))
 
-def google_add_notification_id_tx(tx: base.SQLTransaction, message_id: int, expiry_unix_ts_ms: int, payload: bytes):
+def google_add_notification_id_tx(tx: base.SQLTransaction, message_id: int, expiry_unix_ts_ms: int, payload: str):
     assert tx.cursor
 
-    maybe_payload: bytes | None = None
+    maybe_payload: str | None = None
     if len(payload):
         maybe_payload = payload
 
