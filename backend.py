@@ -759,7 +759,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                             expiry_unix_ts_ms INTEGER NOT NULL
                         );
                     ''')
-                    db_version += 3 # NOTE: Bump the version
+                    db_version += 1 # NOTE: Bump the version
                     _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
 
 
