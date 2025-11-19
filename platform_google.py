@@ -284,7 +284,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             # for the out-of-order messages that this message is dependent on to arrive,
                             # get sorted into order and then executed successfully.
                             msg.curr_retry_delay_s    = max(msg.curr_retry_delay_s, MIN_RETRY_DELAY_S)
-                            msg.curr_retry_delay_s   *= 1.5
+                            msg.curr_retry_delay_s   *= 2
                             msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
                             msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
                             log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
