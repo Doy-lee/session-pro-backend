@@ -162,6 +162,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                                      raw                = raw_msg))
 
     # NOTE: Then connect to Google and start pulling messages
+    log.info(f'Loaded {len(sorted_msg_list)} unhandled messages from the DB')
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
             sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
@@ -222,7 +223,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     parse:        ParsedNotification = parse_notification(message_data, err);
                     message_id:   int                = int(it.message.message_id)
                     if err.has():
-                        log.warning(f'Discarding message #{index} because we encountered an error parsing it. Message was:\n{it}\nReason was:\n{err.build()}')
+                        log.warning(f'Discarding message #{index} because we encountered an error parsing it (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
                     else:
                         is_new_message = True
                         for sort_it in sorted_msg_list:
@@ -303,7 +304,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             msg.curr_retry_delay_s   *= 2
                             msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
                             msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
-                            log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
+                            log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{msg.raw}')
 
                     # NOTE: Additionally, clear or mark the payment token from the error table if it
                     # needs to be updated
