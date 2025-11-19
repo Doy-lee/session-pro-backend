@@ -351,11 +351,25 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
 
                             print_limit = 128
                             if len(text) > print_limit:
+                                print("woah nelly")
                                 content.append(str(text[:print_limit]) + f'...({len(value)})')
                             else:
                                 content.append(str(text))
                         except Exception:
                             content.append(value.hex())
+                    elif isinstance(value, str):
+                        try:
+                            text = value.replace('\n', '')
+                            text = text.replace('\r', '')
+                            text = text.replace('\t', '')
+
+                            print_limit = 128
+                            if len(text) > print_limit:
+                                content.append(str(text[:print_limit]) + f'...({len(value)})')
+                            else:
+                                content.append(str(text))
+                        except Exception:
+                            content.append(str(value))
                     elif col.endswith('unix_ts_ms'):
                         content.append(readable_unix_ts_ms(int(value)))
                     elif col.endswith('_s'):
