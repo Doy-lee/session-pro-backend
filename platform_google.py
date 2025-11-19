@@ -252,7 +252,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     backend.google_add_notification_id_tx(tx                = tx,
                                                                           message_id        = message_id,
                                                                           expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
-                                                                          payload           = it.to_json)
+                                                                          payload           = it.to_json())
 
                 # NOTE: Sort the messages we've added
                 if len(result.received_messages):
