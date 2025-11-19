@@ -534,25 +534,37 @@ def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
     return result;
 
 def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSink) -> str:
-    unredeemed_payments = 0
-    payments            = 0
-    users               = 0
-    revocations         = 0
-    db_size             = 0
+    unredeemed_payments             = 0
+    payments                        = 0
+    users                           = 0
+    revocations                     = 0
+    db_size                         = 0
+    user_errors                     = 0
+    apple_notification_uuid_history = 0
+    google_notification_history     = 0
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
         try:
-            _                   = tx.cursor.execute('SELECT COUNT(*) FROM payments WHERE status = ?', (int(base.PaymentStatus.Unredeemed.value),))
-            unredeemed_payments = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM payments WHERE status = ?', (int(base.PaymentStatus.Unredeemed.value),))
+            unredeemed_payments             = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
-            _                   = tx.cursor.execute('SELECT COUNT(*) FROM payments')
-            payments            = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM payments')
+            payments                        = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
-            _                   = tx.cursor.execute('SELECT COUNT(*) FROM users')
-            users               = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM users')
+            users                           = typing.cast(tuple[int], tx.cursor.fetchone())[0];
 
-            _                   = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
-            revocations         = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
+            revocations                     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM user_errors')
+            user_errors                     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM apple_notification_uuid_history')
+            apple_notification_uuid_history = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+
+            _                               = tx.cursor.execute('SELECT COUNT(*) FROM google_notification_history')
+            google_notification_history     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
         except Exception as e:
             err.msg_list.append(f"Failed to retrieve DB metadata: {e}")
 
@@ -564,6 +576,7 @@ def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSi
         result = (
             '  DB:                               {} ({})\n'.format(db_path, base.format_bytes(db_size)) +
             '  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}\n'.format(users, revocations, payments, unredeemed_payments) +
+            '  U.Errors/Google/Apple Notifs.:    {}/{}/{}\n'.format(user_errors, google_notification_history, apple_notification_uuid_history) +
             '  Gen Index:                        {}\n'.format(runtime.gen_index) +
             '  Backend Key:                      {}'.format(bytes(runtime.backend_key.verify_key).hex())
         )
