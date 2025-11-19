@@ -112,6 +112,29 @@ unsafe_logging               = false
 # user should contact support, hence clearing this value may clear the error prompt for said user.
 set_user_errors              =
 
+# A ',' delimited string to instruct the DB to mark the specified rows as handled or delete the rows
+# from the google notification history table in the DB on startup. This value must be of the format
+#
+#   "<message_id>=[handled|deleted], ..."
+#
+# For example
+#
+#   "12345=deleted,8392=handled"
+#
+# Which will delete the row with a message ID of 12345 and mark the row with the message ID of 8392
+# to being handled (which stops the backend from trying to process the message). Note that when you
+# handle a message, this also wipes the notification payload from the table (since the backend does
+# not need to parse and process the message anymore).
+#
+# Handled notifications will get deleted at the expiry date and persist in the database just incase
+# Google redelivers the notification. Duplicated notifiations are de-duped by their message ID.
+#
+# Similarly, keep this as an empty string to opt out. This is intended to flush out bad
+# notifications that may be invalid or no longer necessary to process/impossible to process due to
+# inconsistent DB state, otherwise, do not use unless you know the intended consequences! Make a
+# backup of the DB before proceeding!
+set_google_notification      = <command...>
+
 # Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime
 session_webhook_url          = <url...>
 
@@ -163,15 +186,16 @@ can only be specified as an environment variable.
 SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
 
 # For the following options, see the .INI section for more information
-SESH_PRO_BACKEND_DB_PATH              = [0|1]
-SESH_PRO_BACKEND_DB_PATH_IS_URI       = [0|1]
-SESH_PRO_BACKEND_PRINT_TABLES         = [0|1]
-SESH_PRO_BACKEND_DEV                  = [0|1]
-SESH_PRO_BACKEND_WITH_PLATFORM_APPLE  = [0|1]
-SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE = [0|1]
-SESH_PRO_BACKEND_SET_USER_ERRORS      = <...>
-SESH_PRO_BACKEND_WEBHOOK_URL          = https://...
-SESH_PRO_BACKEND_WEBHOOK_NAME         = Session Pro Backend Dev
+SESH_PRO_BACKEND_DB_PATH                 = [0|1]
+SESH_PRO_BACKEND_DB_PATH_IS_URI          = [0|1]
+SESH_PRO_BACKEND_PRINT_TABLES            = [0|1]
+SESH_PRO_BACKEND_DEV                     = [0|1]
+SESH_PRO_BACKEND_WITH_PLATFORM_APPLE     = [0|1]
+SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE    = [0|1]
+SESH_PRO_BACKEND_SET_USER_ERRORS         = <...>
+SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION = <...>
+SESH_PRO_BACKEND_WEBHOOK_URL             = https://...
+SESH_PRO_BACKEND_WEBHOOK_NAME            = Session Pro Backend Dev
 ```
 
 ## Build and run

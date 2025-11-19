@@ -307,7 +307,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                             with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
                                 with base.SQLTransaction(db.sql_conn) as tx:
-                                    backend.google_set_notification_handled_and_wipe_payload(tx=tx, message_id=msg.message_id)
+                                    backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
                         else:
                             if not user_is_in_error_state:
                                 user_error                      = backend.UserError()

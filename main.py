@@ -26,6 +26,7 @@ import logging.handlers
 import configparser
 import sys
 import dataclasses
+import enum
 
 import base
 import backend
@@ -42,39 +43,50 @@ class SetUserErrorItem:
     payment_id:       str
     set_flag:         bool
 
+class SetGoogleNotificationCommand(enum.Enum):
+    Handled = 0
+    Delete  = 1
+
+@dataclasses.dataclass
+class SetGoogleNotificationItem:
+    message_id: int
+    command:    SetGoogleNotificationCommand
+
 @dataclasses.dataclass
 class ParsedArgs:
-    ini_path:                            str                    = ''
-    db_path:                             str                    = ''
-    db_path_is_uri:                      bool                   = False
-    print_tables:                        bool                   = False
-    dev:                                 bool                   = False
-    unsafe_logging:                      bool                   = False
-    with_platform_apple:                 bool                   = False
-    with_platform_google:                bool                   = False
-    platform_testing_env:                bool                   = False
-    set_user_errors:                     str                    = ''
-    parsed_set_user_errors:              list[SetUserErrorItem] = dataclasses.field(default_factory=list)
-    session_webhook_url:                 str                    = ''
-    session_webhook_name:                str                    = ''
+    ini_path:                            str                             = ''
+    db_path:                             str                             = ''
+    db_path_is_uri:                      bool                            = False
+    print_tables:                        bool                            = False
+    dev:                                 bool                            = False
+    unsafe_logging:                      bool                            = False
+    with_platform_apple:                 bool                            = False
+    with_platform_google:                bool                            = False
+    platform_testing_env:                bool                            = False
+    set_user_errors:                     str                             = ''
+    parsed_set_user_errors:              list[SetUserErrorItem]          = dataclasses.field(default_factory=list)
+    set_google_notification:             str                             = ''
+    parsed_set_google_notification:      list[SetGoogleNotificationItem] = dataclasses.field(default_factory=list)
+    session_webhook_url:                 str                             = ''
+    session_webhook_name:                str                             = ''
 
-    apple_key_id:                        str                    = ''
-    apple_issuer_id:                     str                    = ''
-    apple_bundle_id:                     str                    = ''
-    apple_key_path:                      str                    = ''
-    apple_root_cert_path:                str                    = ''
-    apple_root_cert_ca_g2_path:          str                    = ''
-    apple_root_cert_ca_g3_path:          str                    = ''
-    apple_key:                           bytes                  = b''
-    apple_root_certs:                    list[bytes]            = dataclasses.field(default_factory=list)
-    apple_sandbox_env:                   bool                   = False
-    apple_production_app_id:             int | None             = None
+    apple_key_id:                        str                             = ''
+    apple_issuer_id:                     str                             = ''
+    apple_bundle_id:                     str                             = ''
+    apple_key_path:                      str                             = ''
+    apple_root_cert_path:                str                             = ''
+    apple_root_cert_ca_g2_path:          str                             = ''
+    apple_root_cert_ca_g3_path:          str                             = ''
+    apple_key:                           bytes                           = b''
+    apple_root_certs:                    list[bytes]                     = dataclasses.field(default_factory=list)
+    apple_sandbox_env:                   bool                            = False
+    apple_production_app_id:             int | None                      = None
 
-    google_package_name:                 str                    = ''
-    google_application_credentials_path: str                    = ''
-    google_project_name:                 str                    = ''
-    google_subscription_name:            str                    = ''
-    google_subscription_product_id:      str                    = ''
+    google_package_name:                 str                             = ''
+    google_application_credentials_path: str                             = ''
+    google_project_name:                 str                             = ''
+    google_subscription_name:            str                             = ''
+    google_subscription_product_id:      str                             = ''
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_proof_expiry_thread
@@ -162,6 +174,39 @@ def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserError
         result.append(SetUserErrorItem(payment_provider=payment_provider, payment_id=payment_id, set_flag=set_flag))
     return result
 
+def parse_set_google_notification_item_arg(arg: str, err: base.ErrorSink) -> list[SetGoogleNotificationItem]:
+    """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
+    result: list[SetGoogleNotificationItem] = []
+    if len(arg) == 0:
+        return result
+
+    for item in arg.split(','):
+        item = item.strip()
+        if '=' not in item:
+            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<message_id>=[handled|delete]'.")
+            return result
+        message_id_str, command_str = item.split('=', 1)
+
+        command = SetGoogleNotificationCommand.Handled
+        if command_str.lower() == SetGoogleNotificationCommand.Handled.name.lower():
+            command = SetGoogleNotificationCommand.Handled
+        elif command_str.lower() == SetGoogleNotificationCommand.Delete.name.lower():
+            command = SetGoogleNotificationCommand.Delete
+        else:
+            err.msg_list.append(f'Failed to parse command ({command_str}) (arg was: {arg})')
+            return result
+
+        message_id: int = 0
+        try:
+            message_id = int(message_id_str)
+        except Exception:
+            err.msg_list.append(f'Failed to parse message_id as integer ({message_id}) (arg was: {arg})')
+            return result
+
+        result.append(SetGoogleNotificationItem(message_id=message_id, command=command))
+    return result
+
+
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Parse .INI file if present and get arguments for it
     result          = ParsedArgs()
@@ -184,6 +229,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.with_platform_google                = base_section.getboolean(option='with_platform_google', fallback=False)
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
         result.set_user_errors                     = base_section.get(option='set_user_errors',             fallback='')
+        result.set_google_notification             = base_section.get(option='set_google_notification',     fallback='')
         result.session_webhook_url                 = base_section.get(option='session_webhook_url',         fallback='')
         result.session_webhook_name                = base_section.get(option='session_webhook_name',        fallback='')
 
@@ -214,17 +260,19 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
                 err.msg_list.append('Platform Google was enabled but [google] section is missing')
 
     # NOTE: Get arguments from environment, they override .INI values if specified
-    result.db_path                   = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
-    result.db_path_is_uri            = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
-    result.print_tables              = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
-    result.dev                       = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
-    result.with_platform_apple       = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
-    result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
-    result.with_platform_google      = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
-    result.set_user_errors           = os.getenv('SESH_PRO_BACKEND_SET_USER_ERRORS',                    result.set_user_errors)
-    result.parsed_set_user_errors    = parse_set_user_error_arg(result.set_user_errors, err)
-    result.session_webhook_url       = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_URL',                result.session_webhook_url)
-    result.session_webhook_name      = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME',               result.session_webhook_name)
+    result.db_path                        = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
+    result.db_path_is_uri                 = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
+    result.print_tables                   = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
+    result.dev                            = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
+    result.with_platform_apple            = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
+    result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
+    result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
+    result.set_user_errors                = os.getenv('SESH_PRO_BACKEND_SET_USER_ERRORS',                    result.set_user_errors)
+    result.parsed_set_user_errors         = parse_set_user_error_arg(result.set_user_errors, err)
+    result.set_google_notification        = os.getenv('SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION',            result.set_google_notification)
+    result.parsed_set_google_notification = parse_set_google_notification_item_arg(result.set_google_notification, err)
+    result.session_webhook_url            = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_URL',                result.session_webhook_url)
+    result.session_webhook_name           = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME',               result.session_webhook_name)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -404,39 +452,61 @@ def entry_point() -> flask.Flask:
         sys.exit(1)
 
     # NOTE: Delete user errors if there were some specified
-    if len(parsed_args.parsed_set_user_errors) > 0:
-        count = 0
-        label = ''
-        for index, it in enumerate(parsed_args.parsed_set_user_errors):
-            if index:
-                label += f'\n'
-            label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
-            if it.set_flag:
-                error = backend.UserError(provider=it.payment_provider)
-                if it.payment_provider == base.PaymentProvider.GooglePlayStore:
-                    error.google_payment_token = it.payment_id
-                else:
-                    assert it.payment_provider == base.PaymentProvider.iOSAppStore
-                    error.apple_original_tx_id = it.payment_id
+    if len(parsed_args.parsed_set_user_errors) > 0 or len(parsed_args.parsed_set_google_notification) > 0:
+        if len(parsed_args.parsed_set_user_errors) > 0:
+            count = 0
+            label = ''
+            for index, it in enumerate(parsed_args.parsed_set_user_errors):
+                if index:
+                    label += f'\n'
+                label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
+                if it.set_flag:
+                    error = backend.UserError(provider=it.payment_provider)
+                    if it.payment_provider == base.PaymentProvider.GooglePlayStore:
+                        error.google_payment_token = it.payment_id
+                    else:
+                        assert it.payment_provider == base.PaymentProvider.iOSAppStore
+                        error.apple_original_tx_id = it.payment_id
 
-                if backend.has_user_error(sql_conn=db.sql_conn,
-                                          payment_provider=it.payment_provider,
-                                          payment_id=it.payment_id):
-                    label += f' (skipped)'
+                    if backend.has_user_error(sql_conn=db.sql_conn,
+                                              payment_provider=it.payment_provider,
+                                              payment_id=it.payment_id):
+                        label += f' (skipped)'
+                    else:
+                        backend.add_user_error(sql_conn = db.sql_conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                        count +=1
+                        label += f' (added)'
                 else:
-                    backend.add_user_error(sql_conn = db.sql_conn, error=error, unix_ts_ms=int(time.time() * 1000))
-                    count +=1
-                    label += f' (added)'
-            else:
-                if backend.delete_user_errors(sql_conn         = db.sql_conn,
-                                              payment_provider = it.payment_provider,
-                                              payment_id       = it.payment_id):
-                    count +=1
-                    label += f' (deleted)'
-                else:
-                    label += f' (skipped)'
+                    if backend.delete_user_errors(sql_conn         = db.sql_conn,
+                                                  payment_provider = it.payment_provider,
+                                                  payment_id       = it.payment_id):
+                        count +=1
+                        label += f' (deleted)'
+                    else:
+                        label += f' (skipped)'
 
-        log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
+            log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
+
+        if len(parsed_args.parsed_set_google_notification) > 0:
+            count = 0
+            label = ''
+            for index, it in enumerate(parsed_args.parsed_set_google_notification):
+                if index:
+                    label += f'\n'
+                label += f'  {index:02d} {it.message_id} = {it.command.name}'
+
+                with base.SQLTransaction(db.sql_conn) as tx:
+                    delete:  bool = it.command == SetGoogleNotificationCommand.Delete
+                    updated: bool = backend.google_set_notification_handled(tx         = tx,
+                                                                            message_id = it.message_id,
+                                                                            delete     = delete)
+                    if updated:
+                        count += 1
+                    else:
+                        label += f' (skipped)'
+
+            log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
+
         sys.exit(1)
 
     # NOTE: Running the application just in Flask (e.g. local development) we

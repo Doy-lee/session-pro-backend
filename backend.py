@@ -2134,9 +2134,14 @@ def google_add_notification_id_tx(tx: base.SQLTransaction, message_id: int, expi
             VALUES      (?, 0, ?, ?)
     ''', (message_id, maybe_payload, expiry_unix_ts_ms))
 
-def google_set_notification_handled_and_wipe_payload(tx: base.SQLTransaction, message_id: int):
+def google_set_notification_handled(tx: base.SQLTransaction, message_id: int, delete: bool) -> bool:
     assert tx.cursor
-    _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = ?''', (message_id,))
+    if delete:
+        _ = tx.cursor.execute(f'''DELETE FROM google_notification_history WHERE message_id = ?''', (message_id,))
+    else:
+        _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = ?''', (message_id,))
+    result = tx.cursor.rowcount >= 1
+    return result
 
 def google_get_unhandled_notification_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[GoogleUnhandledNotificationIterator]:
     assert tx.cursor is not None
