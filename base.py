@@ -99,7 +99,12 @@ class ErrorSink:
     msg_list: list[str] = dataclasses.field(default_factory=list)
 
     def has(self) -> bool:
-        return len(self.msg_list) > 0
+        result = len(self.msg_list) > 0
+        return result
+
+    def build(self) -> str:
+        result = '\n  '.join(self.msg_list)
+        return result
 
 class SQLTransactionMode(enum.IntEnum):
     Default   = 0 # Acquires requisite r/w DB lock on first query

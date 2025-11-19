@@ -13,6 +13,7 @@ import dataclasses
 import typing
 import time
 import enum
+import collections.abc
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
@@ -45,18 +46,6 @@ class ThreadContext:
     kill_thread: bool                    = False
     sleep_event: threading.Event         = threading.Event()
 
-@dataclasses.dataclass
-class HandleNotificationResult:
-    purchase_token: str  = ""
-    ack:            bool = False
-
-@dataclasses.dataclass
-class TimestampedData:
-    event_unix_ts_ms:   int                              = 0
-    received_unix_ts_s: float                            = 0
-    body:               google.pubsub_v1.ReceivedMessage = dataclasses.field(default_factory=google.pubsub_v1.ReceivedMessage)
-    message_id:         int                              = 0
-
 class ParsedNotificationPayloadType(enum.Enum):
     Nil            = 0
     Subscription   = 1
@@ -74,6 +63,16 @@ class ParsedNotification:
     event_time_ms:   int                           = 0
     package_name:    str                           = ''
     purchase_token:  str                           = ''
+
+@dataclasses.dataclass
+class SortedMessage:
+    event_unix_ts_ms:     int                                           = 0
+    next_retry_unix_ts_s: float                                         = 0
+    curr_retry_delay_s:   float                                         = 0
+    message_id:           int                                           = 0
+    ack_id:               str                                           = ''
+    parse:                ParsedNotification                            = dataclasses.field(default_factory=ParsedNotification)
+    raw:                  google.pubsub_v1.types.ReceivedMessage | None = None
 
 def init(project_name:            str,
          package_name:            str,
@@ -99,7 +98,69 @@ def init(project_name:            str,
     result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
     return result
 
+def handle_parsed_notification(sql_conn: sqlite3.Connection, parse: ParsedNotification, err: base.ErrorSink) -> bool:
+    result = False
+    match parse.payload_type:
+        case ParsedNotificationPayloadType.Nil:
+            pass
+
+        case ParsedNotificationPayloadType.Subscription:
+            try:
+                details: SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(parse.package_name, parse.purchase_token, err)
+                if err.has():
+                    err.msg_list.append(f'Failed to fetch subscription V2 details from Google')
+                    return result
+
+                assert details is not None
+                tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=parse.purchase_token, details=details, err=err)
+                tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, parse.event_time_ms, parse.sub_type, err=err)
+                if err.has():
+                    err.msg_list.append(f'Parsing data from subscription V2 details failed')
+                    return result
+
+                handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
+            except Exception:
+                err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
+        case ParsedNotificationPayloadType.Voided:
+            try:
+                handle_voided_notification(parse.voided, err)
+            except Exception:
+                err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
+
+        case ParsedNotificationPayloadType.OneTimeProduct:
+            err.msg_list.append(f'One time product is not supported!')
+
+        case ParsedNotificationPayloadType.Test:
+            pass
+
+    result = not err.has()
+    return result
+
 def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
+    sorted_msg_list: list[SortedMessage] = []
+
+    # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
+    with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+        with base.SQLTransaction(db.sql_conn) as tx:
+            db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
+            for row in db_it:
+                message_id            = row[0]
+                payload: bytes | None = row[1]
+                if not payload:
+                    continue
+
+                raw_msg      = typing.cast(google.pubsub_v1.types.ReceivedMessage, google.pubsub_v1.types.ReceivedMessage.from_json(payload))
+                message_data = json.loads(raw_msg.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAny]
+                tmp_err      = base.ErrorSink()
+                parse        = parse_notification(message_data, tmp_err);
+
+                sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
+                                                     message_id         = message_id,
+                                                     parse              = parse,
+                                                     ack_id             = raw_msg.ack_id,
+                                                     raw                = raw_msg))
+
+    # NOTE: Then connect to Google and start pulling messages
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
             sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
@@ -128,10 +189,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #    should be valid though)
             #  - Repeat
             #
-            # TODO: Idempotency would remove the hard requirement on having to witness events in
-            # order since they recommend we always reconcile with the state stored on the play
-            # store, this seems doable but needs a longer time budget.
-            #
             # Example payload:
             #
             #   received_messages [{
@@ -146,63 +203,123 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #     }
             #   }, ...]
 
-            # NOTE: How long after receiving an event do we want before executing it. The time
-            # inbetween is reserved to allow the Google pub/sub client to pull more messages which
-            # can potentially come out of order. Increasing this increases the latency of when
-            # a event is finalised in the system!! Putting this too low might mean that we observe
-            # events out of order!! The system is configured to halt processing of events if
-            # a message received out of order transitions a subscription into an invalid state!
-            #
-            # 8 seconds is an eternity, yes, but I have witnessed events coming as late as 3-4
-            # seconds, oh well.
-            TIME_BEFORE_HANDLING_EVENT_S = 8
-
             # NOTE: How often to poll Google for events in seconds
             POLL_FREQUENCY_S = 2
 
-            ordered_msg_list:     list[TimestampedData] = []
-            last_event_processed: TimestampedData       = TimestampedData()
             while context.kill_thread == False:
-                result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,
+                # NOTE: Pull messages from Google
+                result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,  # pyright: ignore[reportUnknownMemberType]
                                                                           return_immediately = True,
                                                                           max_messages       = 64)
-                now: float = time.time()
-                err        = base.ErrorSink()
+
+                # NOTE: Parse the received_messages[].message.data into our queue of messages
+                now:     float = time.time()
+                now_ms:  int   = int(now * 1000)
+                ack_ids: list[str] = []
                 for index, it in enumerate(result.received_messages):
-                    body:          typing.Any = json.loads(it.message.data)
-                    event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
-                    message_id:    int        = int(it.message.message_id)
-                    ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
+                    err                              = base.ErrorSink()
+                    message_data: base.JSONObject    = json.loads(it.message.data)  # pyright: ignore[reportAny]
+                    parse:        ParsedNotification = parse_notification(message_data, err);
+                    message_id:   int                = int(it.message.message_id)
+                    if err.has():
+                        log.warning(f'Discarding message #{index} because we encountered an error parsing it. Message was:\n{it}\nReason was:\n{err.build()}')
+                    else:
+                        is_new_message = True
+                        for sort_it in sorted_msg_list:
+                            if sort_it.message_id == message_id:
+                                is_new_message = False
+                                break;
 
-                    # NOTE: Sort the events we've added
-                    ordered_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
+                        if is_new_message:
+                            sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
+                                                                 message_id         = message_id,
+                                                                 parse              = parse,
+                                                                 ack_id             = it.ack_id,
+                                                                 raw                = it))
 
-                # NOTE: Process events
+                        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                            with base.SQLTransaction(db.sql_conn) as tx:
+                                if not backend.google_notification_message_id_is_in_db_tx(tx, message_id):
+                                    # NOTE: Our message retention policy for this subscription is 7 days
+                                    # (default). We add a little buffer as we don't know exactly which
+                                    # timestamp Google uses.
+                                    #
+                                    # We always store the messages to mitigate network failures on
+                                    # acknowledgement. We store this in JSON because in the
+                                    # erroneous case there's highly likelihood we need human
+                                    # intervention and having human-readability there will be
+                                    # important.
+                                    backend.google_add_notification_id_tx(tx                = tx,
+                                                                          message_id        = message_id,
+                                                                          expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
+                                                                          payload           = it.to_json)
+
+                # NOTE: Sort the messages we've added
+                if len(result.received_messages):
+                    sorted_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
+
+                # NOTE: Attempt to process them in order
                 index = 0
-                while index < len(ordered_msg_list):
-                    msg                   = ordered_msg_list[index]
-                    time_since_received_s = now - msg.received_unix_ts_s
-                    if time_since_received_s < TIME_BEFORE_HANDLING_EVENT_S:
-                        break
+                MIN_RETRY_DELAY_S: float = 1
+                MAX_RETRY_DELAY_S: float = 60
+                while index < len(sorted_msg_list):
+                    err                    = base.ErrorSink()
+                    msg:     SortedMessage = sorted_msg_list[index]
+                    attempt: bool          = now > msg.next_retry_unix_ts_s
+                    handled: bool          = False
+                    if attempt:
+                        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                            handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
 
-                    if last_event_processed.event_unix_ts_ms > msg.event_unix_ts_ms:
-                        log.warning(f'The last event we processed came after the next event we ' +
-                                    f'processed (poll_freq={POLL_FREQUENCY_S}s, delay_before_handling_event_s={TIME_BEFORE_HANDLING_EVENT_S}\n' +
-                                    f'Previous event was:\n{last_event_processed}\nCurrent event was\n:{msg}')
+                    # NOTE: On success, we remove the message and add it to the acknowledge list
+                    # (to stop Google resending it), or otherwise configure an exponential back-off
+                    # on the retry and skip the message
+                    if handled:
+                        _ = sorted_msg_list.pop(index)
+                        ack_ids.append(msg.ack_id)
+                    else:
+                        # NOTE: Exponential backoff on retries. Hopefully, this gives us some time,
+                        # for the out-of-order messages that this message is dependent on to arrive,
+                        # get sorted into order and then executed successfully.
+                        msg.curr_retry_delay_s    = max(msg.curr_retry_delay_s, MIN_RETRY_DELAY_S)
+                        msg.curr_retry_delay_s   *= 1.5
+                        msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
+                        msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
+                        index                    += 1
+                        log.error('Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
 
-                    last_event_processed = msg
-                    handled              = handle_sub_message(msg.body)
-                    if not handled:
-                        log.warning(f'Discarding event because handling of it failed (message will be re-notified by google) {msg}')
-                        _ = ordered_msg_list.pop(index)
-                        continue
+                    # NOTE: Additionally, clear or mark the payment token from the error table if it
+                    # needs to be updated
+                    with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                        # NOTE: Check first before doing any op on the DB (since this _only_ uses a
+                        # read transaction)
+                        user_is_in_error_state = backend.has_user_error(sql_conn         = db.sql_conn,
+                                                                        payment_provider = base.PaymentProvider.GooglePlayStore,
+                                                                        payment_id       = msg.parse.purchase_token)
 
-                    # NOTE: Acknowledge the message
-                    client.acknowledge(subscription = sub_path, ack_ids = [msg.body.ack_id])
-                    index += 1
+                        # NOTE: Clear error if success, or add one if we failed
+                        if handled:
+                            if user_is_in_error_state:
+                                _ = backend.delete_user_errors(sql_conn         = db.sql_conn,
+                                                               payment_provider = base.PaymentProvider.GooglePlayStore,
+                                                               payment_id       = msg.parse.purchase_token)
 
-                # NOTE: Erase the processed events
-                ordered_msg_list = ordered_msg_list[index:]
+                            with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                                with base.SQLTransaction(db.sql_conn) as tx:
+                                    backend.google_set_notification_handled_and_wipe_payload(tx=tx, message_id=msg.message_id)
+                        else:
+                            if not user_is_in_error_state:
+                                user_error                      = backend.UserError()
+                                user_error.provider             = base.PaymentProvider.GooglePlayStore
+                                user_error.google_payment_token = msg.parse.purchase_token
+                                backend.add_user_error(sql_conn   = db.sql_conn,
+                                                       error      = user_error,
+                                                       unix_ts_ms = int(now * 1000))
+
+                # NOTE: Acknowledge the messages we handled successfully to stop Google from
+                # resending it to us
+                client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
+
                 _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
 def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
@@ -230,7 +347,7 @@ def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sql
     if result:
         err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 
-def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink): 
+def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
     match tx_event.notification:
         case SubscriptionNotificationType.PURCHASED:
             """
@@ -474,93 +591,5 @@ def parse_notification(body: JSONObject, err: base.ErrorSink) -> ParsedNotificat
 
     elif is_test_notification:
         result.payload_type = ParsedNotificationPayloadType.Test
-
-    return result
-
-def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> HandleNotificationResult:
-    parse: ParsedNotification = parse_notification(body, err)
-    result                    = HandleNotificationResult()
-    result.purchase_token     = parse.purchase_token
-    match parse.payload_type:
-        case ParsedNotificationPayloadType.Nil:
-            pass
-
-        case ParsedNotificationPayloadType.Subscription:
-            try:
-                validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-                if err.has():
-                    return result
-
-                details: SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(parse.package_name, parse.purchase_token, err)
-                if err.has():
-                    err.msg_list.append(f'Failed to fetch subscription V2 details from Google')
-                    return result
-
-                assert details is not None
-                tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=parse.purchase_token, details=details, err=err)
-                tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, parse.event_time_ms, parse.sub_type, err=err)
-                if err.has():
-                    err.msg_list.append(f'Parsing data from subscription V2 details failed')
-                    return result
-
-                handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
-                result.ack = not err.has()
-            except Exception:
-                err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
-
-        case ParsedNotificationPayloadType.Voided:
-            try:
-                validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-                if err.has():
-                    return result
-                handle_voided_notification(parse.voided, err)
-                result.ack = not err.has()
-            except Exception:
-                err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
-
-        case ParsedNotificationPayloadType.OneTimeProduct:
-            err.msg_list.append(f'One time product is not supported!')
-
-        case ParsedNotificationPayloadType.Test:
-            log.info(f'Test payload was: {safe_dump_dict_keys_or_data(body)}')
-            result.ack = True
-    return result
-
-def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
-    result = False
-    body: base.JSONObject | None = json.loads(message.message.data)  # pyright: ignore[reportAny]
-    if not isinstance(body, dict):
-        logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')
-        return result
-
-    # NOTE: Process the notification
-    err          = base.ErrorSink()
-    notif_result = HandleNotificationResult()
-    with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-        body   = typing.cast(JSONObject, body)
-        notif_result = handle_notification(body, db.sql_conn, err)
-
-    if not notif_result.ack and not err.has():
-        err.msg_list.append("Notification wasnt marked to be acknowledged but contained no errors! What happened?")
-
-    # NOTE: Record the error under the payment token if possible to propagate to clients
-    if err.has() and len(notif_result.purchase_token):
-        err.msg_list.append(f'Failed to process event for purchase token: {notif_result.purchase_token}')
-
-        # NOTE: Record the error
-        user_error = UserError(
-            provider             = base.PaymentProvider.GooglePlayStore,
-            google_payment_token = notif_result.purchase_token,
-        )
-        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-            backend.add_user_error(sql_conn=db.sql_conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
-
-    if err.has():
-        # NOTE: Log the error
-        err_msg = '\n'.join(err.msg_list)
-        logging.error(f'{err_msg}\nPayload was: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
-        result = False
-    elif notif_result.ack:
-        result = True
 
     return result

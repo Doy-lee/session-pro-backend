@@ -27,6 +27,7 @@ class ExpireResult:
     revocations:                     int  = 0
     users:                           int  = 0
     apple_notification_uuid_history: int  = 0
+    google_notification_history:     int  = 0
 
 @dataclasses.dataclass
 class ProSubscriptionProof:
@@ -143,6 +144,11 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
 AddRevocationIterator:             typing.TypeAlias = tuple[int,          # (row) id
                                                             bytes | None, # master_pkey
                                                             int]          # expiry_unix_ts_ms
+
+GoogleUnhandledNotificationIterator: typing.TypeAlias = tuple[int,          # message_id
+                                                              bytes | None, # payload
+                                                              int]          # expiry_unix_ts_ms
+
 
 @dataclasses.dataclass
 class UserError:
@@ -297,7 +303,7 @@ class OpenDBAtPath:
         return self
 
     def __exit__(self,
-                 exc_type: object | None,
+                 exc_type:  object | None,
                  exc_value: object | None,
                  traceback: traceback.TracebackException | None):
         self.sql_conn.close()
@@ -659,6 +665,32 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             -- to no-op in that situation as well. This is all managed in this table.
             CREATE TABLE IF NOT EXISTS apple_notification_uuid_history (
                 uuid              STRING NOT NULL,
+                expiry_unix_ts_ms INTEGER NOT NULL
+            );
+
+            -- Track notifications that we have successfully and failed to process from Google by
+            -- its message ID. Similar to Apple, if we have network failure we may receive repeated
+            -- notifications that we should ignore. Google tries to maintain a consistent delivery
+            -- order but there is no guarantee. Unlike Apple, there's no API to query missed
+            -- notifications in which case we have to store these notifications we saw ourselves.
+            --
+            -- The notification payload is wiped once the notification has been handled and we hold
+            -- onto the notifications until it has been handled AND the expiry timestamp has
+            -- elapsed.
+            --
+            -- For Google the expiry is configured on the Google Cloud Pub/Sub interface and is
+            -- currently set to 7 days with an exponential backoff. On startup the unhandled
+            -- notifications are loaded into the runtime queue and re-attemped.
+            --
+            -- Typically if a notification fails, it might be because the notifications came out of
+            -- order and there's an earlier one that needs to be processed before proceeding. This
+            -- table persists those failed notifications across restarts as well as ensuring that
+            -- with exponential backoff, there's time inbetween to allow late notifications to
+            -- arrive, be sorted into emit order and executed in order.
+            CREATE TABLE IF NOT EXISTS google_notification_history (
+                message_id        INTEGER NOT NULL,
+                handled           INTEGER NOT NULL,
+                payload           BLOB,
                 expiry_unix_ts_ms INTEGER NOT NULL
             );
 
@@ -1937,6 +1969,10 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
             _ = tx.cursor.execute('''DELETE FROM apple_notification_uuid_history WHERE ? >= expiry_unix_ts_ms''', (unix_ts_ms,))
             result.apple_notification_uuid_history = tx.cursor.rowcount
 
+            # Delete expired google notifications (but only if they have been handled)
+            _ = tx.cursor.execute('''DELETE FROM google_notification_history WHERE ? >= expiry_unix_ts_ms AND handled = 1''', (unix_ts_ms,))
+            result.google_notification_history = tx.cursor.rowcount
+
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
     return result
@@ -2046,10 +2082,10 @@ def get_payment(sql_conn:   sqlite3.Connection,
                               payment_tx=payment_tx,
                               err=err)
 
-def add_apple_notification_uuid_tx(tx: base.SQLTransaction, uuid: str, expiry_unix_ts_ms: int):
+def apple_add_notification_uuid_tx(tx: base.SQLTransaction, uuid: str, expiry_unix_ts_ms: int):
     assert tx.cursor
     _ = tx.cursor.execute(f'''
-            INSERT INTO apple_notification_uuid_history
+            INSERT INTO apple_notification_uuid_history (uuid, expiry_unix_ts_ms)
             VALUES      (?, ?)
     ''', (uuid, expiry_unix_ts_ms))
 
@@ -2064,9 +2100,38 @@ def apple_notification_uuid_is_in_db_tx(tx: base.SQLTransaction, uuid: str) -> b
     result = row is not None
     return result
 
-def set_apple_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkpoint_unix_ts_ms: int):
+def apple_set_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkpoint_unix_ts_ms: int):
     assert tx.cursor
     _ = tx.cursor.execute(f'''
             UPDATE runtime
             SET    apple_notification_checkpoint_unix_ts_ms = ?
     ''', (checkpoint_unix_ts_ms,))
+
+def google_add_notification_id_tx(tx: base.SQLTransaction, message_id: int, expiry_unix_ts_ms: int, payload: bytes):
+    assert tx.cursor
+
+    maybe_payload: bytes | None = None
+    if len(payload):
+        maybe_payload = payload
+
+    _ = tx.cursor.execute(f'''
+            INSERT INTO google_notification_history (message_id, handled, payload, expiry_unix_ts_ms)
+            VALUES      (?, 0, ?, ?)
+    ''', (message_id, maybe_payload, expiry_unix_ts_ms))
+
+def google_set_notification_handled_and_wipe_payload(tx: base.SQLTransaction, message_id: int):
+    assert tx.cursor
+    _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL, WHERE message_id = ?''', (message_id,))
+
+def google_get_unhandled_notification_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[GoogleUnhandledNotificationIterator]:
+    assert tx.cursor is not None
+    _    = tx.cursor.execute('SELECT message_id, payload, expiry_unix_ts_ms FROM google_notification_history WHERE handled = 0')
+    result = typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], tx.cursor)
+    return result
+
+def google_notification_message_id_is_in_db_tx(tx: base.SQLTransaction, message_id: int) -> bool:
+    assert tx.cursor
+    _      = tx.cursor.execute(f'''SELECT 1 FROM google_notification_history WHERE message_id = ?''', (message_id,))
+    row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+    result = row is not None
+    return result

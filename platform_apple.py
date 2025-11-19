@@ -879,7 +879,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
     if result:
         assert decoded_notification.body.signedDate
         expiry_unix_ts_ms: int  = decoded_notification.body.signedDate + notification_retry_duration_ms
-        backend.add_apple_notification_uuid_tx(tx                = sql_tx,
+        backend.apple_add_notification_uuid_tx(tx                = sql_tx,
                                                uuid              = decoded_notification.body.notificationUUID,
                                                expiry_unix_ts_ms = expiry_unix_ts_ms)
     return result
@@ -1010,7 +1010,7 @@ def catchup_on_missed_notifications(core: Core, sql_conn: sqlite3.Connection, en
                 assert tx.cancel == True
                 log.error(f'Processed {handled_notifs}/{total_notifs} missed notifications but encountered errors, rolling back:\n' + '\n  '.join(err.msg_list))
             else:
-                backend.set_apple_notification_checkpoint_unix_ts_ms(tx, history_req.endDate)
+                backend.apple_set_notification_checkpoint_unix_ts_ms(tx, history_req.endDate)
                 log.info(f'Processed {handled_notifs}/{total_notifs} missed notifications, checkpointed from {base.readable_unix_ts_ms(history_req.startDate)} => {base.readable_unix_ts_ms(history_req.endDate)}')
         else:
             mins_between_catchup    = (ms_between_catchup / 1000) / 60

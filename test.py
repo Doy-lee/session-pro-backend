@@ -3310,8 +3310,9 @@ def test_google_platform_handle_notification(monkeypatch):
         assert isinstance(purchase_token, str)
 
         err_rtdn = base.ErrorSink()
-        result   = platform_google.handle_notification(scenario.rtdn_event, ctx.sql_conn, err_rtdn)
-        assert not err_rtdn.has() and result.ack and len(result.purchase_token) > 0
+        parse    = platform_google.parse_notification(scenario.rtdn_event, err_rtdn)
+        handled  = platform_google.handle_parsed_notification(ctx.sql_conn, parse, err_rtdn)
+        assert not err_rtdn.has() and handled and len(parse.purchase_token) > 0
 
         order_id            = current_state.line_items[0].latest_successful_order_id
         expiry_time_unix_ms = current_state.line_items[0].expiry_time.unix_milliseconds
