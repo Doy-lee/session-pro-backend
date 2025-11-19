@@ -261,7 +261,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                 # NOTE: Attempt to process them in order
                 index = 0
                 MIN_RETRY_DELAY_S: float = 1
-                MAX_RETRY_DELAY_S: float = 60
+                MAX_RETRY_DELAY_S: float = 600
                 while index < len(sorted_msg_list):
                     err                    = base.ErrorSink()
                     msg:     SortedMessage = sorted_msg_list[index]
