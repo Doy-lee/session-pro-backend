@@ -285,7 +285,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
                         msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
                         index                    += 1
-                        log.error('Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
+                        log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
 
                     # NOTE: Additionally, clear or mark the payment token from the error table if it
                     # needs to be updated

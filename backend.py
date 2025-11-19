@@ -2121,7 +2121,7 @@ def google_add_notification_id_tx(tx: base.SQLTransaction, message_id: int, expi
 
 def google_set_notification_handled_and_wipe_payload(tx: base.SQLTransaction, message_id: int):
     assert tx.cursor
-    _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL, WHERE message_id = ?''', (message_id,))
+    _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = ?''', (message_id,))
 
 def google_get_unhandled_notification_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[GoogleUnhandledNotificationIterator]:
     assert tx.cursor is not None
