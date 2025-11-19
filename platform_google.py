@@ -278,6 +278,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         _ = sorted_msg_list.pop(index)
                         ack_ids.append(msg.ack_id)
                     else:
+                        index += 1
                         if attempt:
                             # NOTE: Exponential backoff on retries. Hopefully, this gives us some time,
                             # for the out-of-order messages that this message is dependent on to arrive,
@@ -286,7 +287,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             msg.curr_retry_delay_s   *= 1.5
                             msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
                             msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
-                            index                    += 1
                             log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s. Reason was\n{err.build()}\nMessage was\n{msg.raw}')
 
                     # NOTE: Additionally, clear or mark the payment token from the error table if it
