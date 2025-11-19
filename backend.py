@@ -1777,7 +1777,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             if not sub_data:
                 return result
 
-            if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+            if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
                 platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
                 if len(err.msg_list) > 0:
                     return result
@@ -2060,7 +2060,8 @@ def apple_notification_uuid_is_in_db_tx(tx: base.SQLTransaction, uuid: str) -> b
             FROM   apple_notification_uuid_history
             WHERE  uuid = ?
     ''', (uuid,))
-    result = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
+    row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+    result = row is not None
     return result
 
 def set_apple_notification_checkpoint_unix_ts_ms(tx: base.SQLTransaction, checkpoint_unix_ts_ms: int):

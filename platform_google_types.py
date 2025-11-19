@@ -122,129 +122,108 @@ class GoogleDuration():
 
 
 class SubscriptionNotificationType(IntEnum):
-    """Subscription notification types as per Google Play documentation"""
-    # A subscription was recovered from account hold.
-    SUBSCRIPTION_RECOVERED = 1
-    # An active subscription was renewed.
-    SUBSCRIPTION_RENEWED = 2
-    # A subscription was either voluntarily or involuntarily cancelled. For voluntary cancellation,
-    # sent when the user cancels.
-    SUBSCRIPTION_CANCELED = 3
-    # A new subscription was purchased.
-    SUBSCRIPTION_PURCHASED = 4
-    # A subscription has entered account hold (if enabled).
-    SUBSCRIPTION_ON_HOLD = 5
-    # A subscription has entered grace period (if enabled).
-    SUBSCRIPTION_IN_GRACE_PERIOD = 6
+    NIL                           = 0 # Sentinel value, never used except for zero-initialised objects
+    RECOVERED                     = 1 # Recovered from account hold.
+    RENEWED                       = 2 # Active subscription was renewed.
+    CANCELED                      = 3 # Subscription was in/voluntarily cancelled. It is voluntary if the user cancels.
+    PURCHASED                     = 4 # New subscription was purchased.
+    ON_HOLD                       = 5 # Subscription has entered account hold (if enabled).
+    IN_GRACE_PERIOD               = 6 # Subscription has entered grace period (if enabled).
     # User has restored their subscription from Play > Account > Subscriptions. The subscription was
     # canceled but had not expired yet when the user restores. For more information, see
     # Restorations.
-    SUBSCRIPTION_RESTARTED = 7
-    # @deprecated A subscription price change has successfully been confirmed by the user.
-    SUBSCRIPTION_PRICE_CHANGE_CONFIRMED = 8
-    # A subscription's recurrence time has been extended.
-    SUBSCRIPTION_DEFERRED = 9
-    # A subscription has been paused.
-    SUBSCRIPTION_PAUSED = 10
-    # A subscription pause schedule has been changed.
-    SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED = 11
-    # A subscription has been revoked from the user before the expiration time.
-    SUBSCRIPTION_REVOKED = 12
-    # A subscription has expired.
-    SUBSCRIPTION_EXPIRED = 13
-    # A subscription item's price change details are updated.
-    SUBSCRIPTION_PRICE_CHANGE_UPDATED = 19
-    # A pending transaction of a subscription has been canceled.
-    SUBSCRIPTION_PENDING_PURCHASE_CANCELED = 20
+    RESTARTED                     = 7
+    PRICE_CHANGE_CONFIRMED        = 8  # @deprecated Subscription price change has successfully been confirmed by the user.
+    DEFERRED                      = 9  # Subscription's recurrence time has been extended.
+    PAUSED                        = 10 # Subscription has been paused.
+    PAUSE_SCHEDULE_CHANGED        = 11 # Subscription pause schedule has been changed.
+    REVOKED                       = 12 # Subscription has been revoked from the user before the expiration time.
+    EXPIRED                       = 13 # Subscription has expired.
+    PRICE_CHANGE_UPDATED          = 19 # Subscription item's price change details are updated.
+    PENDING_PURCHASE_CANCELED     = 20 # Pending transaction of a subscription has been canceled.
     # A subscription's consent period for price step-up has begun or the user has provided consent
     # for the price step-up. This RTDN is sent only for subscriptions in a region where price
     # step-up is required.
-    SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED = 22
+    PRICE_STEP_UP_CONSENT_UPDATED = 22
 
-class ProductType(IntEnum):
-    """Product types for voided purchases"""
-    # A subscription purchase has been voided.
-    PRODUCT_TYPE_SUBSCRIPTION = 1
-    # A one-time purchase has been voided.
-    PRODUCT_TYPE_ONE_TIME = 2
+class ProductType(IntEnum): # Product types for voided purchases
+    NIL          = 0 # Sentinel value, never used except for zero-initialised objects
+    SUBSCRIPTION = 1 # A subscription purchase has been voided.
+    ONE_TIME     = 2 # A one-time purchase has been voided.
 
-
-class RefundType(IntEnum):
-    """Refund types for voided purchases"""
-    REFUND_TYPE_FULL_REFUND = 1
+class RefundType(IntEnum): # Refund types for voided purchases
+    NIL                           = 0 # Sentinel value, never used except for zero-initialised objects
+    FULL_REFUND                   = 1
     # The purchase has been partially voided by a quantity-based partial refund, applicable only to
     # multi-quantity purchases. A purchase can be partially voided multiple times.
-    REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND = 2
+    QUANTITY_BASED_PARTIAL_REFUND = 2
 
-class SubscriptionsV2SubscriptionStateType(StrEnum):
+class SubscriptionsV2State(StrEnum):
     """Subscriptions V2 subscription state types"""
-    SUBSCRIPTION_STATE_UNSPECIFIED = "SUBSCRIPTION_STATE_UNSPECIFIED"
+    UNSPECIFIED = "SUBSCRIPTION_STATE_UNSPECIFIED"
 
     # Subscription was created but awaiting payment during signup. In this state, all items are
     # awaiting payment.
-    SUBSCRIPTION_STATE_PENDING = "SUBSCRIPTION_STATE_PENDING"
+    PENDING = "SUBSCRIPTION_STATE_PENDING"
 
     # - (1) If the subscription is an auto renewing plan, at least one item is autoRenewEnabled and
     #   not expired.
     # - (2) If the subscription is a prepaid plan, at least one item is not expired.
-    SUBSCRIPTION_STATE_ACTIVE = "SUBSCRIPTION_STATE_ACTIVE"
+    ACTIVE = "SUBSCRIPTION_STATE_ACTIVE"
 
     # The state is only available when the subscription is an auto renewing plan, all items are in a
     # paused state.
-    SUBSCRIPTION_STATE_PAUSED = "SUBSCRIPTION_STATE_PAUSED"
+    PAUSED = "SUBSCRIPTION_STATE_PAUSED"
 
     # The state is only available when the subscription is an auto renewing plan, all items are in
     # a grace period.
-    SUBSCRIPTION_STATE_IN_GRACE_PERIOD = "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
+    IN_GRACE_PERIOD = "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
 
     # The state is only available when the subscription is an auto renewing plan, all items are on
     # hold.
-    SUBSCRIPTION_STATE_ON_HOLD = "SUBSCRIPTION_STATE_ON_HOLD"
+    ON_HOLD = "SUBSCRIPTION_STATE_ON_HOLD"
 
     # Subscription is canceled but not expired yet. The state is only available when the
     # subscription is an auto renewing plan, all items have autoRenewEnabled set to false.
-    SUBSCRIPTION_STATE_CANCELED = "SUBSCRIPTION_STATE_CANCELED"
+    CANCELED = "SUBSCRIPTION_STATE_CANCELED"
 
     # All -items have expiryTime in the past.
-    SUBSCRIPTION_STATE_EXPIRED = "SUBSCRIPTION_STATE_EXPIRED"
+    EXPIRED = "SUBSCRIPTION_STATE_EXPIRED"
 
     # Pending transaction for subscription is canceled. If this pending purchase was for an existing
     # subscription, use linkedPurchaseToken to get the current state of that subscription.
-    SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED = "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
+    PENDING_PURCHASE_CANCELED = "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
 
-class SubscriptionsV2SubscriptionAcknowledgementStateType(StrEnum):
+class SubscriptionsV2AcknowledgementState(StrEnum):
     """Subscriptions V2 subscription Acknowledgement state types"""
-    ACKNOWLEDGEMENT_STATE_UNSPECIFIED  = "ACKNOWLEDGEMENT_STATE_UNSPECIFIED"
-    ACKNOWLEDGEMENT_STATE_PENDING      = "ACKNOWLEDGEMENT_STATE_PENDING"
-    ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
+    UNSPECIFIED  = "ACKNOWLEDGEMENT_STATE_UNSPECIFIED"
+    PENDING      = "ACKNOWLEDGEMENT_STATE_PENDING"
+    ACKNOWLEDGED = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
 
-class SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason(StrEnum):
+class SubscriptionsV2UserSurveyResponseReason(StrEnum):
     """The reason the user selected in the cancel survey."""
-    CANCEL_SURVEY_REASON_UNSPECIFIED      = "CANCEL_SURVEY_REASON_UNSPECIFIED"
-    CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE = "CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE"
-    CANCEL_SURVEY_REASON_TECHNICAL_ISSUES = "CANCEL_SURVEY_REASON_TECHNICAL_ISSUES"
-    CANCEL_SURVEY_REASON_COST_RELATED     = "CANCEL_SURVEY_REASON_COST_RELATED"
-    CANCEL_SURVEY_REASON_FOUND_BETTER_APP = "CANCEL_SURVEY_REASON_FOUND_BETTER_APP"
-    CANCEL_SURVEY_REASON_OTHERS           = "CANCEL_SURVEY_REASON_OTHERS"
+    UNSPECIFIED      = "UNSPECIFIED"
+    NOT_ENOUGH_USAGE = "NOT_ENOUGH_USAGE"
+    TECHNICAL_ISSUES = "TECHNICAL_ISSUES"
+    COST_RELATED     = "COST_RELATED"
+    FOUND_BETTER_APP = "FOUND_BETTER_APP"
+    OTHERS           = "OTHERS"
 
 @dataclasses.dataclass
-class SubscriptionsV2SubscriptionPausedStateContext:
+class SubscriptionsV2PausedState:
     """Information specific to a subscription in paused state."""
-    # Time at which the subscription will be automatically resumed.
-    auto_resume_time: GoogleTimestamp
+    auto_resume_time: GoogleTimestamp # Time at which the subscription will be automatically resumed.
 
 @dataclasses.dataclass
-class SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse:
+class SubscriptionsV2UserSurveyResponse:
     """Result of the cancel survey when the subscription was canceled by the user."""
-    # The reason the user selected in the cancel survey.
-    reason: SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponseReason
-    # Only set for CANCEL_SURVEY_REASON_OTHERS. This is the user's free-form response to the survey.
-    reason_user_input: str | None
+    reason: SubscriptionsV2UserSurveyResponseReason # The reason the user selected in the cancel survey.
+    reason_user_input: str | None # Only set for OTHERS. This is the user's free-form response to the survey.
 
 # TODO: we need to collect cancel reasons
 @dataclasses.dataclass
 class SubscriptionsV2SubscriptionCanceledStateContextUser:
-    cancel_survey_result: SubscriptionsV2SubscriptionCanceledStateContextUserSurveyResponse | None
+    cancel_survey_result: SubscriptionsV2UserSurveyResponse | None
 
     # The time at which the subscription was canceled by the user. The user might still have access
     # to the subscription after this time. Use lineItems.expiry_time to determine if a user still
@@ -252,7 +231,7 @@ class SubscriptionsV2SubscriptionCanceledStateContextUser:
     cancel_time: GoogleTimestamp
 
 @dataclasses.dataclass
-class SubscriptionsV2SubscriptionCanceledStateContext:
+class SubscriptionsV2CanceledState:
     """Only one of the fields will be set at a time"""
     # Subscription was canceled by user.
     user_initiated_cancellation: SubscriptionsV2SubscriptionCanceledStateContextUser | None
@@ -275,7 +254,7 @@ class GoogleMoney:
     # or zero. For example $-1.75 is represented as units=-1 and nanos=-750,000,000.
     nanos: int
 
-class SubscriptionV2SubscriptionItemPriceChangeDetailsModeType(StrEnum):
+class SubscriptionV2PriceChangeMode(StrEnum):
     # Price change mode unspecified. This value should never be set.
     PRICE_CHANGE_MODE_UNSPECIFIED = "PRICE_CHANGE_MODE_UNSPECIFIED"
     # If the subscription price is decreasing.
@@ -285,7 +264,7 @@ class SubscriptionV2SubscriptionItemPriceChangeDetailsModeType(StrEnum):
     # If the subscription price is increasing with opt out mode.
     OPT_OUT_PRICE_INCREASE = "OPT_OUT_PRICE_INCREASE"
 
-class SubscriptionV2SubscriptionItemPriceChangeDetailsStateType(StrEnum):
+class SubscriptionV2PriceChangeState(StrEnum):
     PRICE_CHANGE_STATE_UNSPECIFIED = "PRICE_CHANGE_STATE_UNSPECIFIED" # Price change state unspecified. This value should not be used.
     OUTSTANDING                    = "OUTSTANDING"                    # Waiting for the user to agree for the price change.
     CONFIRMED                      = "CONFIRMED"                      # The price change is confirmed to happen for the user.
@@ -293,19 +272,16 @@ class SubscriptionV2SubscriptionItemPriceChangeDetailsStateType(StrEnum):
     CANCELED                       = "CANCELED"
 
 @dataclasses.dataclass
-class SubscriptionV2SubscriptionItemPriceChangeDetails:
-    # New recurring price for the subscription item.
-    new_price: GoogleMoney
-    # Price change mode specifies how the subscription item price is changing.
-    price_change_mode: SubscriptionV2SubscriptionItemPriceChangeDetailsModeType
-    # State the price change is currently in.
-    price_change_state: SubscriptionV2SubscriptionItemPriceChangeDetailsStateType
+class SubscriptionV2PriceChangeDetails:
+    new_price:                      GoogleMoney                    # New recurring price for the subscription item.
+    price_change_mode:              SubscriptionV2PriceChangeMode  # Price change mode specifies how the subscription item price is changing.
+    price_change_state:             SubscriptionV2PriceChangeState # State the price change is currently in.
     # The renewal time at which the price change will become effective for the user. This is subject
     # to change (to a future time) due to cases where the renewal time shifts like pause. This field
     # is only populated if the price change has not taken effect.
     expected_new_price_charge_time: GoogleTimestamp
 
-class SubscriptionV2SubscriptionPriceConsentStateType(StrEnum):
+class SubscriptionV2PriceConsentState(StrEnum):
     CONSENT_STATE_UNSPECIFIED = "CONSENT_STATE_UNSPECIFIED" # Unspecified consent state.
     PENDING                   = "PENDING"                   # User has not yet provided consent.
     CONFIRMED                 = "CONFIRMED"                 # User has consented, and the new price is waiting to take effect.
@@ -313,8 +289,8 @@ class SubscriptionV2SubscriptionPriceConsentStateType(StrEnum):
 
 
 @dataclasses.dataclass
-class SubscriptionV2SubscriptionItemInstallmentPlanPendingCancellation:
-    state: SubscriptionV2SubscriptionPriceConsentStateType
+class SubscriptionV2InstallmentPlanPendingCancellation:
+    state: SubscriptionV2PriceConsentState
 
     # The deadline by which the user must provide consent. If consent is not provided by this time,
     # the subscription will be canceled.
@@ -322,7 +298,7 @@ class SubscriptionV2SubscriptionItemInstallmentPlanPendingCancellation:
     new_price: GoogleMoney
 
 @dataclasses.dataclass
-class SubscriptionV2SubscriptionItemInstallmentPlan:
+class SubscriptionV2InstallmentPlan:
     # Total number of payments the user is initially committed for.
     initial_committed_payments_count: int
     # Total number of payments the user will be committed for after each commitment period. Empty
@@ -333,7 +309,7 @@ class SubscriptionV2SubscriptionItemInstallmentPlan:
     remaining_committed_payments_count: int
     # If present, this installment plan is pending to be canceled. The cancellation will happen only
     # after the user finished all committed payments.
-    pending_cancellation: SubscriptionV2SubscriptionItemInstallmentPlanPendingCancellation | None
+    pending_cancellation: SubscriptionV2InstallmentPlanPendingCancellation | None
 
 
 @dataclasses.dataclass
@@ -344,10 +320,10 @@ class SubscriptionV2DataAutoRenewingPlan:
     # API instead if transaction details are needed.
     recurring_price: GoogleMoney
     # The information of the last price change for the item since subscription signup.
-    price_change_details: SubscriptionV2SubscriptionItemPriceChangeDetails | None
+    price_change_details:         SubscriptionV2PriceChangeDetails | None
     # The installment plan commitment and state related info for the auto renewing plan.
-    installment_details:           SubscriptionV2SubscriptionItemInstallmentPlan | None
-    price_step_up_consent_details: SubscriptionV2SubscriptionPriceConsentStateType | None
+    installment_details:           SubscriptionV2InstallmentPlan | None
+    price_step_up_consent_details: SubscriptionV2PriceConsentState | None
 
 @dataclasses.dataclass
 class SubscriptionV2DataPrepaidPlan:
@@ -418,8 +394,8 @@ class SubscriptionV2Data:
 
     # Time at which the subscription was granted. Not set for pending subscriptions (subscription
     # was created but awaiting payment during signup).
-    start_time:             GoogleTimestamp | None               = None
-    subscription_state:     SubscriptionsV2SubscriptionStateType = SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_UNSPECIFIED
+    start_time:             GoogleTimestamp | None = None
+    subscription_state:     SubscriptionsV2State   = SubscriptionsV2State.UNSPECIFIED
 
     # The purchase token of the old subscription if this subscription is one of the following:
     # - Re-signup of a canceled but non-lapsed subscription 
@@ -430,15 +406,15 @@ class SubscriptionV2Data:
     linked_purchase_token:  str | None = None
 
     # Paused metadata, set if `subscription_state` is `SUBSCRIPTION_STATE_PAUSED`
-    paused_state_context:   SubscriptionsV2SubscriptionPausedStateContext | None = None
+    paused_state_context:   SubscriptionsV2PausedState | None = None
 
     # Cancel metaddata, set if `subscription_state` is `SUBSCRIPTION_STATE_CANCELED` or
     # `SUBSCRIPTION_STATE_EXPIRED`.
-    canceled_state_context: SubscriptionsV2SubscriptionCanceledStateContext | None = None
+    canceled_state_context: SubscriptionsV2CanceledState | None = None
 
     test_purchase:          bool = False # Set if this subscription purchase is a test purchase
 
-    acknowledgement_state:  SubscriptionsV2SubscriptionAcknowledgementStateType = SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_UNSPECIFIED
+    acknowledgement_state:  SubscriptionsV2AcknowledgementState = SubscriptionsV2AcknowledgementState.UNSPECIFIED
 
 @dataclasses.dataclass
 class Monetizationv3SubscriptionData:

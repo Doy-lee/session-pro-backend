@@ -12,6 +12,7 @@ import threading
 import dataclasses
 import typing
 import time
+import enum
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
@@ -34,7 +35,7 @@ from base import (
 
 import platform_google_api
 from platform_google_api import SubscriptionPlanEventTransaction, VoidedPurchaseTxFields 
-from platform_google_types import SubscriptionNotificationType, SubscriptionsV2SubscriptionAcknowledgementStateType, RefundType, ProductType, SubscriptionsV2SubscriptionStateType, SubscriptionV2Data
+from platform_google_types import SubscriptionNotificationType, SubscriptionsV2AcknowledgementState, RefundType, ProductType, SubscriptionsV2State, SubscriptionV2Data
 
 log = logging.Logger('GOOGLE')
 
@@ -45,7 +46,7 @@ class ThreadContext:
     sleep_event: threading.Event         = threading.Event()
 
 @dataclasses.dataclass
-class GoogleHandleNotificationResult:
+class HandleNotificationResult:
     purchase_token: str  = ""
     ack:            bool = False
 
@@ -54,6 +55,25 @@ class TimestampedData:
     event_unix_ts_ms:   int                              = 0
     received_unix_ts_s: float                            = 0
     body:               google.pubsub_v1.ReceivedMessage = dataclasses.field(default_factory=google.pubsub_v1.ReceivedMessage)
+    message_id:         int                              = 0
+
+class ParsedNotificationPayloadType(enum.Enum):
+    Nil            = 0
+    Subscription   = 1
+    Voided         = 2
+    Test           = 3
+    OneTimeProduct = 4
+
+@dataclasses.dataclass
+class ParsedNotification:
+    payload_type:    ParsedNotificationPayloadType = ParsedNotificationPayloadType.Nil
+    payload_version: str                           = ''
+    sub_type:        SubscriptionNotificationType  = SubscriptionNotificationType.NIL
+    voided:          VoidedPurchaseTxFields        = dataclasses.field(default_factory=VoidedPurchaseTxFields)
+    body_version:    str                           = ''
+    event_time_ms:   int                           = 0
+    package_name:    str                           = ''
+    purchase_token:  str                           = ''
 
 def init(project_name:            str,
          package_name:            str,
@@ -83,8 +103,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
             sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
-            # future   = client.subscribe(subscription=sub_path, callback=callback)  # pyright: ignore[reportUnknownMemberType]
-
             # NOTE: We have a little bit of a problem here in terms of ordering. Google
             # notifications for payments can come out of order and if we miss them, they can also be
             # replayed out of order. Unfortunately in our initial designs we intended events to be
@@ -116,7 +134,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #
             # Example payload:
             #
-            #   received_messages {
+            #   received_messages [{
             #     ack_id: "HxknBUxeR..."
             #     message {
             #       data: "{\"version\":\"1.0\",\"packageName\":\"network.loki.messenger\",\"eventTimeMillis\":\"1762752016420\",...}"
@@ -126,7 +144,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #         nanos: 631000000
             #       }
             #     }
-            #   }
+            #   }, ...]
 
             # NOTE: How long after receiving an event do we want before executing it. The time
             # inbetween is reserved to allow the Google pub/sub client to pull more messages which
@@ -149,13 +167,12 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                                                           return_immediately = True,
                                                                           max_messages       = 64)
                 now: float = time.time()
-                if len(result.received_messages) > 0:
-                    # NOTE: Generate the list of messages sorted by their event time stamp
-                    err        = base.ErrorSink()
-                    for index, it in enumerate(result.received_messages):
-                        body:          typing.Any = json.loads(it.message.data)
-                        event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
-                        ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
+                err        = base.ErrorSink()
+                for index, it in enumerate(result.received_messages):
+                    body:          typing.Any = json.loads(it.message.data)
+                    event_time_ms: int        = base.json_dict_require_str_coerce_to_int(body, 'eventTimeMillis', err)
+                    message_id:    int        = int(it.message.message_id)
+                    ordered_msg_list.append(TimestampedData(received_unix_ts_s=now, event_unix_ts_ms=event_time_ms, body=it))
 
                     # NOTE: Sort the events we've added
                     ordered_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
@@ -215,7 +232,7 @@ def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sql
 
 def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink): 
     match tx_event.notification:
-        case SubscriptionNotificationType.SUBSCRIPTION_PURCHASED:
+        case SubscriptionNotificationType.PURCHASED:
             """
             These are the steps documented by Google:
             When a user purchases a subscription, a SubscriptionNotification message with type SUBSCRIPTION_PURCHASED is sent to your RTDN client. Whether you receive this notification or you register a new purchase in-app through PurchasesUpdatedListener or manually fetching purchases in your app's onResume() method, you should process the new purchase in your secure backend. To do this, follow these steps:
@@ -224,8 +241,8 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
             3. Verify the purchase.
             4. Give the user access to the content. The user account associated with the purchase can be identified with the ExternalAccountIdentifiers object from the subscription resource if identifiers were set at purchase time using setObfuscatedAccountId and setObfuscatedProfileId.
             """
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
-                if tx_event.purchase_acknowledged == SubscriptionsV2SubscriptionAcknowledgementStateType.ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED:
+            if tx_event.subscription_state == SubscriptionsV2State.ACTIVE:
+                if tx_event.purchase_acknowledged == SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
                     err.msg_list.append(f'Latest subscription state is already acknowledged')
                 else:
                     # NOTE: Acknowledge the payment
@@ -266,8 +283,8 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                         # NOTE: On error rollback changes made to the DB
                         tx.cancel = err.has()
 
-        case SubscriptionNotificationType.SUBSCRIPTION_IN_GRACE_PERIOD:
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_IN_GRACE_PERIOD:
+        case SubscriptionNotificationType.IN_GRACE_PERIOD:
+            if tx_event.subscription_state == SubscriptionsV2State.IN_GRACE_PERIOD:
                 plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
 
                 if log.getEffectiveLevel() <= logging.INFO:
@@ -282,8 +299,8 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                                                        sql_conn                 = sql_conn,
                                                        err                      = err)
 
-        case SubscriptionNotificationType.SUBSCRIPTION_RECOVERED | SubscriptionNotificationType.SUBSCRIPTION_RENEWED:
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+        case SubscriptionNotificationType.RECOVERED | SubscriptionNotificationType.RENEWED:
+            if tx_event.subscription_state == SubscriptionsV2State.ACTIVE:
 
                 if log.getEffectiveLevel() <= logging.INFO:
                     expiry        = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
@@ -303,25 +320,25 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                         platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
                         err                               = err)
 
-        case SubscriptionNotificationType.SUBSCRIPTION_CANCELED:
+        case SubscriptionNotificationType.CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_CANCELED \
-            or tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+            if tx_event.subscription_state == SubscriptionsV2State.CANCELED \
+            or tx_event.subscription_state == SubscriptionsV2State.EXPIRED:
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
                 set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
 
-        case SubscriptionNotificationType.SUBSCRIPTION_RESTARTED:
+        case SubscriptionNotificationType.RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ACTIVE:
+            if tx_event.subscription_state == SubscriptionsV2State.ACTIVE:
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
                 set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
 
-        case SubscriptionNotificationType.SUBSCRIPTION_REVOKED:
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED:
+        case SubscriptionNotificationType.REVOKED:
+            if tx_event.subscription_state == SubscriptionsV2State.EXPIRED:
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
@@ -331,15 +348,15 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                                                          revoke_unix_ts_ms    = tx_event.event_ts_ms,
                                                          err                  = err)
 
-        case SubscriptionNotificationType.SUBSCRIPTION_EXPIRED | SubscriptionNotificationType.SUBSCRIPTION_ON_HOLD:
+        case SubscriptionNotificationType.EXPIRED | SubscriptionNotificationType.ON_HOLD:
             """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
             for the vast majority of users this function wont make any changes to user entitlement. An example of when a proof will
             actually be revoked if the user enters account hold and for some reason their pro proof expires some time in the future
             (later than the end of the UTC day). A user enters account hold if their billing method is still failing after their
             grace period ends.
             """
-            if tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_EXPIRED \
-            or tx_event.subscription_state == SubscriptionsV2SubscriptionStateType.SUBSCRIPTION_STATE_ON_HOLD:
+            if tx_event.subscription_state == SubscriptionsV2State.EXPIRED \
+            or tx_event.subscription_state == SubscriptionsV2State.ON_HOLD:
 
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
@@ -370,16 +387,16 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                                                                  err                  = err)
 
         # NOTE: Explicitly unsupported cases
-        case SubscriptionNotificationType.SUBSCRIPTION_DEFERRED |\
-            SubscriptionNotificationType.SUBSCRIPTION_PAUSED |\
-            SubscriptionNotificationType.SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED:
+        case SubscriptionNotificationType.DEFERRED |\
+            SubscriptionNotificationType.PAUSED |\
+            SubscriptionNotificationType.PAUSE_SCHEDULE_CHANGED:
             err.msg_list.append(f'Subscription notificationType {reflect_enum(tx_event.notification)} is unsupported!')
 
         # NOTE: No-op cases
-        case SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_CONFIRMED |\
-             SubscriptionNotificationType.SUBSCRIPTION_PRICE_CHANGE_UPDATED |\
-             SubscriptionNotificationType.SUBSCRIPTION_PENDING_PURCHASE_CANCELED |\
-             SubscriptionNotificationType.SUBSCRIPTION_PRICE_STEP_UP_CONSENT_UPDATED:
+        case SubscriptionNotificationType.PRICE_CHANGE_CONFIRMED |\
+             SubscriptionNotificationType.PRICE_CHANGE_UPDATED |\
+             SubscriptionNotificationType.PENDING_PURCHASE_CANCELED |\
+             SubscriptionNotificationType.PRICE_STEP_UP_CONSENT_UPDATED:
             pass
 
     if err.has():
@@ -387,131 +404,138 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
         err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {tx_payment.google_order_id if len(tx_payment.google_order_id) > 0 else "N/A"}')
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
+    assert tx.product_type != ProductType.NIL
     match tx.product_type:
-        case ProductType.PRODUCT_TYPE_SUBSCRIPTION:
+        case ProductType.SUBSCRIPTION:
+            assert tx.refund_type != RefundType.NIL
             match tx.refund_type:
-                case RefundType.REFUND_TYPE_FULL_REFUND:
+                case RefundType.FULL_REFUND:
                     # TODO: investigate if we need to implement anything here
                     pass
-                case RefundType.REFUND_TYPE_QUANTITY_BASED_PARTIAL_REFUND:
+                case RefundType.QUANTITY_BASED_PARTIAL_REFUND:
                     err.msg_list.append(f'voided purchase refundType {reflect_enum(tx.refund_type)} is unsupported!')
-        case ProductType.PRODUCT_TYPE_ONE_TIME:
+        case ProductType.ONE_TIME:
             err.msg_list.append(f'voided purchase productType {reflect_enum(tx.product_type)} is unsupported!')
 
     if err.has():
         err.msg_list.append(f'Failed to handle {reflect_enum(tx.refund_type)}')
 
+def parse_notification(body: JSONObject, err: base.ErrorSink) -> ParsedNotification:
+    result               = ParsedNotification()
+    result.body_version  = json_dict_require_str(body, "version", err)
+    result.package_name  = json_dict_require_str(body, "packageName", err)
+    result.event_time_ms = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
 
-def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> GoogleHandleNotificationResult:
-    result               = GoogleHandleNotificationResult()
-    body_version         = json_dict_require_str(body, "version", err)
-    package_name         = json_dict_require_str(body, "packageName", err)
-    event_time_millis    = json_dict_require_str_coerce_to_int(body, "eventTimeMillis", err)
-    assert body_version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
-
-    if package_name != platform_google_api.package_name:
-        err.msg_list.append(f'{package_name} does not match google_package_name ({platform_google_api.package_name}) from the .INI file!')
+    if result.package_name != platform_google_api.package_name:
+        err.msg_list.append(f'{result.package_name} does not match google_package_name ({platform_google_api.package_name}) from the .INI file!')
 
     subscription                     = json_dict_optional_obj(body, "subscriptionNotification", err)
     one_time_product                 = json_dict_optional_obj(body, "oneTimeProductNotification", err)
     voided_purchase                  = json_dict_optional_obj(body, "voidedPurchaseNotification", err)
     test_obj                         = json_dict_optional_obj(body, "testNotification", err)
 
-    is_subscription_notification     = subscription is not None
+    is_subscription_notification     = subscription     is not None
     is_one_time_product_notification = one_time_product is not None
-    is_voided_notification           = voided_purchase is not None
-    is_test_notification             = test_obj is not None
+    is_voided_notification           = voided_purchase  is not None
+    is_test_notification             = test_obj         is not None
 
     unique_notif_keys = is_subscription_notification + is_one_time_product_notification + is_voided_notification + is_test_notification
-
     if unique_notif_keys == 0:
-        err.msg_list.append(f'No subscription notification for {package_name} {safe_dump_dict_keys_or_data(body)}')
+        err.msg_list.append(f'No subscription notification for {result.package_name} {safe_dump_dict_keys_or_data(body)}')
     elif unique_notif_keys > 1:
-        err.msg_list.append(f'Multiple subscription notification for {package_name} {safe_dump_dict_keys_or_data(body)}')
+        err.msg_list.append(f'Multiple subscription notification for {result.package_name} {safe_dump_dict_keys_or_data(body)}')
 
     if err.has():
         return result
 
     if is_subscription_notification:
-        result.purchase_token = json_dict_require_str(subscription, "purchaseToken", err)
-        if err.has():
-            return result
-
-        try:
-            validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-            if err.has():
-                return result
-
-            version                        = json_dict_require_str(subscription, "version",  err)
-            subscription_notification_type = json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err)
-            details                        = platform_google_api.fetch_subscription_v2_details(package_name, result.purchase_token, err)
-            assert version == "1.0" # TODO: Do we want any non debug mode behaviour around mismatched version?
-            if err.has():
-                err.msg_list.append(f'Parsing subscriptionv2 response failed')
-                return result
-
-            assert details is not None and isinstance(subscription_notification_type, SubscriptionNotificationType)
-            tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=result.purchase_token, details=details, err=err)
-            tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, event_time_millis, subscription_notification_type, err=err)
-            if err.has():
-                err.msg_list.append(f'Parsing data from subscriptionv2 failed')
-                return result
-
-            handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
-            result.ack = not err.has()
-        except Exception:
-            err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
+        result.purchase_token  = json_dict_require_str(subscription, "purchaseToken", err)
+        result.payload_version = json_dict_require_str(subscription, "version",  err)
+        result.sub_type        = typing.cast(SubscriptionNotificationType, json_dict_require_int_coerce_to_enum(subscription, "notificationType", SubscriptionNotificationType, err))
+        result.payload_type    = ParsedNotificationPayloadType.Subscription
 
     elif is_voided_notification:
         result.purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
-        if err.has():
-            return result
+        order_id               = json_dict_require_str(voided_purchase, "orderId", err)
+        product_type           = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
+        refund_type            = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
 
-        try:
-            validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
-            if err.has():
-                return result
-
-            order_id        = json_dict_require_str(voided_purchase, "orderId", err)
-            product_type    = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
-            refund_type     = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
-            if err.has():
-                err.msg_list.append(f'Parsing data from subscriptionv2 failed')
-                return result
-
-            assert refund_type is not None and product_type is not None and len(result.purchase_token) > 0 and \
-            len(order_id) > 0 and isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)
-            tx = VoidedPurchaseTxFields(
-                purchase_token=result.purchase_token,
-                order_id=order_id,
-                event_ts_ms=event_time_millis,
-                product_type=product_type,
-                refund_type=refund_type,
-            )
-            handle_voided_notification(tx, err)
-            result.ack = not err.has()
-        except Exception:
-            err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
+        assert refund_type is not None and product_type is not None and len(result.purchase_token) > 0 and \
+        len(order_id) > 0 and isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)
+        result.voided         = VoidedPurchaseTxFields(purchase_token = result.purchase_token,
+                                                       order_id       = order_id,
+                                                       event_ts_ms    = result.event_time_ms,
+                                                       product_type   = product_type,
+                                                       refund_type    = refund_type)
+        result.payload_type = ParsedNotificationPayloadType.Test
 
     elif is_one_time_product_notification:
-        err.msg_list.append(f'one time product is not supported!')
+        result.payload_type = ParsedNotificationPayloadType.Nil
 
     elif is_test_notification:
-        log.info(f'Test payload was: {safe_dump_dict_keys_or_data(body)}')
-        result.ack = True
+        result.payload_type = ParsedNotificationPayloadType.Test
 
+    return result
+
+def handle_notification(body: JSONObject, sql_conn: sqlite3.Connection, err: base.ErrorSink) -> HandleNotificationResult:
+    parse: ParsedNotification = parse_notification(body, err)
+    result                    = HandleNotificationResult()
+    result.purchase_token     = parse.purchase_token
+    match parse.payload_type:
+        case ParsedNotificationPayloadType.Nil:
+            pass
+
+        case ParsedNotificationPayloadType.Subscription:
+            try:
+                validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+                if err.has():
+                    return result
+
+                details: SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(parse.package_name, parse.purchase_token, err)
+                if err.has():
+                    err.msg_list.append(f'Failed to fetch subscription V2 details from Google')
+                    return result
+
+                assert details is not None
+                tx_payment = platform_google_api.parse_subscription_purchase_tx(purchase_token=parse.purchase_token, details=details, err=err)
+                tx_event   = platform_google_api.parse_subscription_plan_event_tx(details, parse.event_time_ms, parse.sub_type, err=err)
+                if err.has():
+                    err.msg_list.append(f'Parsing data from subscription V2 details failed')
+                    return result
+
+                handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
+                result.ack = not err.has()
+            except Exception:
+                err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
+
+        case ParsedNotificationPayloadType.Voided:
+            try:
+                validate_no_existing_purchase_token_error(result.purchase_token, sql_conn, err)
+                if err.has():
+                    return result
+                handle_voided_notification(parse.voided, err)
+                result.ack = not err.has()
+            except Exception:
+                err.msg_list.append("Handling notification failed: {traceback.format_exc()}")
+
+        case ParsedNotificationPayloadType.OneTimeProduct:
+            err.msg_list.append(f'One time product is not supported!')
+
+        case ParsedNotificationPayloadType.Test:
+            log.info(f'Test payload was: {safe_dump_dict_keys_or_data(body)}')
+            result.ack = True
     return result
 
 def handle_sub_message(message: google.pubsub_v1.types.ReceivedMessage) -> bool:
     result = False
-    body: typing.Any = json.loads(message.message.data)  # pyright: ignore[reportAny]
+    body: base.JSONObject | None = json.loads(message.message.data)  # pyright: ignore[reportAny]
     if not isinstance(body, dict):
-        logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')  # pyright: ignore[reportAny]
+        logging.error(f'Payload was not JSON: {safe_dump_dict_keys_or_data(body)}\n')
         return result
 
     # NOTE: Process the notification
     err          = base.ErrorSink()
-    notif_result = GoogleHandleNotificationResult()
+    notif_result = HandleNotificationResult()
     with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
         body   = typing.cast(JSONObject, body)
         notif_result = handle_notification(body, db.sql_conn, err)
