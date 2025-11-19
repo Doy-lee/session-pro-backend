@@ -204,14 +204,10 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #       }
             #     }
             #   }, ...]
-
-            # NOTE: How often to poll Google for events in seconds
-            POLL_FREQUENCY_S = 2
-
             while context.kill_thread == False:
                 # NOTE: Pull messages from Google
                 result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,  # pyright: ignore[reportUnknownMemberType]
-                                                                          return_immediately = True,
+                                                                          return_immediately = False,
                                                                           max_messages       = 64)
 
                 # NOTE: Parse the received_messages[].message.data into our queue of messages
@@ -348,9 +344,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         # invalid. This could be because the acknowledgement ids have expired or the
                         # acknowledgement ids were malformed. [reason: "EXACTLY_ONCE_ACKID_FAILURE"
                         pass
-
-                if not context.kill_thread:
-                    _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
 def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
