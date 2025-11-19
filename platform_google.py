@@ -318,9 +318,11 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                 # NOTE: Acknowledge the messages we handled successfully to stop Google from
                 # resending it to us
-                client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
+                if len(ack_ids):
+                    client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
 
-                _ = context.sleep_event.wait(POLL_FREQUENCY_S)
+                if not context.kill_thread:
+                    _ = context.sleep_event.wait(POLL_FREQUENCY_S)
 
 def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
