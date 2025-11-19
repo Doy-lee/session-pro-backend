@@ -14,6 +14,7 @@ import typing
 import time
 import enum
 import collections.abc
+import google.protobuf.json_format
 
 from   google.oauth2 import service_account
 from   google.cloud  import pubsub_v1
@@ -252,7 +253,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     backend.google_add_notification_id_tx(tx                = tx,
                                                                           message_id        = message_id,
                                                                           expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
-                                                                          payload           = it.to_json())
+                                                                          payload           = google.protobuf.json_format.MessageToJson(message=it))
 
                 # NOTE: Sort the messages we've added
                 if len(result.received_messages):
