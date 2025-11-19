@@ -150,7 +150,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     continue
 
                 raw_msg      = typing.cast(google.pubsub_v1.types.ReceivedMessage, google.pubsub_v1.types.ReceivedMessage.from_json(payload))
-                message_data = json.loads(raw_msg.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAny]
+                message_data = json.loads(raw_msg.message.data)
                 tmp_err      = base.ErrorSink()
                 parse        = parse_notification(message_data, tmp_err);
 
