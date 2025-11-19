@@ -343,7 +343,19 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
                     if value is None:
                         content.append(str(value))
                     elif isinstance(value, bytes):
-                        content.append(value.hex())
+                        looks_like_ascii = True
+                        for it in value:
+                            if not (it >= 32 and it <= 126):
+                                looks_like_ascii = False
+                                break
+
+                        if looks_like_ascii:
+                            if len(value) > 128:
+                                content.append(str(value[:128]) + f'... ({len(value)})')
+                            else:
+                                content.append(str(value))
+                        else:
+                            content.append(value.hex())
                     elif col.endswith('unix_ts_ms'):
                         content.append(readable_unix_ts_ms(int(value)))
                     elif col.endswith('_s'):
