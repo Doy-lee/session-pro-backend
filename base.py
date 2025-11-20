@@ -3,20 +3,22 @@ The base layer contains common utilities that is useful to other files in the pr
 have no dependency on any project files, only, native Python packages. Typically useful to share
 functionality from the testing suite and the project but not limited to.
 '''
-import json
-import traceback
-import sqlite3
-import datetime
-import typing
-import enum
 import dataclasses
+import datetime
+import enum
+import glob
+import json
 import logging
 import math
-import typing_extensions
 import os
-import urllib3
+import pathlib
 import queue
+import sqlite3
 import threading
+import traceback
+import typing
+import typing_extensions
+import urllib3
 
 # NOTE: Constants
 SECONDS_IN_DAY:        int     = 60 * 60 * 24
@@ -40,6 +42,11 @@ JSONPrimitive: typing.TypeAlias = str | int | float | bool | None
 JSONValue:     typing.TypeAlias = JSONPrimitive | dict[str, 'JSONValue'] | list['JSONValue']
 JSONObject:    typing.TypeAlias = dict[str, JSONValue]
 JSONArray:     typing.TypeAlias = list[JSONValue]
+
+@dataclasses.dataclass
+class BackupRotationDryRun:
+    to_keep: list[pathlib.Path]   = dataclasses.field(default_factory=list)
+    to_delete: list[pathlib.Path] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class PaymentProviderData:
@@ -654,3 +661,96 @@ def os_get_boolean_env(var_name: str, default: bool = False):
         return False
     else:
         raise ValueError(f"Invalid value for environment variable '{var_name}': {value}. Allowed values are 0 or 1.")
+
+def backup_file_path(base_file_path: pathlib.Path, now: datetime.datetime) -> str:
+    date:      str          = now.strftime("%Y-%m-%d_%H%M%S")
+    file_name: str          = base_file_path.name
+    parent:    pathlib.Path = base_file_path.parent
+    result                  = str(parent / f'{date}_{file_name}.bak')
+    return result
+
+def backup_rotation_from_dated_files_dry_run(backup_files_listing: list[str], now: datetime.datetime) -> BackupRotationDryRun:
+    """
+    Given a list of files in the format "YYYY-MM-DD_HHMMSS_<rest_of_file_name_and>.<extension>"
+    return the list of those files to delete to fulfill the rotating backup criteria:
+
+    - Keep the last 180 days worth of backups
+    - AND Keep the earliest backup for each month
+
+    The rotating date filter to all files in the list even if "<rest_of_file_name_and>.<extension>"
+    are different from each other.
+    """
+
+    @dataclasses.dataclass
+    class BackupItem:
+        date: datetime.datetime
+        path: pathlib.Path
+        keep: bool = False
+
+    # NOTE: Parse the list of on-disk backups into (year) -> (month) -> [(date, path)] entries
+    year_backups: dict[int, dict[int, list[BackupItem]]] = {}
+    for item in backup_files_listing:
+        try:
+            file_name:        str = pathlib.Path(item).name  # Extract file name
+            # Extract timestamp from filename of format
+            # "YYYY-MM-DD_HHMMSS_<rest_of_file_name_and>.<extension>"
+            expected_prefix: str = "YYYY-MM-DD_HHMMSS"
+            ts_str:          str = file_name[:len(expected_prefix)]
+            dt                   = datetime.datetime.strptime(ts_str, "%Y-%m-%d_%H%M%S") # Parse the timestamp
+            if not dt.year in year_backups:
+                year_backups[dt.year] = {}
+            if not dt.month in year_backups[dt.year]:
+                year_backups[dt.year][dt.month] = []
+            year_backups[dt.year][dt.month].append(BackupItem(date=dt, path=pathlib.Path(item)))
+        except:
+            continue  # skip malformed
+
+    # NOTE: Sort each list of backups belonging to the (year, month)
+    for year in year_backups:
+        for month in year_backups[year]:
+            year_backups[year][month] = sorted(year_backups[year][month], key=lambda it: it.date)
+
+    # NOTE: Determine which backup to keep
+    cutoff_unix_ts_s: int = int(now.timestamp()) - (SECONDS_IN_DAY * 180)
+    for year in year_backups:
+        for month in year_backups[year]:
+            backups: list[BackupItem] = year_backups[year][month]
+
+            # NOTE: If we're within the recent cutoff date, keep the file
+            for backup_it in backups:
+                if backup_it.date.timestamp() >= cutoff_unix_ts_s:
+                    backup_it.keep  = True
+
+            # NOTE: We keep the earliest one we have for that month
+            backups[0].keep  = True
+
+    print(year_backups)
+
+    # NOTE: Generate the final result (the 2 lists, keep or delete)
+    result = BackupRotationDryRun()
+    for year in year_backups:
+        for month in year_backups[year]:
+            backups = year_backups[year][month]
+            for backup_it in backups:
+                if backup_it.keep:
+                    result.to_keep.append(backup_it.path)
+                else:
+                    result.to_delete.append(backup_it.path)
+
+    return result
+
+def backup_rotation_dry_run(base_file_path: pathlib.Path, now: datetime.datetime) -> BackupRotationDryRun:
+    """
+    Given a path to the file denoted by 'base_file_path' enumerate for other files in the directory
+    with the format "YYYY-MM-DD_HHMMSS_<base_file_name>" and return the list of those files to
+    keep and delete for the rotating backup criteria (see: dry_run_backup_rotation_from_dated_files)
+    """
+
+    backup_dir:  pathlib.Path = pathlib.Path(base_file_path).parent
+    backup_name: str          = pathlib.Path(base_file_path).name
+
+    # NOTE: Retrieve the list of backups
+    backup_files_listing: list[str]            = glob.glob(str(backup_dir / f"*_{backup_name}.bak"))
+    result:               BackupRotationDryRun = backup_rotation_from_dated_files_dry_run(backup_files_listing, now)
+    return result
+

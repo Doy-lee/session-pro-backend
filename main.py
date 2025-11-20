@@ -27,6 +27,8 @@ import configparser
 import sys
 import dataclasses
 import enum
+import traceback
+import sqlite3
 
 import base
 import backend
@@ -89,10 +91,10 @@ class ParsedArgs:
     google_subscription_product_id:      str                             = ''
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
-    global stop_proof_expiry_thread
+    global stop_maintenance_thread
 
     # NOTE: Wake up the thread and set the flag to terminate it
-    stop_proof_expiry_thread = True
+    stop_maintenance_thread = True
     proof_expiry_thread_event.set()
 
     # NOTE: Also kill the google-thread if there's one was initiated. The google thread is sleeping
@@ -104,16 +106,18 @@ def signal_handler(sig: int, _frame: types.FrameType | None):
     _ = signal.signal(sig, signal.SIG_DFL)
     signal.raise_signal(sig)
 
-def backend_proof_expiry_thread_entry_point(db_path: str):
-    global stop_proof_expiry_thread
-    while not stop_proof_expiry_thread:
+def backend_maintenance_thread_entry_point(db_path: str):
+    global stop_maintenance_thread
+    while not stop_maintenance_thread:
         start_unix_ts_s:    float = time.time()
         next_day_unix_ts_s: float = base.round_unix_ts_ms_to_next_day(int(start_unix_ts_s * 1000)) / 1000.0
         sleep_time_s:       float = next_day_unix_ts_s - start_unix_ts_s
-        next_day_str:       str   = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%Y-%m-%d')
+
+        next_day_date:      datetime.datetime = datetime.datetime.fromtimestamp(next_day_unix_ts_s)
+        next_day_str:       str               = next_day_date.strftime('%Y-%m-%d')
 
         # Sleep on CV until sleep time has elapsed, or, we get woken up by SIG handler.
-        while sleep_time_s > 0 and not stop_proof_expiry_thread:
+        while int(sleep_time_s) > 0 and not stop_maintenance_thread:
             assert sleep_time_s <= base.SECONDS_IN_DAY
             log.info(f'Sleeping for {base.format_seconds(sleep_time_s)} to expire DB entries at UTC {next_day_str}')
             _ = proof_expiry_thread_event.wait(timeout=sleep_time_s)
@@ -121,24 +125,63 @@ def backend_proof_expiry_thread_entry_point(db_path: str):
 
         # We only reach here if the sleep time has elapsed OR woken up. If sleep time has elapsed,
         # then we can go and expire the records from the DB
-        if not stop_proof_expiry_thread:
-            expire_result = backend.ExpireResult()
-            with backend.OpenDBAtPath(db_path=db_path) as db:
-                expire_result = backend.expire_payments_revocations_and_users(sql_conn=db.sql_conn,
-                                                                              unix_ts_ms=int(next_day_unix_ts_s * 1000))
+        if not stop_maintenance_thread:
 
-            yesterday_str: str = datetime.datetime.fromtimestamp(next_day_unix_ts_s - base.SECONDS_IN_DAY).strftime('%Y-%m-%d')
-            today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
-            if expire_result.success:
-                if not expire_result.already_done_by_someone_else:
-                    log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users/apple notifs={}/{}/{}/{}'.format(yesterday_str,
-                                                                                                                     today_str,
-                                                                                                                     expire_result.payments,
-                                                                                                                     expire_result.revocations,
-                                                                                                                     expire_result.users,
-                                                                                                                     expire_result.apple_notification_uuid_history))
-            else:
-                log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
+            # NOTE: Expire rows from the database
+            if 1:
+                expire_result = backend.ExpireResult()
+                with backend.OpenDBAtPath(db_path=db_path) as db:
+                    expire_result = backend.expire_payments_revocations_and_users(sql_conn=db.sql_conn,
+                                                                                  unix_ts_ms=int(next_day_unix_ts_s * 1000))
+
+                yesterday_str: str = datetime.datetime.fromtimestamp(next_day_unix_ts_s - base.SECONDS_IN_DAY).strftime('%Y-%m-%d')
+                today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
+                if expire_result.success:
+                    if not expire_result.already_done_by_someone_else:
+                        log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users/apple notifs={}/{}/{}/{}'.format(yesterday_str,
+                                                                                                                         today_str,
+                                                                                                                         expire_result.payments,
+                                                                                                                         expire_result.revocations,
+                                                                                                                         expire_result.users,
+                                                                                                                         expire_result.apple_notification_uuid_history))
+                else:
+                    log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
+
+            # NOTE: Do backup rotation
+            if 1:
+                dry_run: base.BackupRotationDryRun = base.backup_rotation_dry_run(base_file_path = pathlib.Path(db_path),
+                                                                                  now            = datetime.datetime.now())
+
+                if len(dry_run.to_delete):
+                    msg = 'Rotating backups and deleting:\n'
+                    for index, it in enumerate(dry_run.to_delete):
+                        if index:
+                            msg += '\n'
+                        msg += f'  [{index:02d}] {it}'
+                    log.info(msg)
+
+                    for it in dry_run.to_delete:
+                        it.unlink()
+
+            # NOTE: Do a backup of the DB
+            if 1:
+                backup_db_path: str = base.backup_file_path(pathlib.Path(db_path), next_day_date)
+                with backend.OpenDBAtPath(db_path=db_path) as src:
+                    def progress(status: int, remaining: int, total: int):
+                        log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
+
+                    dest_sql_conn = sqlite3.connect(backup_db_path)
+                    try:
+                        log.info(f"Backing up: {db_path} → {backup_db_path}")
+                        src.sql_conn.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
+                        log.info("Backup completed successfully!")
+                    except KeyboardInterrupt:
+                        log.warning("Backup cancelled by user.")
+                    except Exception:
+                        log.error(f"Backup failed: {traceback.format_exc()}")
+                    finally:
+                        dest_sql_conn.close()
+
 
 def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
@@ -506,7 +549,6 @@ def entry_point() -> flask.Flask:
                         label += f' (skipped)'
 
             log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
-
         sys.exit(1)
 
     # NOTE: Running the application just in Flask (e.g. local development) we
@@ -560,7 +602,7 @@ def entry_point() -> flask.Flask:
     # to clean the DB and race at UTC 00:00 to do so. We just make sure to do
     # that operation over an atomic transaction and allow exactly one process
     # out of the N available to actually clean the DB. The rest will no-op.
-    thread = threading.Thread(target=backend_proof_expiry_thread_entry_point, args=(parsed_args.db_path,))
+    thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
     thread.start()
 
     result: flask.Flask = server.init(testing_mode=False,
@@ -611,6 +653,6 @@ def entry_point() -> flask.Flask:
     return result
 
 # Flask entry point
-stop_proof_expiry_thread  = False
+stop_maintenance_thread  = False
 proof_expiry_thread_event = threading.Event()
 flask_app: flask.Flask    = entry_point()

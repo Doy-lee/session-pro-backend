@@ -24,6 +24,7 @@ import typing
 import enum
 import sqlite3
 import traceback
+import datetime
 
 import platform_google
 import platform_google_api
@@ -101,6 +102,37 @@ class TestingContext:
         self.sql_conn.close()
         base.PLATFORM_TESTING_ENV = False
         return False
+
+def test_dry_run_backup_rotation():
+    now = datetime.datetime(2025, 6, 1, 12, 0, 0)
+    files = [
+        "/b/2025-05-30_100000_a.sql", "/b/2025-01-01_000000_b.sql", "/b/2024-12-15_235959_c.sql",
+        "/b/2024-12-01_000000_d.sql", "/b/2024-12-30_235959_e.sql", "/b/2024-11-05_080000_f.sql",
+        "/b/2024-11-20_150000_g.sql", "/b/2025-01-10_090000_h.sql", "/b/2025-01-20_100000_i.sql",
+        "invalid.txt", "/b/2024-11-01_000000_j.sql", "/b/2024-11-15_000000_k.sql"
+    ]
+    result = base.backup_rotation_from_dated_files_dry_run(files, now)
+    keep   = {p.name for p in result.to_keep}
+    delete = {p.name for p in result.to_delete}
+    assert keep == {
+        # NOTE: Earliest of each month after the 180 day cutoff
+        "2024-11-01_000000_j.sql",
+        "2024-12-01_000000_d.sql",
+
+        # NOTE: Because within the last 180 days
+        "2024-12-15_235959_c.sql",
+        "2024-12-30_235959_e.sql",
+        "2025-01-01_000000_b.sql",
+        "2025-01-10_090000_h.sql",
+        "2025-01-20_100000_i.sql",
+        "2025-05-30_100000_a.sql",
+    }
+    assert delete == {
+        "2024-11-05_080000_f.sql",
+        "2024-11-20_150000_g.sql",
+        "2024-11-15_000000_k.sql",
+    }
+    assert len(result.to_keep) == 8 and len(result.to_delete) == 3
 
 def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     monkeypatch.setattr(
