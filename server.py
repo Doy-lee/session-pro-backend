@@ -302,16 +302,17 @@ API
                          renewing subscription. This expiry value was calculated as the
                          `max(subscription expiry + maybe grace period)` timestamp from their list
                          of payments that are active.
-      grace_duration_ms: 8 byte duration integer indicating the grace period duration indicating
-                         the amount of time the payment platform will attempt to auto-renew the
-                         subscription after it has expired. Clients can continue to request a proof
-                         for users during the grace period that expires at the end of the period.
-                         The grace period is included into the expiry timestamp thus the timestamp
-                         at which auto-renewing of a subscription starts can be calculated by
-                         `expiry_unix_ts_ms - grace_duration_ms` and that `auto_renewing` is true.
-                         Note: on some platforms, the grace period is not known until the user
-                         enters the grace period (such as Google) and as such this value may be 0
-                         whilst `auto_renewing` is true.
+      grace_period_duration_ms: 8 byte duration integer indicating the grace period duration
+                                indicating the amount of time the payment platform will attempt to
+                                auto-renew the subscription after it has expired. Clients can
+                                continue to request a proof for users during the grace period that
+                                expires at the end of the period. The grace period is included into
+                                the expiry timestamp thus the timestamp at which auto-renewing of
+                                a subscription starts can be calculated by `expiry_unix_ts_ms
+                                - grace_duration_ms` and that `auto_renewing` is true. Note: on some
+                                platforms, the grace period is not known until the user enters the
+                                grace period (such as Google) and as such this value may be 0 whilst
+                                `auto_renewing` is true.
       error_report:    1 byte integer error code where any non-zero value indicates that the Session
                        Pro Backend encountered an error book-keeping Session Pro for the user. Their
                        Session Pro status may be out-of-date, hence if this value is non-zero,
