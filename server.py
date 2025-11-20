@@ -827,7 +827,12 @@ def get_pro_details():
 
                 # NOTE: Determine pro status if it is relevant
                 if payment.status == base.PaymentStatus.Redeemed:
-                    user_pro_status = UserProStatus.Active
+                    # NOTE: If the user requests pro-details after a payment has expired by
+                    # timestamp but the expiry job hasn't been run yet then the payment is redeemed
+                    # but it should be expired. We add an additional check here to detect payments
+                    # in that state.
+                    if unix_ts_ms <= payment.expiry_unix_ts_ms + payment.grace_period_duration_ms:
+                        user_pro_status = UserProStatus.Active
 
                 # NOTE: If we determine that the user is active and the user didn't request for
                 # history, we can early terminate the loop as we've found what we wanted (their pro
