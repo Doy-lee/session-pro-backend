@@ -637,7 +637,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
 
         if len(err.msg_list) == 0:
             assert tx # NOTE: Assert the types for LSP now that we have checked that they exist
-            assert isinstance(tx.revocationDate,          int), f'{print_obj(tx)}'
+            assert isinstance(tx.revocationDate,        int), f'{print_obj(tx)}'
             assert isinstance(tx.originalTransactionId, str), f'{print_obj(tx)}'
 
             # NOTE: Process
@@ -758,6 +758,26 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                 else:
                     err.msg_list.append(f'Received TX: {print_obj(tx)}, with unrecognised subtype for a DID_FAIL_TO_RENEW notification')
 
+    elif decoded_notification.body.notificationType == AppleNotificationV2.REFUND_DECLINED:
+        # A notification type that indicates the App Store declined a refund request.
+        #
+        # NOTE: No-op, the user is still entitled to Session Pro, we either get a REFUND or
+        # REFUND_DECLINED, they are mutually exclusive. In the REFUND case we will end their
+        # entitlement.
+        #
+        # TODO: Needs some more testing
+        tx = decoded_notification.tx_info
+        if not tx:
+            err.msg_list.append(f'{decoded_notification.body.notificationType.name} is missing TX info {print_obj(tx)}')
+
+        if not err.has():
+            assert tx
+            payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
+            if not err.has():
+                log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: refund_request_unix_ts_ms = 0')
+                if backend.set_refund_requested_unix_ts_ms(tx=sql_tx, payment_tx = payment_tx, unix_ts_ms=0) == False:
+                    log.warning
+
     elif decoded_notification.body.notificationType == AppleNotificationV2.TEST:
         # NOTE: Test notification that we can invoke for testing. No-op
         pass
@@ -796,14 +816,6 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                 #
                 # NOTE: No-op, the Session Pro proof already has a baked in expiry date and will
                 # self-expire itself.
-                pass
-
-            elif decoded_notification.body.notificationType == AppleNotificationV2.REFUND_DECLINED:
-                # A notification type that indicates the App Store declined a refund request.
-                #
-                # NOTE: No-op, the user is still entitled to Session Pro, we either get a REFUND or
-                # REFUND_DECLINED, they are mutually exclusive. In the REFUND case we will end their
-                # entitlement.
                 pass
 
             elif decoded_notification.body.notificationType == AppleNotificationV2.GRACE_PERIOD_EXPIRED:

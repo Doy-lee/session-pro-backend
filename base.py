@@ -724,8 +724,6 @@ def backup_rotation_from_dated_files_dry_run(backup_files_listing: list[str], no
             # NOTE: We keep the earliest one we have for that month
             backups[0].keep  = True
 
-    print(year_backups)
-
     # NOTE: Generate the final result (the 2 lists, keep or delete)
     result = BackupRotationDryRun()
     for year in year_backups:

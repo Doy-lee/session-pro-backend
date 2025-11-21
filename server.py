@@ -302,17 +302,21 @@ API
                          renewing subscription. This expiry value was calculated as the
                          `max(subscription expiry + maybe grace period)` timestamp from their list
                          of payments that are active.
-      grace_period_duration_ms: 8 byte duration integer indicating the grace period duration
-                                indicating the amount of time the payment platform will attempt to
-                                auto-renew the subscription after it has expired. Clients can
-                                continue to request a proof for users during the grace period that
-                                expires at the end of the period. The grace period is included into
-                                the expiry timestamp thus the timestamp at which auto-renewing of
-                                a subscription starts can be calculated by `expiry_unix_ts_ms
-                                - grace_duration_ms` and that `auto_renewing` is true. Note: on some
-                                platforms, the grace period is not known until the user enters the
-                                grace period (such as Google) and as such this value may be 0 whilst
-                                `auto_renewing` is true.
+      refund_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a refund
+                                 for their latest subscription that would be otherwise be expiring
+                                 at the payment associated with the 'expiring_unix_ts_ms'. This
+                                 value is set to 0 if no refund has been initiated.
+      grace_period_duration_ms:  8 byte duration integer indicating the grace period duration
+                                 indicating the amount of time the payment platform will attempt to
+                                 auto-renew the subscription after it has expired. Clients can
+                                 continue to request a proof for users during the grace period that
+                                 expires at the end of the period. The grace period is included into
+                                 the expiry timestamp thus the timestamp at which auto-renewing of
+                                 a subscription starts can be calculated by `expiry_unix_ts_ms
+                                 - grace_duration_ms` and that `auto_renewing` is true. Note: on
+                                 some platforms, the grace period is not known until the user enters
+                                 the grace period (such as Google) and as such this value may be 0
+                                 whilst `auto_renewing` is true.
       error_report:    1 byte integer error code where any non-zero value indicates that the Session
                        Pro Backend encountered an error book-keeping Session Pro for the user. Their
                        Session Pro status may be out-of-date, hence if this value is non-zero,
@@ -365,18 +369,23 @@ API
                                            platform.
         revoked_unix_ts_ms:                8 byte UNIX timestamp indicating when the payment was
                                            revoked. 0 if it never revoked.
-        google_payment_token:    When payment provider is Google Play Store, a string which is set
-                                 to the platform-specific purchase token for the subscription.
-        google_order_id:         When payment provider is Google Play Store, a string which is set
-                                 to the platform-specific order ID for the subscription.
-        apple_original_tx_id:    When payment provider is Apple iOS App Store, a string which is set
-                                 to the platform-specific original transaction ID for the
-                                 subscription.
-        apple_tx_id:             When payment provider is Apple iOS App Store, a string which is set
-                                 to the platform-specific transaction ID for the subscription.
-        apple_web_line_order_id: When payment provider is Apple iOS App Store, a string which is set
-                                 to the platform-specific transaction web line order ID for the
-                                 subscription.
+        google_payment_token:      When payment provider is Google Play Store, a string which is set
+                                   to the platform-specific purchase token for the subscription.
+        google_order_id:           When payment provider is Google Play Store, a string which is set
+                                   to the platform-specific order ID for the subscription.
+        apple_original_tx_id:      When payment provider is Apple iOS App Store, a string which is set
+                                   to the platform-specific original transaction ID for the
+                                   subscription.
+        apple_tx_id:               When payment provider is Apple iOS App Store, a string which is set
+                                   to the platform-specific transaction ID for the subscription.
+        apple_web_line_order_id:   When payment provider is Apple iOS App Store, a string which is set
+                                   to the platform-specific transaction web line order ID for the
+                                   subscription.
+        refund_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
+                                   refund for this payment. This value is set to 0 if no refund
+                                   has been initiated. Setting the refund request value for a
+                                   payment is optional and platforms must call the set refund
+                                   request endpoint if they wish to set this value.
 
     Examples
       Request
@@ -449,14 +458,17 @@ FLASK_CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
 FLASK_CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
-FLASK_ROUTE_ADD_PRO_PAYMENT     = '/add_pro_payment'
-FLASK_ROUTE_GENERATE_PRO_PROOF  = '/generate_pro_proof'
-FLASK_ROUTE_GET_PRO_REVOCATIONS = '/get_pro_revocations'
-FLASK_ROUTE_GET_PRO_DETAILS     = '/get_pro_details'
+FLASK_ROUTE_ADD_PRO_PAYMENT              = '/add_pro_payment'
+FLASK_ROUTE_GENERATE_PRO_PROOF           = '/generate_pro_proof'
+FLASK_ROUTE_GET_PRO_REVOCATIONS          = '/get_pro_revocations'
+FLASK_ROUTE_GET_PRO_DETAILS              = '/get_pro_details'
+FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED = '/set_payment_refund_requested'
 
 # How many seconds can the timestamp in the get all payments route can drift
 # from the current server's timestamp before it's flat out rejected
-GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
+GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS             = 5 * 1000
+SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
+SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq'
 
 # Generic response codes, note that we don't overlap custom status codes with these generic ones
 # to try defensively avoid response handling code for callers.
@@ -475,6 +487,14 @@ class AddProPaymentStatus(enum.Enum):
 # into an app that accepts Session Pro Backend client requests.
 flask_blueprint = flask.Blueprint('session-pro-backend-blueprint', __name__)
 
+# All calls to time.time() in the server layer are now routed through the function pointer
+# 'time_now'. This is primarily for unit tests which recorded real-time payment data on test
+# networks that have had timestamps encoded in the past.
+#
+# Calls into the server layer were using the current system time (say for timestamp on signature
+# validation) to prevent stale signatures that would break in those contexts. In the tests then
+# the code changes the 'time_now()' implementation to "mock" the time of the server back to when the
+# real-time data was being captured and tested.
 time_now = lambda: time.time()
 
 def make_error_response(status: int, errors: list[str]) -> flask.Response:
@@ -506,6 +526,23 @@ def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey,
     hasher.update(bytes(master_pkey))
     hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
     hasher.update(count.to_bytes(length=4, byteorder='little'))
+    result: bytes = hasher.digest()
+    return result
+
+def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, payment_tx: backend.UserPaymentTransaction) -> bytes:
+    hasher: hashlib.blake2b = backend.make_blake2b_personalised_hasher(personalisation=SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION)
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
+    hasher.update(bytes(master_pkey))
+    hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(payment_tx.provider.value.to_bytes(length=1, byteorder='little'))
+    match payment_tx.provider:
+        case base.PaymentProvider.Nil:
+            pass
+        case base.PaymentProvider.GooglePlayStore:
+            hasher.update(payment_tx.google_payment_token.encode())
+            hasher.update(payment_tx.google_order_id.encode())
+        case base.PaymentProvider.iOSAppStore:
+            hasher.update(payment_tx.apple_tx_id.encode())
     result: bytes = hasher.digest()
     return result
 
@@ -547,7 +584,7 @@ def add_pro_payment():
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
-    user_payment          = backend.AddProPaymentUserTransaction()
+    user_payment          = backend.UserPaymentTransaction()
     user_payment.provider = base.PaymentProvider(payment_provider)
     if user_payment.provider == base.PaymentProvider.GooglePlayStore:
         user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
@@ -759,6 +796,7 @@ def get_pro_details():
     expiry_unix_ts_ms                                  = 0
     grace_period_duration_ms                           = 0
     payments_total                                     = 0
+    refund_request_unix_ts_ms                          = 0
 
     # NOTE: Eventually we might migrate this to be a fully-featured enum to provide some more
     # descriptive messaging
@@ -772,6 +810,7 @@ def get_pro_details():
             expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
             auto_renewing                        = get_user.user.auto_renewing
             payments_total                       = get_user.payments_count
+            refund_request_unix_ts_ms            = get_user.user.refund_request_unix_ts_ms
             has_payments                         = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
@@ -809,6 +848,7 @@ def get_pro_details():
                             'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
                             'google_payment_token':                 payment.google_payment_token,
                             'google_order_id':                      payment.google_order_id,
+                            'refund_requested_unix_ts_ms':          payment.refund_request_unix_ts_ms,
                         })
                     elif payment.payment_provider == base.PaymentProvider.iOSAppStore:
                         items.append({
@@ -825,6 +865,7 @@ def get_pro_details():
                             'apple_original_tx_id':                 payment.apple.original_tx_id,
                             'apple_tx_id':                          payment.apple.tx_id,
                             'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
+                            'refund_requested_unix_ts_ms':          payment.refund_request_unix_ts_ms,
                         })
 
                 # NOTE: Determine pro status if it is relevant
@@ -843,13 +884,76 @@ def get_pro_details():
                     break
 
     result = make_success_response(dict_result={
-        'version':                  0,
-        'status':                   int(user_pro_status.value),
-        'auto_renewing':            auto_renewing,
-        'expiry_unix_ts_ms':        expiry_unix_ts_ms,
-        'grace_period_duration_ms': grace_period_duration_ms if auto_renewing else 0,
-        'payments_total':           payments_total,
-        'error_report':             error_report,
-        'items':                    items
+        'version':                   0,
+        'status':                    int(user_pro_status.value),
+        'auto_renewing':             auto_renewing,
+        'expiry_unix_ts_ms':         expiry_unix_ts_ms,
+        'refund_request_unix_ts_ms': refund_request_unix_ts_ms,
+        'grace_period_duration_ms':  grace_period_duration_ms if auto_renewing else 0,
+        'payments_total':            payments_total,
+        'error_report':              error_report,
+        'items':                     items
     })
+    return result
+
+@flask_blueprint.route(FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED, methods=['POST'])
+def set_payment_refund_requested():
+    # Get JSON from request
+    get: GetJSONFromFlaskRequest = get_json_from_flask_request(flask.request)
+    if len(get.err_msg):
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=[get.err_msg])
+
+    # Extract values from JSON
+    err                                         = base.ErrorSink()
+    version:          int                       = base.json_dict_require_int(d=get.json, key='version',     err=err)
+    master_pkey:      str                       = base.json_dict_require_str(d=get.json, key='master_pkey', err=err)
+    master_sig:       str                       = base.json_dict_require_str(d=get.json, key='master_sig',  err=err)
+    payment_tx:       dict[str, base.JSONValue] = base.json_dict_require_obj(d=get.json, key='payment_tx',  err=err)
+    unix_ts_ms:       int                       = base.json_dict_require_int(d=get.json, key='unix_ts_ms',  err=err)
+    payment_provider: int                       = base.json_dict_require_int(d=payment_tx, key='provider',      err=err)
+    if len(err.msg_list):
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+
+    # Parse and validate values
+    if version != 0:
+        err.msg_list.append(f'Unrecognised version passed: {version}')
+    master_pkey_bytes = base.hex_to_bytes(hex=master_pkey, label='Master public key',    hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
+    master_sig_bytes  = base.hex_to_bytes(hex=master_sig,  label='Master key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+
+    # Build payment TX
+    if len(err.msg_list):
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+
+    user_payment          = backend.UserPaymentTransaction()
+    user_payment.provider = base.PaymentProvider(payment_provider)
+    if user_payment.provider == base.PaymentProvider.GooglePlayStore:
+        user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
+        user_payment.google_order_id      = base.json_dict_require_str(d=payment_tx, key='google_order_id', err=err)
+    elif user_payment.provider == base.PaymentProvider.iOSAppStore:
+        user_payment.apple_tx_id = base.json_dict_require_str(d=payment_tx, key='apple_tx_id', err=err)
+
+    # Validate timestamp
+    timestamp_delta: float = (time_now() * 1000) - float(unix_ts_ms)
+    if abs(timestamp_delta) >= SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS:
+        err.msg_list.append(f'Timestamp is too old to permit refund request update, delta was {timestamp_delta}ms')
+
+    if len(err.msg_list):
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+
+    # Validate the signature
+    master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
+    hash_to_verify: bytes = make_set_payment_refund_requested_hash(version=version, master_pkey=master_pkey_nacl, unix_ts_ms=unix_ts_ms, payment_tx=user_payment)
+    try:
+        _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
+    except Exception:
+        err.msg_list.append('Signature failed to be verified')
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+
+    updated: bool = False
+    with open_db_from_flask_request_context(flask.current_app) as db:
+        updated = backend.set_refund_requested_unix_ts_ms(sql_conn   = db.sql_conn,
+                                                          payment_tx = user_payment,
+                                                          unix_ts_ms = unix_ts_ms)
+
+    result = make_success_response(dict_result={'version': 0, 'updated': updated})
     return result

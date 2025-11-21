@@ -219,7 +219,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
 
         # Register the payment
         version: int = 0
-        add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx                      = backend.UserPaymentTransaction()
         add_pro_payment_tx.provider             = payment_tx.provider
         add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
         add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
@@ -416,7 +416,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
 
             # Register the payment
             version: int = 0
-            add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+            add_pro_payment_tx                      = backend.UserPaymentTransaction()
             add_pro_payment_tx.provider             = payment_tx.provider
             add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
             add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
@@ -564,7 +564,7 @@ def test_server_add_payment_flow(monkeypatch):
 
     if 1: # Simulate client request to register a payment
         version: int                            = 0
-        add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx                      = backend.UserPaymentTransaction()
         add_pro_payment_tx.provider             = payment_tx.provider
         add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
         add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
@@ -706,7 +706,7 @@ def test_server_add_payment_flow(monkeypatch):
         assert result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 31)) or \
                result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 30))
 
-    new_add_pro_payment_tx                = backend.AddProPaymentUserTransaction()
+    new_add_pro_payment_tx = backend.UserPaymentTransaction()
     if 1: # Register another payment on the same user, this will stack the duration
         new_payment_tx                      = base.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
@@ -1196,6 +1196,90 @@ def test_server_add_payment_flow(monkeypatch):
         assert response_json['status'] == server.RESPONSE_GENERIC_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
         assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
+    if 1: # Initiate a "refund" request on the payment
+        set_refund_requested_version = 0
+        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version     = set_refund_requested_version,
+                                                                            master_pkey = master_key.verify_key,
+                                                                            unix_ts_ms  = start_unix_ts_ms,
+                                                                            payment_tx  = new_add_pro_payment_tx)
+
+        request_body = {
+            'version':     set_refund_requested_version,
+            'master_pkey': bytes(master_key.verify_key).hex(),
+            'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+            'unix_ts_ms':  start_unix_ts_ms,
+            'payment_tx': {
+                'provider':             new_add_pro_payment_tx.provider.value,
+                'google_payment_token': new_add_pro_payment_tx.google_payment_token,
+                'google_order_id':      new_add_pro_payment_tx.google_order_id,
+            },
+        }
+
+        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                  shared_key      = shared_key,
+                                                  endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
+                                                  request_body    = request_body)
+
+        # POST and get response for refund request
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON refund request
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+        # Parse fields in the JSON
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['result']['updated'] == True,                    f'Response was: {json.dumps(response_json, indent=2)}'
+
+    if 1: # Initiate a "refund" on a non-existing payment
+        set_refund_requested_version = 0
+
+        fake_payment                      = backend.UserPaymentTransaction()
+        fake_payment.provider             = base.PaymentProvider.GooglePlayStore
+        fake_payment.google_payment_token = 'non-existent-payment-token-to-trigger-fail-response'
+        fake_payment.google_order_id      = 'non-existent-order-id-to-trigger-fail-response'
+
+        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version     = set_refund_requested_version,
+                                                                            master_pkey = master_key.verify_key,
+                                                                            unix_ts_ms  = start_unix_ts_ms,
+                                                                            payment_tx  = fake_payment)
+
+        request_body = {
+            'version':     set_refund_requested_version,
+            'master_pkey': bytes(master_key.verify_key).hex(),
+            'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+            'payment_tx': {
+                'provider':             fake_payment.provider.value,
+                'google_payment_token': fake_payment.google_payment_token,
+                'google_order_id':      fake_payment.google_order_id,
+            },
+            'unix_ts_ms': start_unix_ts_ms,
+        }
+
+        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                  shared_key      = shared_key,
+                                                  endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
+                                                  request_body    = request_body)
+
+        # POST and get response for refund request
+        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+        assert onion_response.success
+
+        # Parse the JSON refund request
+        response_json = json.loads(onion_response.body)
+        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+        # Parse fields in the JSON, we expect it to fail
+        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
+        assert response_json['result']['updated'] == False,                   f'Response was: {json.dumps(response_json, indent=2)}'
+
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
     # maintaining a bleeding edge version of it).
@@ -1413,13 +1497,13 @@ def test_platform_apple():
         rotating_key = nacl.signing.SigningKey.generate()
 
         version = 0
-        add_pro_payment_tx             = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx             = backend.UserPaymentTransaction()
         add_pro_payment_tx.provider    = base.PaymentProvider.iOSAppStore
         add_pro_payment_tx.apple_tx_id = unredeemed_list[0].apple.tx_id
-        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                        master_pkey=master_key.verify_key,
-                                                                        rotating_pkey=rotating_key.verify_key,
-                                                                        payment_tx=add_pro_payment_tx)
+        payment_hash_to_sign: bytes    = backend.make_add_pro_payment_hash(version       = version,
+                                                                           master_pkey   = master_key.verify_key,
+                                                                           rotating_pkey = rotating_key.verify_key,
+                                                                           payment_tx    = add_pro_payment_tx)
 
         # NOTE: POST and get response
         response: werkzeug.test.TestResponse = test.flask_client.post(server.FLASK_ROUTE_ADD_PRO_PAYMENT, json={
@@ -2679,7 +2763,7 @@ def test_platform_apple():
 
             # NOTE: Then redeem the payment
             version = 0
-            add_pro_payment_tx             = backend.AddProPaymentUserTransaction()
+            add_pro_payment_tx             = backend.UserPaymentTransaction()
             add_pro_payment_tx.provider    = base.PaymentProvider.iOSAppStore
             add_pro_payment_tx.apple_tx_id = unredeemed_payment_list[0].apple.tx_id
             payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
@@ -3376,7 +3460,7 @@ def test_google_platform_handle_notification(monkeypatch):
 
     def add_payment(tx: TestTx, user_ctx: TestUserCtx, ctx: TestingContext) -> int:
         version: int                            = 0
-        add_pro_payment_tx                      = backend.AddProPaymentUserTransaction()
+        add_pro_payment_tx                      = backend.UserPaymentTransaction()
         add_pro_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         add_pro_payment_tx.google_payment_token = tx.purchase_token
         add_pro_payment_tx.google_order_id      = tx.order_id
