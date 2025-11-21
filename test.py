@@ -3277,6 +3277,7 @@ def test_google_platform_handle_notification(monkeypatch):
                                  subscription_name       = 'session-pro-sub',
                                  subscription_product_id = 'session_pro',
                                  app_credentials_path    = None)
+
     err = base.ErrorSink()
     test_product_details = SubscriptionProductDetails(
         billing_period=GoogleDuration("P30D", err),
@@ -3357,8 +3358,7 @@ def test_google_platform_handle_notification(monkeypatch):
     Testing Interaction Utility Functions
     """
 
-    def get_pro_details(user_ctx: TestUserCtx, ctx: TestingContext) -> base.JSONObject:
-        unix_ts_ms:   int   = int(time.time() * 1000)
+    def get_pro_details(user_ctx: TestUserCtx, ctx: TestingContext, unix_ts_ms: int) -> base.JSONObject:
         version:      int   = 0
         count:        int   = 10_000
         hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
@@ -3367,7 +3367,9 @@ def test_google_platform_handle_notification(monkeypatch):
                       'master_sig':  bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
                       'unix_ts_ms':  unix_ts_ms,
                       'count':       count}
+        server.time_now = lambda: unix_ts_ms / 1000.0
         response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_GET_PRO_DETAILS, json=request_body)
+        server.time_now = lambda: time.time()
         response_json = response.json
         assert response_json is not None
         return response_json
@@ -3394,19 +3396,12 @@ def test_google_platform_handle_notification(monkeypatch):
                   'google_order_id':      add_pro_payment_tx.google_order_id,
               }
             }
-        response: werkzeug.test.TestResponse = ctx.flask_client.post(server.FLASK_ROUTE_ADD_PRO_PAYMENT, json=request_body)
 
-        # TODO: Using time.time() here is a very bad idea. We're mixing real world time with test
-        # times that we captured many moons before the test actually runs. We end up interleaving
-        # real-time timestamps with stale timestamps and this can lead to older payments have newer
-        # timestamps.
-        #
-        # This can break things very subtly! Like things that sort by date. We should be hijacking
-        # the timestamp the server is using instead of using system time.
-        #
-        # TLDR: Using system time and having test data that has hardcoded timestamps leads to bugs
-        # and non-determinism.
-        return base.round_unix_ts_ms_to_next_day(int(time.time() * 1000))
+        server.time_now = lambda: tx.event_ms / 1000.0
+        _ = ctx.flask_client.post(server.FLASK_ROUTE_ADD_PRO_PAYMENT, json=request_body)
+        server.time_now = lambda: time.time()
+
+        return base.round_unix_ts_ms_to_next_day(tx.event_ms)
 
     def backend_expire_payments_at_end_of_day(event_ms: int, assert_success: bool = False):
         end_of_day_ts_ms = event_ms + backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=base.PaymentProvider.GooglePlayStore, unix_ts_ms=event_ms)
@@ -3430,18 +3425,18 @@ def test_google_platform_handle_notification(monkeypatch):
             if unredeemed_payment.google_order_id == tx.order_id:
                 found = True
                 assert isinstance(unredeemed_payment, backend.PaymentRow)
-                assert unredeemed_payment.master_pkey == None
-                assert unredeemed_payment.status == base.PaymentStatus.Unredeemed
-                assert unredeemed_payment.plan == plan
-                assert unredeemed_payment.payment_provider == base.PaymentProvider.GooglePlayStore
-                assert unredeemed_payment.redeemed_unix_ts_ms == None
-                assert unredeemed_payment.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
-                assert unredeemed_payment.grace_period_duration_ms == 0
+                assert unredeemed_payment.master_pkey                       == None
+                assert unredeemed_payment.status                            == base.PaymentStatus.Unredeemed
+                assert unredeemed_payment.plan                              == plan
+                assert unredeemed_payment.payment_provider                  == base.PaymentProvider.GooglePlayStore
+                assert unredeemed_payment.redeemed_unix_ts_ms               == None
+                assert unredeemed_payment.expiry_unix_ts_ms                 == tx.expiry_unix_ts_ms
+                assert unredeemed_payment.grace_period_duration_ms          == 0
                 assert unredeemed_payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms
-                assert unredeemed_payment.revoked_unix_ts_ms == None
-                assert unredeemed_payment.apple == backend.AppleTransaction()
-                assert unredeemed_payment.google_payment_token == tx.purchase_token
-                assert unredeemed_payment.google_order_id == tx.order_id
+                assert unredeemed_payment.revoked_unix_ts_ms                == None
+                assert unredeemed_payment.apple                             == backend.AppleTransaction()
+                assert unredeemed_payment.google_payment_token              == tx.purchase_token
+                assert unredeemed_payment.google_order_id                   == tx.order_id
         assert found
 
     def assert_has_payment(tx: TestTx, plan: base.ProPlan, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
@@ -3449,18 +3444,18 @@ def test_google_platform_handle_notification(monkeypatch):
         assert len(payments) == user_ctx.payments
         payment = payments[-1]
         assert isinstance(payment, backend.PaymentRow)
-        assert payment.master_pkey == bytes(user_ctx.master_key.verify_key)
-        assert payment.status == base.PaymentStatus.Redeemed
-        assert payment.plan == plan
-        assert payment.payment_provider == base.PaymentProvider.GooglePlayStore
+        assert payment.master_pkey                                                     == bytes(user_ctx.master_key.verify_key)
+        assert payment.status                                                          == base.PaymentStatus.Redeemed
+        assert payment.plan                                                            == plan
+        assert payment.payment_provider                                                == base.PaymentProvider.GooglePlayStore
         assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms == redeemed_ts_ms_rounded
-        assert payment.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
-        assert payment.grace_period_duration_ms == 0
-        assert payment.platform_refund_expiry_unix_ts_ms == platform_refund_expiry_unix_ts_ms 
-        assert payment.revoked_unix_ts_ms == None
-        assert payment.apple == backend.AppleTransaction()
-        assert payment.google_payment_token == tx.purchase_token
-        assert payment.google_order_id == tx.order_id
+        assert payment.expiry_unix_ts_ms                                               == tx.expiry_unix_ts_ms
+        assert payment.grace_period_duration_ms                                        == 0
+        assert payment.platform_refund_expiry_unix_ts_ms                               == platform_refund_expiry_unix_ts_ms
+        assert payment.revoked_unix_ts_ms                                              == None
+        assert payment.apple                                                           == backend.AppleTransaction()
+        assert payment.google_payment_token                                            == tx.purchase_token
+        assert payment.google_order_id                                                 == tx.order_id
 
     def assert_has_user(tx: TestTx, user_ctx: TestUserCtx, ctx: TestingContext):
         user = backend.get_user(sql_conn=ctx.sql_conn, master_pkey=user_ctx.master_key.verify_key)
@@ -3470,7 +3465,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert user.expiry_unix_ts_ms == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
 
     def assert_pro_details(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
-        status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx)
+        status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx, unix_ts_ms=tx.event_ms)
         err                          = base.ErrorSink()
         result                       = base.json_dict_require_obj(status, "result", err)
         res_auto_renewing            = base.json_dict_require_bool(result, "auto_renewing", err)
@@ -3478,7 +3473,7 @@ def test_google_platform_handle_notification(monkeypatch):
         res_grace_period_duration_ms = base.json_dict_require_int(result, "grace_period_duration_ms", err)
         res_pro_status               = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
         res_items                    = base.json_dict_require_array(result, "items", err)
-        assert not err.has()
+        assert not err.has(), status
         assert res_auto_renewing == auto_renew
         revoked = payment_status == base.PaymentStatus.Revoked
         if revoked:
@@ -3563,7 +3558,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
 
         """2. User cancels"""
         _ = test_notification(cancel, ctx)
-        assert_pro_details(tx                                = tx_subscribe, 
+        assert_pro_details(tx                                = tx_subscribe,
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = False,

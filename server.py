@@ -475,6 +475,8 @@ class AddProPaymentStatus(enum.Enum):
 # into an app that accepts Session Pro Backend client requests.
 flask_blueprint = flask.Blueprint('session-pro-backend-blueprint', __name__)
 
+time_now = lambda: time.time()
+
 def make_error_response(status: int, errors: list[str]) -> flask.Response:
     assert status != RESPONSE_SUCCESS, f"{RESPONSE_SUCCESS} is reserved for success"
     result = flask.jsonify({'status': status, 'errors': errors})
@@ -564,7 +566,7 @@ def add_pro_payment():
     # Submit the payment to the DB
     redeemed_payment = backend.RedeemPayment()
     with open_db_from_flask_request_context(flask.current_app) as db:
-        unix_ts_ms          = int(time.time() * 1000)
+        unix_ts_ms          = int(time_now() * 1000)
         redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
         redeemed_payment = backend.add_pro_payment(sql_conn            = db.sql_conn,
                                                    version             = version,
@@ -626,7 +628,7 @@ def generate_pro_proof() -> flask.Response:
 
     # Validate the timestamp is within 5 minutes of the current time (mitigate replay attacks)
     UNIX_TS_MS_THRESHOLD: int = 60 * 5 * 1000;
-    now:                  int = int(time.time() * 1000)
+    now:                  int = int(time_now() * 1000)
     max_unix_ts_ms:       int = now + UNIX_TS_MS_THRESHOLD
     min_unix_ts_ms:       int = now - UNIX_TS_MS_THRESHOLD
 
@@ -735,7 +737,7 @@ def get_pro_details():
     # TODO: We _could_ track the last GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_S seconds worth of
     # requests to completely reject replay attacks if we cared enough but onion requests probably
     # suffice to mask the ability to replay a query.
-    timestamp_delta: float = (time.time() * 1000) - float(unix_ts_ms)
+    timestamp_delta: float = (time_now() * 1000) - float(unix_ts_ms)
     if abs(timestamp_delta) >= GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS:
         err.msg_list.append(f'Timestamp is too old to permit retrieval of payments, delta was {timestamp_delta}ms')
 
