@@ -2215,8 +2215,8 @@ def set_refund_requested_unix_ts_ms(sql_conn:   sqlite3.Connection,
             _ = tx.cursor.execute(f'''
                 UPDATE payments
                 SET    refund_request_unix_ts_ms = ?
-                WHERE  payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-            ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
+                WHERE  payment_provider = ? AND apple_tx_id = ?
+            ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.apple_tx_id))
 
         assert tx.cursor.rowcount == 0 or tx.cursor.rowcount == 1
         result = tx.cursor.rowcount > 0

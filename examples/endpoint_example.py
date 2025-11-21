@@ -14,6 +14,7 @@ add_pro_payment_example             = True
 add_pro_payment_example_with_google = True
 add_pro_payment_example_with_apple  = True
 get_revocations_list_example        = True
+set_payment_refund_requested        = True
 
 # NOTE: CLI handler
 parser = argparse.ArgumentParser()
@@ -70,6 +71,39 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             response_data = json.loads(response.read().decode('utf-8'))
             print(f"Response: {json.dumps(response_data, indent=1)}")
 
+        if set_payment_refund_requested:
+            set_version                 = 0
+            now_unix_ts_ms              = int(time.time() * 1000)
+            refund_requested_unix_ts_ms = int((time.time() + 1) * 1000) # Tell backend we started a initiated a refund 1s from now
+
+            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq')
+            hasher.update(set_version.to_bytes(length=1, byteorder='little'))
+            hasher.update(bytes(master_key.verify_key))
+            hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+            hasher.update(refund_requested_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+            hasher.update(int(google_enum).to_bytes(length=1, byteorder='little'))
+            hasher.update(google_payment_token.encode('utf-8'))
+            hasher.update(google_order_id.encode('utf-8'))
+
+            request_body={
+                'version':                     request_version,
+                'master_pkey':                 bytes(master_key.verify_key).hex(),
+                'master_sig':                  bytes(master_key.sign(hasher.digest()).signature).hex(),
+                'unix_ts_ms':                  now_unix_ts_ms,
+                'refund_requested_unix_ts_ms': refund_requested_unix_ts_ms,
+                'payment_tx':                  { 'provider': google_enum, 'google_payment_token': google_payment_token, 'google_order_id': google_order_id }
+            }
+
+            print('\n--\n')
+            print('Set payment refund requested via Google')
+            print('Request:\n' + json.dumps(request_body, indent=1))
+
+            request = urllib.request.Request(f'{args.url}/set_payment_refund_requested', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request) as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+                print(f"Response: {json.dumps(response_data, indent=1)}")
+
+
     if add_pro_payment_example_with_apple: # apple
         apple_enum       = 2                            # equivalent to => int(base.PaymentProvider.iOSAppStore.value)
 
@@ -105,6 +139,38 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         with urllib.request.urlopen(request) as response:
             response_data = json.loads(response.read().decode('utf-8'))
             print(f"Response: {json.dumps(response_data, indent=1)}")
+
+        if set_payment_refund_requested:
+            set_version                 = 0
+            now_unix_ts_ms              = int(time.time() * 1000)
+            refund_requested_unix_ts_ms = int((time.time() + 1) * 1000) # Tell backend we started a initiated a refund 1s from now
+
+            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq')
+            hasher.update(set_version.to_bytes(length=1, byteorder='little'))
+            hasher.update(bytes(master_key.verify_key))
+            hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+            hasher.update(refund_requested_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+            hasher.update(int(apple_enum).to_bytes(length=1, byteorder='little'))
+            hasher.update(apple_tx_id.encode('utf-8'))
+
+            request_body={
+                'version':                     request_version,
+                'master_pkey':                 bytes(master_key.verify_key).hex(),
+                'master_sig':                  bytes(master_key.sign(hasher.digest()).signature).hex(),
+                'unix_ts_ms':                  now_unix_ts_ms,
+                'refund_requested_unix_ts_ms': refund_requested_unix_ts_ms,
+                'payment_tx': { 'provider': apple_enum, 'apple_tx_id': apple_tx_id, }
+            }
+
+            print('\n--\n')
+            print('Set payment refund requested via Apple')
+            print('Request:\n' + json.dumps(request_body, indent=1))
+
+            request = urllib.request.Request(f'{args.url}/set_payment_refund_requested', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request) as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+                print(f"Response: {json.dumps(response_data, indent=1)}")
+
 
 if generate_pro_proof_example:
     version         = 0

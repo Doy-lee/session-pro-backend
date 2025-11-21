@@ -1198,16 +1198,18 @@ def test_server_add_payment_flow(monkeypatch):
 
     if 1: # Initiate a "refund" request on the payment
         set_refund_requested_version = 0
-        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version     = set_refund_requested_version,
-                                                                            master_pkey = master_key.verify_key,
-                                                                            unix_ts_ms  = start_unix_ts_ms,
-                                                                            payment_tx  = new_add_pro_payment_tx)
+        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                            master_pkey                 = master_key.verify_key,
+                                                                            unix_ts_ms                  = start_unix_ts_ms,
+                                                                            refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                            payment_tx                  = new_add_pro_payment_tx)
 
         request_body = {
-            'version':     set_refund_requested_version,
-            'master_pkey': bytes(master_key.verify_key).hex(),
-            'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'unix_ts_ms':  start_unix_ts_ms,
+            'version':                     set_refund_requested_version,
+            'master_pkey':                 bytes(master_key.verify_key).hex(),
+            'master_sig':                  bytes(master_key.sign(hash_to_sign).signature).hex(),
+            'unix_ts_ms':                  start_unix_ts_ms,
+            'refund_requested_unix_ts_ms': start_unix_ts_ms,
             'payment_tx': {
                 'provider':             new_add_pro_payment_tx.provider.value,
                 'google_payment_token': new_add_pro_payment_tx.google_payment_token,
@@ -1243,10 +1245,11 @@ def test_server_add_payment_flow(monkeypatch):
         fake_payment.google_payment_token = 'non-existent-payment-token-to-trigger-fail-response'
         fake_payment.google_order_id      = 'non-existent-order-id-to-trigger-fail-response'
 
-        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version     = set_refund_requested_version,
-                                                                            master_pkey = master_key.verify_key,
-                                                                            unix_ts_ms  = start_unix_ts_ms,
-                                                                            payment_tx  = fake_payment)
+        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                            master_pkey                 = master_key.verify_key,
+                                                                            unix_ts_ms                  = start_unix_ts_ms,
+                                                                            refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                            payment_tx                  = fake_payment)
 
         request_body = {
             'version':     set_refund_requested_version,
@@ -1257,7 +1260,8 @@ def test_server_add_payment_flow(monkeypatch):
                 'google_payment_token': fake_payment.google_payment_token,
                 'google_order_id':      fake_payment.google_order_id,
             },
-            'unix_ts_ms': start_unix_ts_ms,
+            'unix_ts_ms':                  start_unix_ts_ms,
+            'refund_requested_unix_ts_ms': start_unix_ts_ms,
         }
 
         onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
