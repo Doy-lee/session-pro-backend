@@ -570,7 +570,8 @@ FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED = '/set_payment_refund_requested'
 # from the current server's timestamp before it's flat out rejected
 GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS             = 5 * 1000
 SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
-SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq'
+SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
+assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
 # Generic response codes, note that we don't overlap custom status codes with these generic ones
 # to try defensively avoid response handling code for callers.
