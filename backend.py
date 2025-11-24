@@ -227,7 +227,7 @@ class UserRow:
     expiry_unix_ts_ms:         int   = 0
     grace_period_duration_ms:  int   = 0
     auto_renewing:             bool  = False
-    refund_request_unix_ts_ms: int   = 0
+    refund_requested_unix_ts_ms: int   = 0
 
 @dataclasses.dataclass
 class GetUserAndPayments:
@@ -372,7 +372,10 @@ def make_blake2b_personalised_hasher(personalisation: bytes, salt: bytes | None 
     return result
 
 def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
+    # TODO: Personalise this per feature to avoid collision
     personalization = b'SeshProBackend__'
+    assert len(personalization) == hashlib.blake2b.PERSON_SIZE
+
     final_salt      = salt  if salt else b''
     result          = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE, person=personalization, salt=final_salt)
     return result
@@ -482,7 +485,7 @@ def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
     result.expiry_unix_ts_ms         = row[2]
     result.grace_period_duration_ms  = row[3]
     result.auto_renewing             = bool(row[4])
-    result.refund_request_unix_ts_ms = row[5]
+    result.refund_requested_unix_ts_ms = row[5]
     return result
 
 def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:

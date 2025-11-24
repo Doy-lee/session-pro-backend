@@ -469,8 +469,8 @@ API
       The embedded `master_sig` signature must sign over the 32 byte hash of the requests contents
       (in little endian):
 
-        google_hash = blake2b32(person='ProSetRefundReq', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.google_payment_token)
-        apple_hash  = blake2b32(person='ProSetRefundReq', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.apple_tx_id)
+        google_hash = blake2b32(person='ProSetRefundReq_', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.google_payment_token)
+        apple_hash  = blake2b32(person='ProSetRefundReq_', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.apple_tx_id)
 
     Request
       version:                     1 byte, current version of the request which should be 0
@@ -900,7 +900,7 @@ def get_pro_details():
     expiry_unix_ts_ms                                  = 0
     grace_period_duration_ms                           = 0
     payments_total                                     = 0
-    refund_request_unix_ts_ms                          = 0
+    refund_requested_unix_ts_ms                        = 0
 
     # NOTE: Eventually we might migrate this to be a fully-featured enum to provide some more
     # descriptive messaging
@@ -914,7 +914,7 @@ def get_pro_details():
             expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
             auto_renewing                        = get_user.user.auto_renewing
             payments_total                       = get_user.payments_count
-            refund_request_unix_ts_ms            = get_user.user.refund_request_unix_ts_ms
+            refund_requested_unix_ts_ms            = get_user.user.refund_requested_unix_ts_ms
             has_payments                         = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
@@ -988,15 +988,15 @@ def get_pro_details():
                     break
 
     result = make_success_response(dict_result={
-        'version':                   0,
-        'status':                    int(user_pro_status.value),
-        'auto_renewing':             auto_renewing,
-        'expiry_unix_ts_ms':         expiry_unix_ts_ms,
-        'refund_request_unix_ts_ms': refund_request_unix_ts_ms,
-        'grace_period_duration_ms':  grace_period_duration_ms if auto_renewing else 0,
-        'payments_total':            payments_total,
-        'error_report':              error_report,
-        'items':                     items
+        'version':                     0,
+        'status':                      int(user_pro_status.value),
+        'auto_renewing':               auto_renewing,
+        'expiry_unix_ts_ms':           expiry_unix_ts_ms,
+        'refund_requested_unix_ts_ms': refund_requested_unix_ts_ms,
+        'grace_period_duration_ms':    grace_period_duration_ms if auto_renewing else 0,
+        'payments_total':              payments_total,
+        'error_report':                error_report,
+        'items':                       items
     })
     return result
 
