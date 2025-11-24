@@ -45,7 +45,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         # bypass fails.
         google_order_id:      str = 'DEV.' + os.urandom(8).hex()
 
-        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
+        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'AddProPayment___')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
         hasher.update(bytes(master_key.verify_key))
         hasher.update(bytes(rotating_key.verify_key))
@@ -76,7 +76,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             now_unix_ts_ms              = int(time.time() * 1000)
             refund_requested_unix_ts_ms = int((time.time() + 1) * 1000) # Tell backend we started a initiated a refund 1s from now
 
-            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq')
+            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq_')
             hasher.update(set_version.to_bytes(length=1, byteorder='little'))
             hasher.update(bytes(master_key.verify_key))
             hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
@@ -115,7 +115,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         # bypass fails.
         apple_tx_id: str = 'DEV.' + os.urandom(8).hex() # For the tx id, anything is accepted on a development server
 
-        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
+        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'AddProPayment___')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
         hasher.update(bytes(master_key.verify_key))
         hasher.update(bytes(rotating_key.verify_key))
@@ -145,7 +145,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
             now_unix_ts_ms              = int(time.time() * 1000)
             refund_requested_unix_ts_ms = int((time.time() + 1) * 1000) # Tell backend we started a initiated a refund 1s from now
 
-            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq')
+            hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq_')
             hasher.update(set_version.to_bytes(length=1, byteorder='little'))
             hasher.update(bytes(master_key.verify_key))
             hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
@@ -176,7 +176,7 @@ if generate_pro_proof_example:
     version         = 0
     unix_ts_ms      = int(time.time() * 1000)
 
-    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
+    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProGenerateProof')
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_key.verify_key))
     hasher.update(bytes(rotating_key.verify_key))

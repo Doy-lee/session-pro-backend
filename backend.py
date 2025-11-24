@@ -15,9 +15,15 @@ import platform_google_api
 import platform_google_types
 import base
 
-ZERO_BYTES32        = bytes(32)
-BLAKE2B_DIGEST_SIZE = 32
-log                 = logging.Logger("BACKEND")
+ZERO_BYTES32               = bytes(32)
+BLAKE2B_DIGEST_SIZE        = 32
+log                        = logging.Logger("BACKEND")
+GENERATE_PROOF_HASH_PERSONALISATION  = b'ProGenerateProof'
+BUILD_PROOF_HASH_PERSONALISATION     = b'ProProof________'
+ADD_PRO_PAYMENT_HASH_PERSONALISATION = b'ProAddPayment___'
+assert len(GENERATE_PROOF_HASH_PERSONALISATION)  == hashlib.blake2b.PERSON_SIZE
+assert len(BUILD_PROOF_HASH_PERSONALISATION)     == hashlib.blake2b.PERSON_SIZE
+assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
 @dataclasses.dataclass
 class GoogleNotificationMessageIDInDB:
@@ -366,23 +372,14 @@ def string_from_sql_fields(fields: list[SQLField], schema: bool) -> str:
         result = ', '.join([it.name for it in fields])  # Create '<field0>, <field1>, ...'
     return result
 
-def make_blake2b_personalised_hasher(personalisation: bytes, salt: bytes | None = None) -> hashlib.blake2b:
+def make_blake2b_hasher(personalisation: bytes, salt: bytes | None = None) -> hashlib.blake2b:
     final_salt      = salt  if salt else b''
     result          = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE, person=personalisation, salt=final_salt)
     return result
 
-def make_blake2b_hasher(salt: bytes | None = None) -> hashlib.blake2b:
-    # TODO: Personalise this per feature to avoid collision
-    personalization = b'SeshProBackend__'
-    assert len(personalization) == hashlib.blake2b.PERSON_SIZE
-
-    final_salt      = salt  if salt else b''
-    result          = hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE, person=personalization, salt=final_salt)
-    return result
-
 def make_gen_index_hash(gen_index: int, gen_index_salt: bytes) -> bytes:
     assert len(gen_index_salt) == hashlib.blake2b.SALT_SIZE
-    hasher = make_blake2b_hasher(salt=gen_index_salt)
+    hasher = make_blake2b_hasher(personalisation=b'', salt=gen_index_salt)
     hasher.update(gen_index.to_bytes(length=8, byteorder='little'))
     result = hasher.digest()
     return result
@@ -391,7 +388,7 @@ def make_add_pro_payment_hash(version:       int,
                               master_pkey:   nacl.signing.VerifyKey,
                               rotating_pkey: nacl.signing.VerifyKey,
                               payment_tx:    UserPaymentTransaction) -> bytes:
-    hasher: hashlib.blake2b = make_blake2b_hasher()
+    hasher: hashlib.blake2b = make_blake2b_hasher(personalisation=ADD_PRO_PAYMENT_HASH_PERSONALISATION)
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
@@ -1675,13 +1672,13 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, ma
     return result
 
 def make_generate_pro_proof_hash(version:       int,
-                            master_pkey:   nacl.signing.VerifyKey,
-                            rotating_pkey: nacl.signing.VerifyKey,
-                            unix_ts_ms:    int) -> bytes:
+                                 master_pkey:   nacl.signing.VerifyKey,
+                                 rotating_pkey: nacl.signing.VerifyKey,
+                                 unix_ts_ms:    int) -> bytes:
     '''Make the hash to sign for a pre-existing subscription by authorising
     a new rotating_pkey to be used for the Session Pro subscription associated
     with master_pkey'''
-    hasher: hashlib.blake2b = make_blake2b_hasher()
+    hasher: hashlib.blake2b = make_blake2b_hasher(personalisation=GENERATE_PROOF_HASH_PERSONALISATION)
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(bytes(rotating_pkey))
@@ -1694,7 +1691,7 @@ def build_proof_hash(version:           int,
                      rotating_pkey:     nacl.signing.VerifyKey,
                      expiry_unix_ts_ms: int) -> bytes:
     '''Make the hash to the backend signs for to certify the proof'''
-    hasher: hashlib.blake2b = make_blake2b_hasher()
+    hasher: hashlib.blake2b = make_blake2b_hasher(personalisation=BUILD_PROOF_HASH_PERSONALISATION)
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(gen_index_hash)
     hasher.update(bytes(rotating_pkey))

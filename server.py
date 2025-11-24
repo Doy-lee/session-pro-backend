@@ -34,8 +34,8 @@ API
       The embedded `master_sig` and `rotating_sig` signature must sign over a 32 byte hash of the
       request components (in little endian) for example:
 
-        google_hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.google_payment_token)
-        apple_hash  = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.apple_tx_id)
+        google_hash = blake2b32(person='ProAddPayment___', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.google_payment_token)
+        apple_hash  = blake2b32(person='ProAddPayment___', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.apple_tx_id)
 
       This request will fail if the Session Pro backend has not witnessed the equivalent payment
       independently from the storefront that the payment originally came from.
@@ -126,7 +126,7 @@ API
       The embedded `master_sig` and `rotating_sig` signature must sign over a 32 byte hash of the
       request components (in little endian):
 
-        hash = blake2b32(person='SeshProBackend__', version || master_pkey || rotating_pkey || unix_ts_ms)
+        hash = blake2b32(person='ProGenerateProof', version || master_pkey || rotating_pkey || unix_ts_ms)
 
       Once the response has been received, the caller should store the proof offline and embed it
       into their messages on the Session Protocol, signing the message with their rotating secret
@@ -137,7 +137,7 @@ API
       signature in the response signs over a 32 byte hash of the following response components (in
       little endian):
 
-        hash = blake2b32(person='SeshProBackend__', version || gen_index_hash || rotating_pkey || expiry_unix_ts_ms)
+        hash = blake2b32(person='ProProof________', version || gen_index_hash || rotating_pkey || expiry_unix_ts_ms)
 
     Request
       version:       1 byte, current version of the request which should be 0
@@ -267,7 +267,7 @@ API
       The embedded `master_sig` signature must sign over the 32 byte hash of the requests contents
       (in little endian):
 
-        hash = blake2b32(person='SeshProBackend__', version || master_pkey || unix_ts_ms || count)
+        hash = blake2b32(person='ProGetProDetReq_', version || master_pkey || unix_ts_ms || count)
 
       TODO: In future we plan to prune payment history after some legally required threshold such as
       a year.
@@ -556,22 +556,24 @@ class UserProStatus(enum.IntEnum):
 
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
-FLASK_CONFIG_DB_PATH_KEY        = 'session_pro_backend_db_path'
-FLASK_CONFIG_DB_PATH_IS_URI_KEY = 'session_pro_backend_db_path_is_uri'
+FLASK_CONFIG_DB_PATH_KEY                            = 'session_pro_backend_db_path'
+FLASK_CONFIG_DB_PATH_IS_URI_KEY                     = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
-FLASK_ROUTE_ADD_PRO_PAYMENT              = '/add_pro_payment'
-FLASK_ROUTE_GENERATE_PRO_PROOF           = '/generate_pro_proof'
-FLASK_ROUTE_GET_PRO_REVOCATIONS          = '/get_pro_revocations'
-FLASK_ROUTE_GET_PRO_DETAILS              = '/get_pro_details'
-FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED = '/set_payment_refund_requested'
+FLASK_ROUTE_ADD_PRO_PAYMENT                         = '/add_pro_payment'
+FLASK_ROUTE_GENERATE_PRO_PROOF                      = '/generate_pro_proof'
+FLASK_ROUTE_GET_PRO_REVOCATIONS                     = '/get_pro_revocations'
+FLASK_ROUTE_GET_PRO_DETAILS                         = '/get_pro_details'
+FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED            = '/set_payment_refund_requested'
 
 # How many seconds can the timestamp in the get all payments route can drift
 # from the current server's timestamp before it's flat out rejected
 GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS             = 5 * 1000
 SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
 SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
+GET_PRO_PAYMENTS_DETAIL_HASH_PERSONALISATION        = b'ProGetProDetReq_'
 assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
+assert len(GET_PRO_PAYMENTS_DETAIL_HASH_PERSONALISATION)      == hashlib.blake2b.PERSON_SIZE
 
 # Generic response codes, note that we don't overlap custom status codes with these generic ones
 # to try defensively avoid response handling code for callers.
@@ -624,7 +626,7 @@ def get_json_from_flask_request(request: flask.Request) -> GetJSONFromFlaskReque
     return result
 
 def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, count: int) -> bytes:
-    hasher: hashlib.blake2b = backend.make_blake2b_hasher()
+    hasher: hashlib.blake2b = backend.make_blake2b_hasher(personalisation=GET_PRO_PAYMENTS_DETAIL_HASH_PERSONALISATION)
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
@@ -633,7 +635,7 @@ def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey,
     return result
 
 def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, refund_requested_unix_ts_ms: int, payment_tx: backend.UserPaymentTransaction) -> bytes:
-    hasher: hashlib.blake2b = backend.make_blake2b_personalised_hasher(personalisation=SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION)
+    hasher: hashlib.blake2b = backend.make_blake2b_hasher(personalisation=SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION)
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_pkey))
     hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
