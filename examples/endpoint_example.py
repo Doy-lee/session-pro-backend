@@ -24,7 +24,6 @@ args = parser.parse_args()
 
 # NOTE: Start executing example
 master_key_hex = args.master_priv_key_hex
-print(type(master_key_hex))
 master_key = nacl.signing.SigningKey(bytes.fromhex(master_key_hex)) if master_key_hex else nacl.signing.SigningKey.generate()
 rotating_key = nacl.signing.SigningKey.generate()
 print('Master SKey: ' + bytes(master_key).hex())
@@ -45,7 +44,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         # bypass fails.
         google_order_id:      str = 'DEV.' + os.urandom(8).hex()
 
-        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'AddProPayment___')
+        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
         hasher.update(bytes(master_key.verify_key))
         hasher.update(bytes(rotating_key.verify_key))
@@ -115,7 +114,7 @@ if add_pro_payment_example: # Register a fake payment on google and apple respec
         # bypass fails.
         apple_tx_id: str = 'DEV.' + os.urandom(8).hex() # For the tx id, anything is accepted on a development server
 
-        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'AddProPayment___')
+        hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
         hasher.update(request_version.to_bytes(length=1, byteorder='little'))
         hasher.update(bytes(master_key.verify_key))
         hasher.update(bytes(rotating_key.verify_key))
@@ -207,7 +206,7 @@ if get_pro_details_example:
     unix_ts_ms: int = int(time.time() * 1000)
     count:      int = 2
 
-    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'SeshProBackend__')
+    hasher: hashlib.blake2b = hashlib.blake2b(digest_size=32, person=b'ProGetProDetReq_')
     hasher.update(version.to_bytes(length=1, byteorder='little'))
     hasher.update(bytes(master_key.verify_key))
     hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
@@ -221,7 +220,7 @@ if get_pro_details_example:
                     'count':       count}
 
     print('\n--\n')
-    print('Get Pro Status')
+    print('Get Pro Details')
     print('Request:\n' + json.dumps(request_body, indent=1))
 
     request = urllib.request.Request(f'{args.url}/get_pro_details', data=json.dumps(request_body).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
