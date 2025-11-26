@@ -774,7 +774,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
             assert tx
             payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
             if not err.has():
-                log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: refund_request_unix_ts_ms = 0')
+                log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: refund_requested_unix_ts_ms = 0')
                 if backend.set_refund_requested_unix_ts_ms_tx(tx=sql_tx, payment_tx=payment_tx, unix_ts_ms=0) == False:
                     log.warning
 

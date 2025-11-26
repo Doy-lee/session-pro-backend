@@ -312,11 +312,11 @@ API
                            auto- renewing subscription. This expiry value was calculated as the
                            `max(subscription expiry + maybe grace period)` timestamp from their list
                            of payments that are active.
-        refund_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
-                                   refund for their latest subscription that would be otherwise be
-                                   expiring at the payment associated with the
-                                   'expiring_unix_ts_ms'. This value is set to 0 if no refund has
-                                   been initiated.
+        refund_requested_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
+                                     refund for their latest subscription that would be otherwise be
+                                     expiring at the payment associated with the
+                                     'expiring_unix_ts_ms'. This value is set to 0 if no refund has
+                                     been initiated.
         grace_period_duration_ms:  8 byte duration integer indicating the grace period duration
                                    indicating the amount of time the payment platform will attempt
                                    to auto-renew the subscription after it has expired. Clients can
@@ -395,11 +395,11 @@ API
           apple_web_line_order_id:   When payment provider is Apple iOS App Store, a string which is
                                      set to the platform-specific transaction web line order ID for
                                      the subscription.
-          refund_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
-                                     refund for this payment. This value is set to 0 if no refund
-                                     has been initiated. Setting the refund request value for a
-                                     payment is optional and platforms must call the set refund
-                                     request endpoint if they wish to set this value.
+          refunded_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
+                                       refund for this payment. This value is set to 0 if no refund
+                                       has been initiated. Setting the refund request value for a
+                                       payment is optional and platforms must call the set refund
+                                       request endpoint if they wish to set this value.
 
     Examples
       Request
@@ -956,7 +956,7 @@ def get_pro_details():
                             'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
                             'google_payment_token':                 payment.google_payment_token,
                             'google_order_id':                      payment.google_order_id,
-                            'refund_requested_unix_ts_ms':          payment.refund_request_unix_ts_ms,
+                            'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
                         })
                     elif payment.payment_provider == base.PaymentProvider.iOSAppStore:
                         items.append({
@@ -973,7 +973,7 @@ def get_pro_details():
                             'apple_original_tx_id':                 payment.apple.original_tx_id,
                             'apple_tx_id':                          payment.apple.tx_id,
                             'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
-                            'refund_requested_unix_ts_ms':          payment.refund_request_unix_ts_ms,
+                            'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
                         })
 
                 # NOTE: Determine pro status if it is relevant
