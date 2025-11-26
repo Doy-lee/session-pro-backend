@@ -941,7 +941,7 @@ def get_pro_details():
                     continue
 
                 # NOTE: Collect the payment if history was requested
-                if count > 0:
+                if len(items) < count:
                     if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
                         items.append({
                             'status':                               int(payment.status.value),
