@@ -373,7 +373,8 @@ API
                                     registered. This timestamp is rounded up to the next day
                                     boundary from the actual registration date.
           expiry_unix_ts_ms:        8 byte UNIX timestamp indicating when the entitlement of Session
-                                    Pro is due to expire.
+                                    Pro is due to expire. Note this is _not_ inclusive of grace
+                                    unlike the expiry timestamp in the top-level result object.
           grace_period_duration_ms: 8 byte duration integer indicating how long the subscription's
                                     grace period is. Set to 0 if auto-renewing is disabled.
           platform_refund_expiry_unix_ts_ms: 8 byte unix timestamp indicating when the payment will

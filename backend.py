@@ -475,13 +475,13 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
     return result;
 
 def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
-    result                           = UserRow()
-    result.found                     = True
-    result.master_pkey               = row[0]
-    result.gen_index                 = row[1]
-    result.expiry_unix_ts_ms         = row[2]
-    result.grace_period_duration_ms  = row[3]
-    result.auto_renewing             = bool(row[4])
+    result                             = UserRow()
+    result.found                       = True
+    result.master_pkey                 = row[0]
+    result.gen_index                   = row[1]
+    result.expiry_unix_ts_ms           = row[2]
+    result.grace_period_duration_ms    = row[3]
+    result.auto_renewing               = bool(row[4])
     result.refund_requested_unix_ts_ms = row[5]
     return result
 
@@ -971,9 +971,13 @@ def _update_user_expiry_grace_and_renew_flag_from_payment_list(tx: base.SQLTrans
     # NOTE: We have the latest expiry value, now update the user
     _ = tx.cursor.execute('''
         UPDATE users
-        SET    expiry_unix_ts_ms = ?, grace_period_duration_ms = ?, auto_renewing = ?
+        SET    expiry_unix_ts_ms = ?, grace_period_duration_ms = ?, auto_renewing = ?, refund_requested_unix_ts_ms  = ?
         WHERE  master_pkey = ?
-    ''', (lookup.best_expiry_unix_ts_ms, lookup.best_grace_duration_ms, lookup.best_auto_renewing, master_pkey_bytes))
+    ''', (lookup.best_expiry_unix_ts_ms,
+          lookup.best_grace_duration_ms,
+          lookup.best_auto_renewing,
+          lookup.best_refund_requested_unix_ts_ms,
+          master_pkey_bytes))
 
 def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevocationIterator], revoke_unix_ts_ms: int) -> bool:
     assert tx.cursor
@@ -1317,15 +1321,15 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
         else:
             assert False, f"Invalid code path, unhandled PaymentStatus value ({status})"
 
-    if result.expiry_unix_ts_ms_from_redeemed > result.grace_duration_ms_from_expired_or_revoked:
-        result.best_expiry_unix_ts_ms         = result.expiry_unix_ts_ms_from_redeemed
-        result.best_grace_duration_ms         = result.grace_duration_ms_from_redeemed
-        result.best_auto_renewing             = result.auto_renewing_from_redeemed
+    if result.expiry_unix_ts_ms_from_redeemed > result.expiry_unix_ts_ms_from_expired_or_revoked:
+        result.best_expiry_unix_ts_ms           = result.expiry_unix_ts_ms_from_redeemed
+        result.best_grace_duration_ms           = result.grace_duration_ms_from_redeemed
+        result.best_auto_renewing               = result.auto_renewing_from_redeemed
         result.best_refund_requested_unix_ts_ms = result.refund_requested_unix_ts_ms_from_redeemed
     else:
-        result.best_expiry_unix_ts_ms         = result.expiry_unix_ts_ms_from_expired_or_revoked
-        result.best_grace_duration_ms         = result.grace_duration_ms_from_expired_or_revoked
-        result.best_auto_renewing             = result.auto_renewing_from_expired_or_revoked
+        result.best_expiry_unix_ts_ms           = result.expiry_unix_ts_ms_from_expired_or_revoked
+        result.best_grace_duration_ms           = result.grace_duration_ms_from_expired_or_revoked
+        result.best_auto_renewing               = result.auto_renewing_from_expired_or_revoked
         result.best_refund_requested_unix_ts_ms = result.refund_requested_unix_ts_ms_from_expired_or_revoked
     return result
 
@@ -1868,10 +1872,11 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
                                    err                               = err)
 
             # Randomly toggle auto-renewal
+            is_fake_auto_renewing = bool(random.getrandbits(1))
             _ = update_payment_renewal_info(sql_conn=sql_conn,
                                             payment_tx=internal_payment_tx,
-                                            grace_period_duration_ms=(60 * 1000),
-                                            auto_renewing=bool(random.getrandbits(1)),
+                                            grace_period_duration_ms=(60 * 1000) if is_fake_auto_renewing else 0,
+                                            auto_renewing=is_fake_auto_renewing,
                                             err=err)
 
     # Verify some of the request parameters
