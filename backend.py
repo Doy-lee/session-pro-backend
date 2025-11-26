@@ -1263,7 +1263,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     # registered for it yet (e.g. the user has not associated a master public key with the payment
     # yet by redeeming it).
     _ = tx.cursor.execute(f'''
-        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, payment_provider, refund_request_unix_ts_ms
+        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_request_unix_ts_ms
         FROM      payments
         WHERE     master_pkey = ? AND (status = ? OR status = ? OR status = ?)
     ''', (bytes(master_pkey),
@@ -1276,21 +1276,17 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     result = LookupUserExpiryUnixTsMs()
     rows = typing.cast(list[tuple[int, int, int, int, int, int]], tx.cursor.fetchall())
     for row in rows:
-        expiry_unix_ts_ms:         int                  = row[0]
-        grace_period_duration_ms:  int                  = row[1]
-        auto_renewing:             int                  = row[2]
-        status:                    int                  = row[3]
-        payment_provider:          base.PaymentProvider = base.PaymentProvider(row[4])
-        refund_request_unix_ts_ms: int                  = row[5]
+        expiry_unix_ts_ms:         int = row[0]
+        grace_period_duration_ms:  int = row[1]
+        auto_renewing:             int = row[2]
+        status:                    int = row[3]
+        refund_request_unix_ts_ms: int = row[4]
 
         # NOTE: A revoke does not round the timestamp to EOD, it's effective immediately so we use
         # the expiry time verbatim
-        payment_expiry_unix_ts_ms: int = 0
+        payment_expiry_unix_ts_ms: int = expiry_unix_ts_ms
         if status == base.PaymentStatus.Revoked.value:
             assert auto_renewing == False
-            payment_expiry_unix_ts_ms = expiry_unix_ts_ms
-        else:
-            payment_expiry_unix_ts_ms = round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider, expiry_unix_ts_ms)
 
         if auto_renewing:
             payment_expiry_unix_ts_ms += grace_period_duration_ms

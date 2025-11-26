@@ -918,7 +918,7 @@ def get_pro_details():
             expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
             auto_renewing                        = get_user.user.auto_renewing
             payments_total                       = get_user.payments_count
-            refund_requested_unix_ts_ms            = get_user.user.refund_requested_unix_ts_ms
+            refund_requested_unix_ts_ms          = get_user.user.refund_requested_unix_ts_ms
             has_payments                         = False
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired

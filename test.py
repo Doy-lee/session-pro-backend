@@ -3550,7 +3550,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert isinstance(user, backend.UserRow)
         assert user.master_pkey == bytes(user_ctx.master_key.verify_key)
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
-        assert user.expiry_unix_ts_ms == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
+        assert user.expiry_unix_ts_ms == tx.expiry_unix_ts_ms
 
     def assert_pro_details(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
         status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx, unix_ts_ms=tx.event_ms)
@@ -3568,7 +3568,7 @@ def test_google_platform_handle_notification(monkeypatch):
             assert res_expiry_unix_ts_ms == tx.expiry_unix_ts_ms
         else:
             res_expiry_unix_ts_ms_wo_grace = res_expiry_unix_ts_ms - res_grace_period_duration_ms
-            assert res_expiry_unix_ts_ms_wo_grace == backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.GooglePlayStore, tx.expiry_unix_ts_ms)
+            assert res_expiry_unix_ts_ms_wo_grace == tx.expiry_unix_ts_ms
         assert res_pro_status == pro_status
         assert len(res_items) == user_ctx.payments
         item = res_items[0]
