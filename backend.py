@@ -1209,6 +1209,9 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
             if rotating_pkey:
                 assert signing_key, "Rotating public key and signing key have to be given in tandem, either both set or both set to nil"
                 proposed_proof_expiry_unix_ts_ms: int = base.round_unix_ts_ms_to_next_day(allocated.expiry_unix_ts_ms)
+
+                # NOTE: In dev mode we don't round up to the next day as we want these proofs to
+                # expire quickly for testing.
                 if base.DEV_BACKEND_MODE:
                     proposed_proof_expiry_unix_ts_ms = allocated.expiry_unix_ts_ms
 
@@ -1711,7 +1714,8 @@ def build_proof_hash(version:           int,
 
 def _build_proof_clamped_expiry_time(unix_ts_ms: int, proposed_expiry_unix_ts_ms: int):
     # NOTE: Clamp the expiry time of the proof to 1 month and also make it land on the day boundary
-    # to reduce metadata leakage.
+    # to reduce metadata leakage. If it's less than 1 month then just take the value verbatim as
+    # their subscription is coming to a close.
     clamped_expiry_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms + base.MILLISECONDS_IN_MONTH)
     result: int               = min(clamped_expiry_unix_ts_ms, proposed_expiry_unix_ts_ms)
     return result
@@ -1866,7 +1870,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             add_unredeemed_payment(sql_conn                          = sql_conn,
                                    payment_tx                        = internal_payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
-                                   unredeemed_unix_ts_ms             = expiry_unix_ts_ms - 1,
+                                   unredeemed_unix_ts_ms             = redeemed_unix_ts_ms,
                                    platform_refund_expiry_unix_ts_ms = 0,
                                    expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                    err                               = err)
