@@ -114,10 +114,12 @@ def payment_tx_id_label(tx: base.PaymentProviderTransaction) -> str:
 def pro_plan_from_product_id(product_id: str, err: base.ErrorSink) -> base.ProPlan:
     result = base.ProPlan.Nil
     match product_id:
-        case 'com.getsession.org.pro_sub':
+        case 'com.getsession.org.pro_sub_1_months':
             result = base.ProPlan.OneMonth
         case 'com.getsession.org.pro_sub_3_months':
             result = base.ProPlan.ThreeMonth
+        case 'com.getsession.org.pro_sub_12_months':
+            result = base.ProPlan.TwelveMonth
         case _:
             err.msg_list.append(f'Invalid applie plan_id, unable to determine plan variant: {product_id}')
             assert False, f'Invalid apple plan_id: {product_id}'
