@@ -45,6 +45,8 @@ layer and replies a response, if any.
 Customise the runtime behaviour of the server by specifying a .INI file via the environment variable
 `SESH_PRO_BACKEND_DB_PATH=<path/to/ini/file.ini>` (due to some UWSGI restrictions).
 
+Note Python's implementation does not use quotes fro strings.
+
 ```ini
 [base]
 # Set the location to store the database of the backend to
@@ -55,6 +57,10 @@ db_path                      = <path/to/db>
 #
 #   https://www.sqlite.org/inmemorydb.html
 db_path_is_uri               = false
+
+# Set the path where logs and rotated logs will be stored (keep this line empty to use the default
+# and store logs in the executable directory)
+log_path                     = <path/to/log>
 
 # Pretty print the contents of the tables in the database to standard out and exit
 print_tables                 = false
@@ -139,7 +145,7 @@ set_google_notification      = <command...>
 session_webhook_url          = <url...>
 
 # Set the display name of the bot to receive the webhook message from on Session
-session_webhook_name         = Session Pro Backend Dev
+session_webhook_name         = Pro Backend Dev
 
 # NOTE: The [apple] section and its fields are only required if `with_platform_apple` is defined
 [apple]
@@ -186,16 +192,17 @@ can only be specified as an environment variable.
 SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
 
 # For the following options, see the .INI section for more information
-SESH_PRO_BACKEND_DB_PATH                 = [0|1]
+SESH_PRO_BACKEND_DB_PATH                 = <...>
 SESH_PRO_BACKEND_DB_PATH_IS_URI          = [0|1]
+SESH_PRO_BACKEND_LOG_PATH                = <...>
 SESH_PRO_BACKEND_PRINT_TABLES            = [0|1]
 SESH_PRO_BACKEND_DEV                     = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_APPLE     = [0|1]
 SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE    = [0|1]
 SESH_PRO_BACKEND_SET_USER_ERRORS         = <...>
 SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION = <...>
-SESH_PRO_BACKEND_WEBHOOK_URL             = https://...
-SESH_PRO_BACKEND_WEBHOOK_NAME            = Session Pro Backend Dev
+SESH_PRO_BACKEND_SESSION_WEBHOOK_URL     = https://...
+SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME    = <...>
 ```
 
 ## Build and run

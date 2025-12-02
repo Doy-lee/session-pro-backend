@@ -59,6 +59,7 @@ class ParsedArgs:
     ini_path:                            str                             = ''
     db_path:                             str                             = ''
     db_path_is_uri:                      bool                            = False
+    log_path:                            str                             = ''
     print_tables:                        bool                            = False
     dev:                                 bool                            = False
     unsafe_logging:                      bool                            = False
@@ -265,6 +266,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         base_section: configparser.SectionProxy    = ini_parser['base']
         result.db_path                             = base_section.get(option='db_path',                     fallback='')
         result.db_path_is_uri                      = base_section.getboolean(option='db_path_is_uri',       fallback=False)
+        result.log_path                            = base_section.get(option='log_path',                    fallback='')
         result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
         result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
         result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',       fallback=False)
@@ -305,6 +307,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Get arguments from environment, they override .INI values if specified
     result.db_path                        = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
     result.db_path_is_uri                 = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
+    result.log_path                       = os.getenv('SESH_PRO_BACKEND_LOG_PATH',                           result.log_path)
     result.print_tables                   = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
     result.dev                            = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
     result.with_platform_apple            = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
@@ -365,31 +368,21 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         if len(result.google_subscription_product_id) == 0:
             err.msg_list.append('Platform Google was enabled but subscription_product_id was not specified')
 
+    if len(result.log_path) == 0:
+        result.log_path = 'pro-backend.log'
+
     return result
 
 def entry_point() -> flask.Flask:
     log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
     console_logger = logging.StreamHandler()
-    file_logger    = logging.handlers.RotatingFileHandler(filename='session_backend_pro.log', maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
     console_logger.setFormatter(log_formatter)
-    file_logger.setFormatter(log_formatter)
-    if 1: # NOTE: Setup logger
-
-        # NOTE: Equip handlers
+    # NOTE: Setup console logger
+    if 1:
         log.addHandler(console_logger)
-        log.addHandler(file_logger)
-
-        # NOTE: Setup backend logger
         backend.log.addHandler(console_logger)
-        backend.log.addHandler(file_logger)
-
-        # NOTE: Setup google logger
         platform_google.log.addHandler(console_logger)
-        platform_google.log.addHandler(file_logger)
-
-        # NOTE: Setup apple logger
         platform_apple.log.addHandler(console_logger)
-        platform_apple.log.addHandler(file_logger)
 
     # NOTE: Parse arguments from .INI if present and environment variables, then setup global variables
     err = base.ErrorSink()
@@ -402,6 +395,16 @@ def entry_point() -> flask.Flask:
     if err.has():
         log.error(f'Failed to startup, invalid configuration options:\n  ' + '\n  '.join(err.msg_list))
         sys.exit(1)
+
+    # NOTE: Setup file logger
+    file_logger: logging.handlers.RotatingFileHandler | None = None
+    if 1:
+        file_logger = logging.handlers.RotatingFileHandler(filename=parsed_args.log_path, maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
+        file_logger.setFormatter(log_formatter)
+        log.addHandler(file_logger)
+        backend.log.addHandler(file_logger)
+        platform_google.log.addHandler(file_logger)
+        platform_apple.log.addHandler(file_logger)
 
     # NOTE: Equip the session webhook URL if it's configured
     webhook_logger: base.AsyncSessionWebhookLogHandler | None = None
@@ -466,6 +469,7 @@ def entry_point() -> flask.Flask:
     if 1:
         label = ' (URI)' if parsed_args.db_path_is_uri else ''
         startup_log += f'    DB loaded from: {db.path}{label}\n'
+        startup_log += f'    Logging to: {parsed_args.log_path}\n'
     if parsed_args.unsafe_logging:
         startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
     if parsed_args.platform_testing_env:
@@ -611,8 +615,12 @@ def entry_point() -> flask.Flask:
                                       server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
 
     # NOTE: Add flask to our global logger
-    result.logger.addHandler(console_logger)
-    result.logger.addHandler(file_logger)
+    if 1:
+        result.logger.addHandler(console_logger)
+        if file_logger:
+            result.logger.addHandler(file_logger)
+        if webhook_logger:
+            result.logger.addHandler(webhook_logger)
 
     # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
     # contact the endpoint when a notification is generated.
