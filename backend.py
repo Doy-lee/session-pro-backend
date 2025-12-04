@@ -1866,7 +1866,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
 
         if not already_exists:
             THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION = True
-            expiry_unix_ts_ms = redeemed_unix_ts_ms + (60 * 1000)
+            expiry_unix_ts_ms = redeemed_unix_ts_ms + (30 * 60 * 1000)
             add_unredeemed_payment(sql_conn                          = sql_conn,
                                    payment_tx                        = internal_payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
