@@ -12,13 +12,13 @@ import logging
 import math
 import os
 import pathlib
-import queue
 import sqlite3
 import threading
 import traceback
 import typing
 import typing_extensions
-import urllib3
+import urllib.request
+import sys
 
 # NOTE: Constants
 SECONDS_IN_DAY:        int     = 60 * 60 * 24
@@ -160,92 +160,71 @@ class TableStrings:
 class AsyncSessionWebhookLogHandler(logging.Handler):
     webhook_url:    str
     display_name:   str
-    timeout:        int
-    flush_interval: float
-    queue:          queue.Queue
-    _thread:        threading.Thread
-    _stop_event:    threading.Event
-    http:           urllib3.PoolManager
+    _submit_thread: threading.Thread
+    timeout:        int       = 2
 
-    def __init__(self, webhook_url: str, display_name: str, timeout: int = 5, queue_size: int = 100, flush_interval: float = 1.0):
+    def __init__(self, url: str, name: str):
         super().__init__()
-        self.webhook_url  = webhook_url
-        self.display_name = display_name
-        self.timeout      = timeout
+        self.webhook_url    = url
+        self.display_name   = name
+        assert len(self.display_name) <= 100, f'Display name must be less than 100 characters: {len(self.display_name)}'
+        self._lock          = threading.Lock()
+        self._stop_event    = threading.Event()
+        self._queue_dirtied = threading.Event()
+        self.msg_queue      = []
+        self._submit_thread = threading.Thread(target=self._worker, daemon=True)
+        self._stop_event    = threading.Event()
+        self._submit_thread.start()
 
-        # Queue for log records
-        self.queue          = queue.Queue(maxsize=queue_size)
-        self.flush_interval = flush_interval
 
-        # Background thread
-        self._thread     = threading.Thread(target=self._worker, daemon=True)
-        self._stop_event = threading.Event()
-        self._thread.start()
-
-        # HTTP pool (thread-safe)
-        self.http = urllib3.PoolManager(
-            timeout=urllib3.Timeout(connect=timeout, read=timeout),
-            maxsize=10,
-            retries=urllib3.Retry(total=1, backoff_factor=0.1)
-        )
+    def emit_text(self, text: str):
+        max_size = 128
+        with self._lock:
+            if len(self.msg_queue) >= max_size:
+                self.msg_queue = self.msg_queue[-(max_size - 2):]
+                self.msg_queue.append('Message queue was full, overwriting old message')
+            self.msg_queue.append(text[:2000])
+        self._queue_dirtied.set()
 
     @typing_extensions.override
     def emit(self, record: logging.LogRecord):
         if record.levelno < logging.WARNING:
             return
-        try:
-            log_entry = self.format(record)[:2000]
-            payload = { "text": "```\n" + log_entry + "\n```", "display_name": self.display_name }
-            self.queue.put_nowait(payload)
-        except queue.Full:
-            pass
-        except Exception:
-            self.handleError(record)
-
-    def emit_text(self, text: str):
-        try:
-            text = text[:2000]
-            payload = { "text": "```\n" + text + "\n```", "display_name": self.display_name }
-            self.queue.put_nowait(payload)
-        except Exception:
-            pass
+        self.emit_text(self.format(record)[:2000])
 
     def _worker(self):
-        while not self._stop_event.is_set():
-            try:
-                # Collect all pending logs
-                payloads = []
-                while len(payloads) < 10:  # Batch up to 10
-                    try:
-                        payloads.append(self.queue.get_nowait())
-                    except queue.Empty:
-                        break
+        while True:
+            _ = self._queue_dirtied.wait()
+            if self._stop_event.is_set():
+                break
+            self._queue_dirtied.clear()
 
-                for payload in payloads:
+            # Extract batch of messages to send with lock
+            while True:
+                batch: list[str] = []
+                with self._lock:
+                    batch_size     = min(len(self.msg_queue), 8) # Pump at most, 8 at a time then yield
+                    batch          = self.msg_queue[:batch_size]
+                    self.msg_queue = self.msg_queue[batch_size:]
+
+                for it in batch: # Blocking send
+                    payload: dict[str, str] = { "text": "```\n" + it + "\n```", "display_name": self.display_name }
+                    request                 = urllib.request.Request(self.webhook_url, data=json.dumps(payload).encode('utf-8'), headers={"Content-Type": "application/json"}, method="POST")
                     try:
-                        self.http.request(method  = 'POST',
-                                          url     = self.webhook_url,
-                                          body    = json.dumps(payload).encode('utf-8'),
-                                          headers = {'Content-Type': 'application/json'})
+                        _ = urllib.request.urlopen(request, timeout=self.timeout)  # pyright: ignore[reportAny]
                     except Exception as e:
-                        print(f"[AsyncWebhook] Send failed: {e}", file=sys.stderr)
-                    finally:
-                        try:
-                            self.queue.task_done()
-                        except:
-                            pass
+                        print(f"Session webhook send failed: {e}", file=sys.stderr)
 
-                # Wait before next batch
-                self._stop_event.wait(self.flush_interval)
-            except Exception as e:
-                print(f"[AsyncWebhook] Worker error: {e}", file=sys.stderr)
-                time.sleep(1)
+                with self._lock:
+                    if len(self.msg_queue) == 0:
+                        break
 
     @typing_extensions.override
     def close(self):
         self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=2)
+        self._queue_dirtied.set()
+        if self._submit_thread.is_alive():
+            self._submit_thread.join(timeout=2)
         super().close()
 
 def verify_payment_provider(payment_provider: PaymentProvider | int, err: ErrorSink | None) -> bool:

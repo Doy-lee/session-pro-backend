@@ -141,11 +141,15 @@ set_user_errors              =
 # backup of the DB before proceeding!
 set_google_notification      = <command...>
 
-# Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime
 session_webhook_url          = <url...>
 
-# Set the display name of the bot to receive the webhook message from on Session
-session_webhook_name         = Pro Backend Dev
+# Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime. Each
+# subsequent webhook should be in a section with consecutive, incrementing indexes. Omit this
+# section to opt out
+# [session_webhook.0]
+# enabled = False
+# url     = <url...>
+# name    = <display name...>
 
 # NOTE: The [apple] section and its fields are only required if `with_platform_apple` is defined
 [apple]

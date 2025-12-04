@@ -55,6 +55,12 @@ class SetGoogleNotificationItem:
     command:    SetGoogleNotificationCommand
 
 @dataclasses.dataclass
+class SessionWebhook:
+    enabled: bool = False
+    url:     str  = ''
+    name:    str  = ''
+
+@dataclasses.dataclass
 class ParsedArgs:
     ini_path:                            str                             = ''
     db_path:                             str                             = ''
@@ -70,9 +76,7 @@ class ParsedArgs:
     parsed_set_user_errors:              list[SetUserErrorItem]          = dataclasses.field(default_factory=list)
     set_google_notification:             str                             = ''
     parsed_set_google_notification:      list[SetGoogleNotificationItem] = dataclasses.field(default_factory=list)
-    session_webhook_url:                 str                             = ''
-    session_webhook_name:                str                             = ''
-
+    session_webhooks:                    list[SessionWebhook]            = dataclasses.field(default_factory=list)
     apple_key_id:                        str                             = ''
     apple_issuer_id:                     str                             = ''
     apple_bundle_id:                     str                             = ''
@@ -275,8 +279,32 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
         result.set_user_errors                     = base_section.get(option='set_user_errors',             fallback='')
         result.set_google_notification             = base_section.get(option='set_google_notification',     fallback='')
-        result.session_webhook_url                 = base_section.get(option='session_webhook_url',         fallback='')
-        result.session_webhook_name                = base_section.get(option='session_webhook_name',        fallback='')
+
+        webhook_index = 0
+        while True:
+            webhook_label: str = f'session_webhook.{webhook_index}'
+            if not ini_parser.has_section(webhook_label):
+                break
+
+            webhook_section: configparser.SectionProxy = ini_parser[webhook_label]
+            webhook_enabled: bool | None               = webhook_section.getboolean('enabled')
+            webhook_url:     str | None                = webhook_section.get('url')
+            webhook_name:    str | None                = webhook_section.get('name')
+
+            if webhook_name == None:
+                log.error(f"Failed to parse webhook section {webhook_label}, missing \'name\'")
+                sys.exit(1)
+
+            if webhook_url == None:
+                log.error(f"Failed to parse webhook section {webhook_label}, missing \'url\'")
+                sys.exit(1)
+
+            if webhook_enabled == None:
+                log.error(f"Failed to parse webhook section {webhook_label}, missing \'enabled\'")
+                sys.exit(1)
+
+            webhook_index += 1
+            result.session_webhooks.append(SessionWebhook(name=webhook_name, url=webhook_url, enabled=webhook_enabled))
 
         if result.with_platform_apple:
             if 'apple' in ini_parser:
@@ -317,8 +345,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.parsed_set_user_errors         = parse_set_user_error_arg(result.set_user_errors, err)
     result.set_google_notification        = os.getenv('SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION',            result.set_google_notification)
     result.parsed_set_google_notification = parse_set_google_notification_item_arg(result.set_google_notification, err)
-    result.session_webhook_url            = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_URL',                result.session_webhook_url)
-    result.session_webhook_name           = os.getenv('SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME',               result.session_webhook_name)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -407,13 +433,13 @@ def entry_point() -> flask.Flask:
         platform_apple.log.addHandler(file_logger)
 
     # NOTE: Equip the session webhook URL if it's configured
-    webhook_logger: base.AsyncSessionWebhookLogHandler | None = None
-    if 0:
-        if len(parsed_args.session_webhook_url) > 0:
-            webhook_logger = base.AsyncSessionWebhookLogHandler(webhook_url=parsed_args.session_webhook_url,
-                                                                display_name=parsed_args.session_webhook_name)
+    webhook_loggers: list[base.AsyncSessionWebhookLogHandler] = []
+    for it in parsed_args.session_webhooks:
+        if it.enabled:
+            webhook_logger = base.AsyncSessionWebhookLogHandler(url=it.url, name=it.name)
             webhook_logger.setLevel(logging.WARNING)
             webhook_logger.setFormatter(log_formatter)
+            webhook_loggers.append(webhook_logger)
 
             # NOTE: Setup loggers (main, backend, google, apple)
             log.addHandler(webhook_logger)
@@ -479,8 +505,9 @@ def entry_point() -> flask.Flask:
         startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
     if parsed_args.with_platform_google:
         startup_log += f'    Platform: Google Play Store notification handling enabled\n'
-    if webhook_logger:
-        startup_log += f'    Webhook Logger: Enabled (display name: {parsed_args.session_webhook_name})\n'
+    for it in parsed_args.session_webhooks:
+        if it.enabled:
+            startup_log += f'    Webhook Logger: Enabled (display name: {it.name})\n'
 
     if parsed_args.dev:
         startup_log += "######################################\n"
@@ -490,8 +517,10 @@ def entry_point() -> flask.Flask:
         startup_log += "######################################\n"
 
     log.info(startup_log)
-    if webhook_logger:
-        webhook_logger.emit_text(startup_log)
+    for it in webhook_loggers:
+        date     = datetime.datetime.fromtimestamp(time.time())
+        date_str = date.strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
+        it.emit_text(f'{date_str} Starting up instance: {startup_log}')
 
     # NOTE: Handle printing of the DB to standard out if requested
     if parsed_args.print_tables:
@@ -619,8 +648,8 @@ def entry_point() -> flask.Flask:
         result.logger.addHandler(console_logger)
         if file_logger:
             result.logger.addHandler(file_logger)
-        if webhook_logger:
-            result.logger.addHandler(webhook_logger)
+        for it in webhook_loggers:
+            result.logger.addHandler(it)
 
     # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
     # contact the endpoint when a notification is generated.
