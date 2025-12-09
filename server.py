@@ -992,6 +992,26 @@ def get_pro_details():
                 if len(items) >= count and user_pro_status == UserProStatus.Active:
                     break
 
+    # NOTE: If auto-renewing is enabled and the grace period is not set yet then we assume that this
+    # is a platform that only sets the grace period once the user has entered it. This is currently
+    # only relevant for Google.
+    #
+    # There's a small race-condition where the clients intend to wake up at "expiry_unix_ts_ms" to
+    # query the status where the backend has not received the notification that the user has
+    # entered the grace period yet.
+    #
+    # We self-insert a small grace period to cover the gap in time when the client queries the pro
+    # details and that the server has not received the notification yet. We give the device a 15s
+    # period and double-check that the returned pro-status is patched up.
+    #
+    # From recent measurements we've witnessed that Google can be up to 8-15s delayed but typically
+    # averages around 3s.
+    if grace_period_duration_ms == 0 and auto_renewing:
+        grace_period_duration_ms  = 15_000
+        expiry_unix_ts_ms        += grace_period_duration_ms
+        if unix_ts_ms <= expiry_unix_ts_ms + grace_period_duration_ms:
+            user_pro_status = UserProStatus.Active
+
     result = make_success_response(dict_result={
         'version':                     0,
         'status':                      int(user_pro_status.value),

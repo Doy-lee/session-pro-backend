@@ -1378,6 +1378,14 @@ def dump_apple_signed_payloads(core: platform_apple.Core, body: AppleResponseBod
 def test_platform_apple():
     err = base.ErrorSink()
 
+    # NOTE: These tests were using the old debug product id, "com.getsession.org.pro_sub" which was
+    # for 1 week. The codebase shortly after removed these but the captured data was from prior to
+    # that. For the most part, the tests still work if we patch up the productId even though the
+    # entitlement durations don't line up now.
+    #
+    # We can fix this by re-generating the data if needed. However for the most part what we we
+    # intended to test, is still being tested despite changing the productId from 1 week to 1 month.
+
     # NOTE: Did renew notification
     with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (requires keys to decrypt)
@@ -1432,7 +1440,7 @@ def test_platform_apple():
         renewal_info.offerType                   = None
         renewal_info.originalTransactionId       = '2000001024993299'
         renewal_info.priceIncreaseStatus         = None
-        renewal_info.productId                   = 'com.getsession.org.pro_sub'
+        renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
         renewal_info.rawAutoRenewStatus          = None
         renewal_info.rawEnvironment              = 'Sandbox'
         renewal_info.rawExpirationIntent         = None
@@ -1460,7 +1468,7 @@ def test_platform_apple():
         tx_info.originalPurchaseDate             = 1759301833000
         tx_info.originalTransactionId            = '2000001024993299'
         tx_info.price                            = 1990
-        tx_info.productId                        = 'com.getsession.org.pro_sub'
+        tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
         tx_info.purchaseDate                     = 1759302552000
         tx_info.quantity                         = 1
         tx_info.rawEnvironment                   = 'Sandbox'
@@ -1626,7 +1634,7 @@ def test_platform_apple():
             renewal_info.offerType                   = None
             renewal_info.originalTransactionId       = '2000001024993299'
             renewal_info.priceIncreaseStatus         = None
-            renewal_info.productId                   = 'com.getsession.org.pro_sub'
+            renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
             renewal_info.rawAutoRenewStatus          = None
             renewal_info.rawEnvironment              = 'Sandbox'
             renewal_info.rawExpirationIntent         = None
@@ -1655,7 +1663,7 @@ def test_platform_apple():
             tx_info.originalPurchaseDate             = 1759301833000
             tx_info.originalTransactionId            = '2000001024993299'
             tx_info.price                            = 1990
-            tx_info.productId                        = 'com.getsession.org.pro_sub'
+            tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
             tx_info.purchaseDate                     = 1759388767000
             tx_info.quantity                         = 1
             tx_info.rawEnvironment                   = 'Sandbox'
@@ -1758,7 +1766,7 @@ def test_platform_apple():
             renewal_info.offerType                   = None
             renewal_info.originalTransactionId       = '2000001024993299'
             renewal_info.priceIncreaseStatus         = None
-            renewal_info.productId                   = 'com.getsession.org.pro_sub'
+            renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
             renewal_info.rawAutoRenewStatus          = None
             renewal_info.rawEnvironment              = 'Sandbox'
             renewal_info.rawExpirationIntent         = None
@@ -1787,7 +1795,7 @@ def test_platform_apple():
             tx_info.originalPurchaseDate             = 1759301833000
             tx_info.originalTransactionId            = '2000001024993299'
             tx_info.price                            = 1990
-            tx_info.productId                        = 'com.getsession.org.pro_sub'
+            tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
             tx_info.purchaseDate                     = 1759388767000
             tx_info.quantity                         = 1
             tx_info.rawEnvironment                   = 'Sandbox'
@@ -1890,7 +1898,7 @@ def test_platform_apple():
             renewal_info.offerType                   = None
             renewal_info.originalTransactionId       = '2000001024993299'
             renewal_info.priceIncreaseStatus         = None
-            renewal_info.productId                   = 'com.getsession.org.pro_sub'
+            renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
             renewal_info.rawAutoRenewStatus          = None
             renewal_info.rawEnvironment              = 'Sandbox'
             renewal_info.rawExpirationIntent         = None
@@ -1919,7 +1927,7 @@ def test_platform_apple():
             tx_info.originalPurchaseDate             = 1759301833000
             tx_info.originalTransactionId            = '2000001024993299'
             tx_info.price                            = 1990
-            tx_info.productId                        = 'com.getsession.org.pro_sub'
+            tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
             tx_info.purchaseDate                     = 1759388767000
             tx_info.quantity                         = 1
             tx_info.rawEnvironment                   = 'Sandbox'
@@ -2206,7 +2214,7 @@ def test_platform_apple():
         e01_upgrade_to_1wk_renewal_info.offerType                   = None
         e01_upgrade_to_1wk_renewal_info.originalTransactionId       = '2000001024993299'
         e01_upgrade_to_1wk_renewal_info.priceIncreaseStatus         = None
-        e01_upgrade_to_1wk_renewal_info.productId                   = 'com.getsession.org.pro_sub'
+        e01_upgrade_to_1wk_renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
         e01_upgrade_to_1wk_renewal_info.rawAutoRenewStatus          = None
         e01_upgrade_to_1wk_renewal_info.rawEnvironment              = 'Sandbox'
         e01_upgrade_to_1wk_renewal_info.rawExpirationIntent         = None
@@ -2235,7 +2243,7 @@ def test_platform_apple():
         e01_upgrade_to_1wk_tx_info.originalPurchaseDate             = 1759301833000
         e01_upgrade_to_1wk_tx_info.originalTransactionId            = '2000001024993299'
         e01_upgrade_to_1wk_tx_info.price                            = 1990
-        e01_upgrade_to_1wk_tx_info.productId                        = 'com.getsession.org.pro_sub'
+        e01_upgrade_to_1wk_tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
         e01_upgrade_to_1wk_tx_info.purchaseDate                     = 1759727790000
         e01_upgrade_to_1wk_tx_info.quantity                         = 1
         e01_upgrade_to_1wk_tx_info.rawEnvironment                   = 'Sandbox'
@@ -2302,7 +2310,7 @@ def test_platform_apple():
         e02_disable_auto_renew_renewal_info.offerType                   = None
         e02_disable_auto_renew_renewal_info.originalTransactionId       = '2000001024993299'
         e02_disable_auto_renew_renewal_info.priceIncreaseStatus         = None
-        e02_disable_auto_renew_renewal_info.productId                   = 'com.getsession.org.pro_sub'
+        e02_disable_auto_renew_renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
         e02_disable_auto_renew_renewal_info.rawAutoRenewStatus          = None
         e02_disable_auto_renew_renewal_info.rawEnvironment              = 'Sandbox'
         e02_disable_auto_renew_renewal_info.rawExpirationIntent         = None
@@ -2331,7 +2339,7 @@ def test_platform_apple():
         e02_disable_auto_renew_tx_info.originalPurchaseDate             = 1759301833000
         e02_disable_auto_renew_tx_info.originalTransactionId            = '2000001024993299'
         e02_disable_auto_renew_tx_info.price                            = 1990
-        e02_disable_auto_renew_tx_info.productId                        = 'com.getsession.org.pro_sub'
+        e02_disable_auto_renew_tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
         e02_disable_auto_renew_tx_info.purchaseDate                     = 1759727790000
         e02_disable_auto_renew_tx_info.quantity                         = 1
         e02_disable_auto_renew_tx_info.rawEnvironment                   = 'Sandbox'
@@ -2398,7 +2406,7 @@ def test_platform_apple():
         e03_queue_downgrade_to_3_months_renewal_info.offerType                     = None
         e03_queue_downgrade_to_3_months_renewal_info.originalTransactionId         = '2000001024993299'
         e03_queue_downgrade_to_3_months_renewal_info.priceIncreaseStatus           = None
-        e03_queue_downgrade_to_3_months_renewal_info.productId                     = 'com.getsession.org.pro_sub'
+        e03_queue_downgrade_to_3_months_renewal_info.productId                     = 'com.getsession.org.pro_sub_1_month'
         e03_queue_downgrade_to_3_months_renewal_info.rawAutoRenewStatus            = None
         e03_queue_downgrade_to_3_months_renewal_info.rawEnvironment                = 'Sandbox'
         e03_queue_downgrade_to_3_months_renewal_info.rawExpirationIntent           = None
@@ -2427,7 +2435,7 @@ def test_platform_apple():
         e03_queue_downgrade_to_3_months_tx_info.originalPurchaseDate               = 1759301833000
         e03_queue_downgrade_to_3_months_tx_info.originalTransactionId              = '2000001024993299'
         e03_queue_downgrade_to_3_months_tx_info.price                              = 1990
-        e03_queue_downgrade_to_3_months_tx_info.productId                          = 'com.getsession.org.pro_sub'
+        e03_queue_downgrade_to_3_months_tx_info.productId                          = 'com.getsession.org.pro_sub_1_month'
         e03_queue_downgrade_to_3_months_tx_info.purchaseDate                       = 1759727790000
         e03_queue_downgrade_to_3_months_tx_info.quantity                           = 1
         e03_queue_downgrade_to_3_months_tx_info.rawEnvironment                     = 'Sandbox'
@@ -2494,7 +2502,7 @@ def test_platform_apple():
         e04_cancel_downgrade_to_3_months_renewal_info.offerType                    = None
         e04_cancel_downgrade_to_3_months_renewal_info.originalTransactionId        = '2000001024993299'
         e04_cancel_downgrade_to_3_months_renewal_info.priceIncreaseStatus          = None
-        e04_cancel_downgrade_to_3_months_renewal_info.productId                    = 'com.getsession.org.pro_sub'
+        e04_cancel_downgrade_to_3_months_renewal_info.productId                    = 'com.getsession.org.pro_sub_1_month'
         e04_cancel_downgrade_to_3_months_renewal_info.rawAutoRenewStatus           = None
         e04_cancel_downgrade_to_3_months_renewal_info.rawEnvironment               = 'Sandbox'
         e04_cancel_downgrade_to_3_months_renewal_info.rawExpirationIntent          = None
@@ -2523,7 +2531,7 @@ def test_platform_apple():
         e04_cancel_downgrade_to_3_months_tx_info.originalPurchaseDate              = 1759301833000
         e04_cancel_downgrade_to_3_months_tx_info.originalTransactionId             = '2000001024993299'
         e04_cancel_downgrade_to_3_months_tx_info.price                             = 1990
-        e04_cancel_downgrade_to_3_months_tx_info.productId                         = 'com.getsession.org.pro_sub'
+        e04_cancel_downgrade_to_3_months_tx_info.productId                         = 'com.getsession.org.pro_sub_1_month'
         e04_cancel_downgrade_to_3_months_tx_info.purchaseDate                      = 1759727790000
         e04_cancel_downgrade_to_3_months_tx_info.quantity                          = 1
         e04_cancel_downgrade_to_3_months_tx_info.rawEnvironment                    = 'Sandbox'
@@ -2590,7 +2598,7 @@ def test_platform_apple():
         e05_disable_auto_renew_renewal_info.offerType                   = None
         e05_disable_auto_renew_renewal_info.originalTransactionId       = '2000001024993299'
         e05_disable_auto_renew_renewal_info.priceIncreaseStatus         = None
-        e05_disable_auto_renew_renewal_info.productId                   = 'com.getsession.org.pro_sub'
+        e05_disable_auto_renew_renewal_info.productId                   = 'com.getsession.org.pro_sub_1_month'
         e05_disable_auto_renew_renewal_info.rawAutoRenewStatus          = None
         e05_disable_auto_renew_renewal_info.rawEnvironment              = 'Sandbox'
         e05_disable_auto_renew_renewal_info.rawExpirationIntent         = None
@@ -2619,7 +2627,7 @@ def test_platform_apple():
         e05_disable_auto_renew_tx_info.originalPurchaseDate             = 1759301833000
         e05_disable_auto_renew_tx_info.originalTransactionId            = '2000001024993299'
         e05_disable_auto_renew_tx_info.price                            = 1990
-        e05_disable_auto_renew_tx_info.productId                        = 'com.getsession.org.pro_sub'
+        e05_disable_auto_renew_tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
         e05_disable_auto_renew_tx_info.purchaseDate                     = 1759727790000
         e05_disable_auto_renew_tx_info.quantity                         = 1
         e05_disable_auto_renew_tx_info.rawEnvironment                   = 'Sandbox'
@@ -2686,7 +2694,7 @@ def test_platform_apple():
         e06_expire_voluntary_renewal_info.offerType                     = None
         e06_expire_voluntary_renewal_info.originalTransactionId         = '2000001024993299'
         e06_expire_voluntary_renewal_info.priceIncreaseStatus           = None
-        e06_expire_voluntary_renewal_info.productId                     = 'com.getsession.org.pro_sub'
+        e06_expire_voluntary_renewal_info.productId                     = 'com.getsession.org.pro_sub_1_month'
         e06_expire_voluntary_renewal_info.rawAutoRenewStatus            = None
         e06_expire_voluntary_renewal_info.rawEnvironment                = 'Sandbox'
         e06_expire_voluntary_renewal_info.rawExpirationIntent           = None
@@ -2715,7 +2723,7 @@ def test_platform_apple():
         e06_expire_voluntary_tx_info.originalPurchaseDate               = 1759301833000
         e06_expire_voluntary_tx_info.originalTransactionId              = '2000001024993299'
         e06_expire_voluntary_tx_info.price                              = 1990
-        e06_expire_voluntary_tx_info.productId                          = 'com.getsession.org.pro_sub'
+        e06_expire_voluntary_tx_info.productId                          = 'com.getsession.org.pro_sub_1_month'
         e06_expire_voluntary_tx_info.purchaseDate                       = 1759727790000
         e06_expire_voluntary_tx_info.quantity                           = 1
         e06_expire_voluntary_tx_info.rawEnvironment                     = 'Sandbox'
@@ -3223,7 +3231,7 @@ def test_platform_apple():
         e01_consumption_req_tx_info.originalPurchaseDate             = 1759301833000
         e01_consumption_req_tx_info.originalTransactionId            = '2000001024993299'
         e01_consumption_req_tx_info.price                            = 1990
-        e01_consumption_req_tx_info.productId                        = 'com.getsession.org.pro_sub'
+        e01_consumption_req_tx_info.productId                        = 'com.getsession.org.pro_sub_1_month'
         e01_consumption_req_tx_info.purchaseDate                     = 1760335129000
         e01_consumption_req_tx_info.quantity                         = 1
         e01_consumption_req_tx_info.rawEnvironment                   = 'Sandbox'
@@ -3322,7 +3330,7 @@ def test_platform_apple():
         e02_apple_refund_tx_info.originalPurchaseDate                = 1759301833000
         e02_apple_refund_tx_info.originalTransactionId               = '2000001024993299'
         e02_apple_refund_tx_info.price                               = 1990
-        e02_apple_refund_tx_info.productId                           = 'com.getsession.org.pro_sub'
+        e02_apple_refund_tx_info.productId                           = 'com.getsession.org.pro_sub_1_month'
         e02_apple_refund_tx_info.purchaseDate                        = 1760335129000
         e02_apple_refund_tx_info.quantity                            = 1
         e02_apple_refund_tx_info.rawEnvironment                      = 'Sandbox'
