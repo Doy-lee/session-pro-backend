@@ -65,11 +65,6 @@ class LookupUserExpiryUnixTsMs:
     refund_requested_unix_ts_ms_from_redeemed:           int  = 0
     auto_renewing_from_redeemed:                         bool = False
 
-    expiry_unix_ts_ms_from_expired_or_revoked:           int  = 0
-    grace_duration_ms_from_expired_or_revoked:           int  = 0
-    refund_requested_unix_ts_ms_from_expired_or_revoked: int  = 0
-    auto_renewing_from_expired_or_revoked:               bool = False
-
     best_expiry_unix_ts_ms:                              int  = 0
     best_grace_duration_ms:                              int  = 0
     best_refund_requested_unix_ts_ms:                    int  = 0
@@ -1283,6 +1278,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
         SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms
         FROM      payments
         WHERE     master_pkey = ? AND (status = ? OR status = ? OR status = ?)
+        ORDER BY  id ASC
     ''', (bytes(master_pkey),
           int(base.PaymentStatus.Redeemed.value),
           int(base.PaymentStatus.Revoked.value),
@@ -1290,8 +1286,9 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
 
     # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
     # the expiry time (inclusive of the grace period if applicable)
-    result = LookupUserExpiryUnixTsMs()
-    rows = typing.cast(list[tuple[int, int, int, int, int]], tx.cursor.fetchall())
+    result      = LookupUserExpiryUnixTsMs()
+    rows        = typing.cast(list[tuple[int, int, int, int, int]], tx.cursor.fetchall())
+    best_status = base.PaymentStatus.Nil
     for row in rows:
         expiry_unix_ts_ms:           int = row[0]
         grace_period_duration_ms:    int = row[1]
@@ -1315,25 +1312,20 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
                 result.refund_requested_unix_ts_ms_from_redeemed = refund_requested_unix_ts_ms
                 result.auto_renewing_from_redeemed               = bool(auto_renewing)
 
-        elif status == base.PaymentStatus.Expired or status == base.PaymentStatus.Revoked:
-            if payment_expiry_unix_ts_ms > result.expiry_unix_ts_ms_from_expired_or_revoked:
-                result.expiry_unix_ts_ms_from_expired_or_revoked           = payment_expiry_unix_ts_ms
-                result.grace_duration_ms_from_expired_or_revoked           = grace_period_duration_ms
-                result.refund_requested_unix_ts_ms_from_expired_or_revoked = refund_requested_unix_ts_ms
-                result.auto_renewing_from_expired_or_revoked               = bool(auto_renewing)
-        else:
-            assert False, f"Invalid code path, unhandled PaymentStatus value ({status})"
-
-    if result.expiry_unix_ts_ms_from_redeemed > result.expiry_unix_ts_ms_from_expired_or_revoked:
-        result.best_expiry_unix_ts_ms           = result.expiry_unix_ts_ms_from_redeemed
-        result.best_grace_duration_ms           = result.grace_duration_ms_from_redeemed
-        result.best_auto_renewing               = result.auto_renewing_from_redeemed
-        result.best_refund_requested_unix_ts_ms = result.refund_requested_unix_ts_ms_from_redeemed
-    else:
-        result.best_expiry_unix_ts_ms           = result.expiry_unix_ts_ms_from_expired_or_revoked
-        result.best_grace_duration_ms           = result.grace_duration_ms_from_expired_or_revoked
-        result.best_auto_renewing               = result.auto_renewing_from_expired_or_revoked
-        result.best_refund_requested_unix_ts_ms = result.refund_requested_unix_ts_ms_from_expired_or_revoked
+        # NOTE: Choose the latest expiring payment, but we always prefer a currently redeemed
+        # payment over non-expired payments. For example if the user accidentally attains 2 active
+        # payments and one gets revoked (e.g. bought apple and google mistakenly, then cancels
+        # google) we want to return the values of the unrevoked one (apple) as the actively entitled
+        # one even if potentially google expires later.
+        #
+        # This would more accurately reflect that they're currently on Apple and that auto-renewing
+        # would be visible the user.
+        if payment_expiry_unix_ts_ms >= result.best_expiry_unix_ts_ms or best_status == base.PaymentStatus.Expired or best_status == base.PaymentStatus.Revoked:
+            best_status                             = status
+            result.best_expiry_unix_ts_ms           = payment_expiry_unix_ts_ms
+            result.best_grace_duration_ms           = grace_period_duration_ms
+            result.best_refund_requested_unix_ts_ms = refund_requested_unix_ts_ms
+            result.best_auto_renewing               = bool(auto_renewing)
     return result
 
 def update_payment_renewal_info_tx(tx:                       base.SQLTransaction,

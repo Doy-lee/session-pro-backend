@@ -707,7 +707,7 @@ def test_server_add_payment_flow(monkeypatch):
                result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 30))
 
     new_add_pro_payment_tx = backend.UserPaymentTransaction()
-    if 1: # Register another payment on the same user, this will stack the duration
+    if 1: # Register another payment on the same user, backend will choose the latest expiring payment
         new_payment_tx                      = base.PaymentProviderTransaction()
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
@@ -876,11 +876,11 @@ def test_server_add_payment_flow(monkeypatch):
             assert result_version == 0
             assert result_ticket  == 1
             curr_revocation_ticket = result_ticket
-
-            # Check that the server returned an empty revocation list, we no longer revoke the old
-            # payment but we _do_ increment the user's generation index
             assert len(result_items) == 1
 
+            # Check user entitlement updated after revoke. We should prefer the unrevoked payment
+            # as we have 2 payments for the user simultaneously where the latter was revoked but
+            # the original was not.
             with base.SQLTransaction(db.sql_conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
 
@@ -3570,7 +3570,7 @@ def test_google_platform_handle_notification(monkeypatch):
         res_pro_status               = base.json_dict_require_int_coerce_to_enum(result, "status", server.UserProStatus, err)
         res_items                    = base.json_dict_require_array(result, "items", err)
         assert not err.has(), status
-        assert res_auto_renewing == auto_renew
+        assert res_auto_renewing == auto_renew, json.dumps(result, indent=1)
         revoked = payment_status == base.PaymentStatus.Revoked
         if revoked:
             assert res_expiry_unix_ts_ms == tx.expiry_unix_ts_ms
