@@ -195,6 +195,38 @@ can only be specified as an environment variable.
 # Path to load the .INI file and hence the options to customise the runtime behaviour
 SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
 
+# Generate a report of the payments for the given report type, period and optional count. The
+# following arguments are accepted
+#
+# Report Type
+#   Human
+#   CSV
+#
+# Period
+#   Daily
+#   Weekly
+#   Monthly
+#
+# Examples
+#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=Human:Daily
+#     Generates a human readable report of the payments in the backend for all days in the database
+#
+#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=Human:Daily:5
+#     Generates a human readable report of the payments in the backend from the last 5 days
+#
+#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=CSV:Monthly:12
+#     Generates a CSV report of payments from the last 12 months
+#
+# The fields of the report are defined as follows:
+#
+#   Active Users: Number of Session Pro payments that were still active (i.e. not expired or
+#   revoked) at the end of the reporting period.
+#
+#   Cancelling: Number of Session Pro payments that are scheduled to expire and not be renewed in
+#   that reporting period.
+
+SESH_PRO_BACKEND_GENERATE_REPORT=<Report Type>:<Report Period>:[<Optional Count>]
+
 # For the following options, see the .INI section for more information
 SESH_PRO_BACKEND_DB_PATH                 = <...>
 SESH_PRO_BACKEND_DB_PATH_IS_URI          = [0|1]

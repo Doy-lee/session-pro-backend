@@ -10,6 +10,8 @@ import dataclasses
 import random
 import logging
 import enum
+import csv
+import io
 
 import platform_google_api
 import platform_google_types
@@ -24,6 +26,30 @@ ADD_PRO_PAYMENT_HASH_PERSONALISATION = b'ProAddPayment___'
 assert len(GENERATE_PROOF_HASH_PERSONALISATION)  == hashlib.blake2b.PERSON_SIZE
 assert len(BUILD_PROOF_HASH_PERSONALISATION)     == hashlib.blake2b.PERSON_SIZE
 assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
+
+class ReportPeriod(enum.Enum):
+    Daily   = 0
+    Weekly  = 1
+    Monthly = 2
+
+class ReportType(enum.Enum):
+    Human = 0
+    CSV   = 1
+
+@dataclasses.dataclass(frozen=True)
+class ReportRow:
+    period:            str
+    active_users:      int
+    unredeemed:        int
+    new_subs:          int
+    google:            int
+    apple:             int
+    plan_1m:           int
+    plan_3m:           int
+    plan_12m:          int
+    refunds_initiated: int
+    revoked:           int
+    cancelled:         int
 
 @dataclasses.dataclass
 class GoogleNotificationMessageIDInDB:
@@ -880,7 +906,7 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     for index, it in enumerate(payments):
         # NOTE: Check mandatory fields
         if it.plan == base.ProPlan.Nil: 
-            err.msg_list.append(f'{it.status.name} payment #{index} plan is invalid. It should have been derived from the platform payment provider (e.g. by converting the unredeemedd product ID to a plan)')
+            err.msg_list.append(f'{it.status.name} payment #{index} plan is invalid. It should have been derived from the platform payment provider (e.g. by converting the unredeemedd plan ID to a plan)')
         if it.payment_provider == base.PaymentProvider.Nil:
             err.msg_list.append(f'{it.status.name} payment #{index} payment provider is set to {it.payment_provider.name} but it should not be. It should have been set by the platform before added to the DB')
 
@@ -2290,4 +2316,331 @@ def google_notification_message_id_is_in_db_tx(tx: base.SQLTransaction, message_
     if row is not None:
         result.present = True
         result.handled = row[0] > 0 # NOTE: Should always be 0 or 1 but we'll be extra careful
+    return result
+
+def generate_report_rows(db_path: str, period: ReportPeriod, limit: int | None) -> list[ReportRow]:
+    def fetch_counts(cursor: sqlite3.Cursor, period: ReportPeriod, unix_ts_ms_column: str, where_clause: str) -> dict[str, int]:
+        group_by_expr: str = ""
+        match period:
+            case ReportPeriod.Daily:
+                group_by_expr = f"DATE({unix_ts_ms_column} / 1000, 'unixepoch')" # Floor timestamp to YYYY-MM-DD
+            case ReportPeriod.Weekly:
+                group_by_expr = f"STRFTIME('%Y-%W', {unix_ts_ms_column} / 1000, 'unixepoch')" # YYYY-W
+            case ReportPeriod.Monthly:
+                group_by_expr = f"STRFTIME('%Y-%m', {unix_ts_ms_column} / 1000, 'unixepoch')" # YYYY-MM
+
+        query = f"""
+            SELECT {group_by_expr} AS period, COUNT(*) AS count
+            FROM payments
+            WHERE {where_clause}
+            GROUP BY period
+            ORDER BY rowid DESC
+        """
+        _ = cursor.execute(query)
+
+        result: dict[str, int] = {}
+        for row in cursor.fetchall():  # pyright: ignore[reportAny]
+            row = typing.cast(tuple[str, int], row)
+            if period == ReportPeriod.Weekly:
+                # NOTE: Note that SQLite week goes from 0-53 but Python accepts 1-52, hence the +1
+                year, week           = row[0].split('-') # YYYY-W
+                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week) + 1, day=1)
+                custom_label         = date.strftime('%F') + f' (W{week})'
+                result[custom_label] = row[1]
+            else:
+                result[row[0]] = row[1]
+        return result
+
+    def fetch_active_users(cursor: sqlite3.Cursor, period: ReportPeriod) -> dict[str, int]:
+        date_expr: str = ""
+        match period:
+            case ReportPeriod.Daily:
+                date_expr = f"DATE(unredeemed_unix_ts_ms / 1000, 'unixepoch')" # Floor timestamp to YYYY-MM-DD
+            case ReportPeriod.Weekly:
+                date_expr = f"STRFTIME('%Y-%W', unredeemed_unix_ts_ms / 1000, 'unixepoch')" # YYYY-W
+            case ReportPeriod.Monthly:
+                date_expr = f"STRFTIME('%Y-%m', unredeemed_unix_ts_ms / 1000, 'unixepoch')" # YYYY-MM
+
+        # Get all the periods available in the table (e.g. 2025-11, 2025-12, 2026-01... for monthly and so forth)
+        _                      = cursor.execute(f"SELECT DISTINCT {date_expr} AS period FROM payments")
+        periods_list           = [row[0] for row in cursor.fetchall()]
+        result: dict[str, int] = {}
+
+        for it in periods_list:
+            # NOTE: Calculate each end-of-date unix timestamp given the list of periods we extracted
+            # from the table
+            assert isinstance(it, str)
+
+            # NOTE: There are 86_400 seconds in a day. We calculate the end of the day, e.g. the
+            # very last second before ticking over to the next day as 86_399 (note we multiply by
+            # 1000 to get milliseconds)
+            #
+            # NOTE: For weekly, the first week of an ISO year starts on a Thursday, so we minus 3
+            # days to get back to Monday. We add +1 week to find the end-date of the week.
+            if period == ReportPeriod.Weekly:
+                year, week = it.split("-")
+                end_ts     = f"strftime('%s', '{year}-01-01', '+{(int(week)+1)*7-3} days', 'weekday 0') * 1000 + 86399999"
+            elif period == ReportPeriod.Monthly:
+                end_ts = f"(strftime('%s', '{it}-01', '+1 month', '-1 day') * 1000 + 86399999)"
+            else:
+                end_ts = f"((julianday('{it}') + 0.99999) * 86400000)"
+
+            query = f"""
+                SELECT COUNT(DISTINCT master_pkey) AS active
+                FROM payments
+                WHERE {end_ts} >= unredeemed_unix_ts_ms
+                  AND {end_ts} <= expiry_unix_ts_ms
+                  AND status != {base.PaymentStatus.Revoked.value}
+            """
+
+            _          = cursor.execute(query)
+            count      = cursor.fetchone()[0] or 0
+            if period == ReportPeriod.Weekly:
+                # NOTE: Note that SQLite week goes from 0-53 but Python accepts 1-52, hence the +1
+                year, week           = it.split('-') # YYYY-W
+                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week) + 1, day=1)
+                custom_label         = date.strftime('%F') + f' (W{week})'
+                result[custom_label] = count
+            else:
+                result[it] = count
+
+        return result
+
+
+    result:   list[ReportRow]           = []
+    sql_conn: sqlite3.Connection | None = None
+    try:
+        sql_conn = sqlite3.connect(db_path)
+        with base.SQLTransaction(sql_conn) as tx:
+            assert tx.cursor
+            unredeemed: dict[str, int] = fetch_counts( # Payments witnessed but not redeemed by user yet
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"status == {base.PaymentStatus.Unredeemed.value}",
+            )
+
+            plan_1m: dict[str, int] = fetch_counts(
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"plan == {base.ProPlan.OneMonth.value}",
+            )
+
+            plan_3m: dict[str, int] = fetch_counts(
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"plan == {base.ProPlan.ThreeMonth.value}",
+            )
+
+            plan_12m: dict[str, int] = fetch_counts(
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"plan == {base.ProPlan.TwelveMonth.value}",
+            )
+
+            google: dict[str, int] = fetch_counts( # Google payments
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"payment_provider == {base.PaymentProvider.GooglePlayStore.value}",
+            )
+
+            apple: dict[str, int] = fetch_counts( # Apple Payments
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = f"payment_provider == {base.PaymentProvider.iOSAppStore.value}",
+            )
+
+            new_subs: dict[str, int] = fetch_counts( # Payments witnessed
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "unredeemed_unix_ts_ms",
+                where_clause      = "unredeemed_unix_ts_ms IS NOT NULL AND unredeemed_unix_ts_ms > 0",
+            )
+
+            refunds_initiated: dict[str, int] = fetch_counts( # Refund requests
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "refund_requested_unix_ts_ms",
+                where_clause      = "refund_requested_unix_ts_ms > 0",
+            )
+
+            revocations: dict[str, int] = fetch_counts( # Revoked payments
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "revoked_unix_ts_ms",
+                where_clause      = "revoked_unix_ts_ms IS NOT NULL AND revoked_unix_ts_ms > 0",
+            )
+
+            cancelled: dict[str, int] = fetch_counts( # Cancelled subscriptions (e.g. non-renewing subscriptions)
+                cursor            = tx.cursor,
+                period            = period,
+                unix_ts_ms_column = "expiry_unix_ts_ms",
+                where_clause      = f"auto_renewing = 0 AND status != {base.PaymentStatus.Revoked.value}",
+            )
+
+            active_users: dict[str, int] = fetch_active_users(tx.cursor, period)
+
+            # Merge all periods
+            all_periods: set[str] = set()
+            for key_list in [new_subs.keys(), refunds_initiated.keys(), revocations.keys(), cancelled.keys(), active_users.keys()]:
+                for it in key_list:
+                    all_periods.add(it)
+
+            sorted_periods: list[str] = sorted(all_periods, reverse=True)[:limit]
+            for it in sorted_periods:
+                result.append(ReportRow(
+                    period            = it,
+                    active_users      = active_users.get(it, 0),
+                    unredeemed        = unredeemed.get(it, 0),
+                    new_subs          = new_subs.get(it, 0),
+                    google            = google.get(it, 0),
+                    apple             = apple.get(it, 0),
+                    plan_1m           = plan_1m.get(it, 0),
+                    plan_3m           = plan_3m.get(it, 0),
+                    plan_12m          = plan_12m.get(it, 0),
+                    refunds_initiated = refunds_initiated.get(it, 0),
+                    revoked           = revocations.get(it, 0),
+                    cancelled         = cancelled.get(it, 0),
+                ))
+    except Exception:
+        log.error(f'Failed to generate report: {traceback.format_exc()}')
+    finally:
+        if sql_conn:
+            sql_conn.close()
+
+    return result
+
+def generate_report_str(period: ReportPeriod, data: list[ReportRow], type: ReportType) -> str:
+    @dataclasses.dataclass(frozen=True)
+    class Section:
+        name:       str
+        width:      int
+        align_left: bool = False
+
+    sections: list[Section] = [
+        Section("Period",            16, align_left=True),
+        Section("Active Users",      14),
+        Section("Unredeemed",        12),
+        Section("New Subs",          10),
+        Section("Google",            8),
+        Section("Apple",             7),
+        Section("Plan 1m",           10),
+        Section("Plan 3m",           10),
+        Section("Plan 12m",          10),
+        Section("Refunds Initiated", 20),
+        Section("Revoked",           10),
+        Section("Cancelling",        12),
+    ]
+
+    result: str = ''
+    match type:
+        case ReportType.Human:
+            header_parts: list[str] = []
+            for sec in sections:
+                if sec.align_left:
+                    header_parts.append(f"{sec.name:<{sec.width}}")
+                else:
+                    header_parts.append(f"{sec.name:>{sec.width}}")
+            header = " ".join(header_parts)
+
+            result = f"{period.name.upper()} REPORT\n"
+            result += "-" * len(header) + "\n"
+            result += header + "\n"
+            result += "-" * len(header) + "\n"
+
+            for i, row in enumerate(data):
+                if i > 0:
+                    result += "\n"
+
+                human_parts: list[str] = []
+                part_section           = sections[len(human_parts)]
+                padding                = part_section.width
+                align                  = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.period:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.active_users:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.unredeemed:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.new_subs:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.google:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.apple:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.plan_1m:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.plan_3m:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.plan_12m:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.refunds_initiated:20}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.revoked:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.cancelled:{align}{padding}}")
+
+                assert len(human_parts) == len(sections)
+                result += " ".join(human_parts)
+
+        case ReportType.CSV:
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([sec.name for sec in sections])
+            for row in data:
+                csv_parts: list[str | int] = [
+                    row.period,
+                    row.active_users,
+                    row.unredeemed,
+                    row.new_subs,
+                    row.google,
+                    row.apple,
+                    row.plan_1m,
+                    row.plan_3m,
+                    row.plan_12m,
+                    row.refunds_initiated,
+                    row.revoked,
+                    row.cancelled,
+                ]
+                assert len(csv_parts) == len(sections)
+                writer.writerow(csv_parts)
+            result = output.getvalue().strip()
     return result

@@ -55,6 +55,12 @@ class SetGoogleNotificationItem:
     command:    SetGoogleNotificationCommand
 
 @dataclasses.dataclass
+class GenerateReportArgs:
+    type:   backend.ReportType
+    period: backend.ReportPeriod
+    count:  int | None = None
+
+@dataclasses.dataclass
 class SessionWebhook:
     enabled: bool = False
     url:     str  = ''
@@ -94,6 +100,9 @@ class ParsedArgs:
     google_project_name:                 str                             = ''
     google_subscription_name:            str                             = ''
     google_subscription_product_id:      str                             = ''
+
+    generate_report_args:                str                             = ''
+    parsed_generate_report_args:         GenerateReportArgs | None       = None
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_maintenance_thread
@@ -254,6 +263,47 @@ def parse_set_google_notification_item_arg(arg: str, err: base.ErrorSink) -> lis
         result.append(SetGoogleNotificationItem(message_id=message_id, command=command))
     return result
 
+def parse_generate_report_args(arg: str, err: base.ErrorSink) -> GenerateReportArgs | None:
+    """Parse a <report type>:<report_period>[:<count>] string into the GenerateReportArgs result"""
+    result: GenerateReportArgs | None = None
+    if len(arg) == 0:
+        return result
+
+    parts = arg.split(":")
+    if len(parts) < 2:
+        err.msg_list.append(f"Failed to parse report argument, expected at least 2 arguments delimited by ':' (had {len(parts)}) (arg was: {arg})")
+        return result
+
+    parsed_type: backend.ReportType = backend.ReportType.Human
+    if parts[0].lower() == backend.ReportType.Human.name.lower():
+        parsed_type = backend.ReportType.Human
+    elif parts[0].lower() == backend.ReportType.CSV.name.lower():
+        parsed_type = backend.ReportType.CSV
+    else:
+        err.msg_list.append(f'Failed to parse report type ({parts[0]}) (arg was: {arg})')
+        return result
+
+    parsed_period: backend.ReportPeriod = backend.ReportPeriod.Daily
+    if parts[1].lower() == backend.ReportPeriod.Daily.name.lower():
+        parsed_period = backend.ReportPeriod.Daily
+    elif parts[1].lower() == backend.ReportPeriod.Weekly.name.lower():
+        parsed_period = backend.ReportPeriod.Weekly
+    elif parts[1].lower() == backend.ReportPeriod.Monthly.name.lower():
+        parsed_period = backend.ReportPeriod.Monthly
+    else:
+        err.msg_list.append(f'Failed to parse report period ({parts[1]}) (arg was: {arg})')
+        return result
+
+    parsed_count: int | None = None
+    if len(parts) >= 3:
+        try:
+            parsed_count = int(parts[2])
+        except Exception:
+            err.msg_list.append(f'Failed to parse report count ({parts[2]}) (arg was: {arg})')
+            return result
+
+    result = GenerateReportArgs(type=parsed_type, period=parsed_period, count=parsed_count)
+    return result
 
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Parse .INI file if present and get arguments for it
@@ -346,6 +396,9 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.set_google_notification        = os.getenv('SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION',            result.set_google_notification)
     result.parsed_set_google_notification = parse_set_google_notification_item_arg(result.set_google_notification, err)
 
+    result.generate_report_args           = os.getenv('SESH_PRO_BACKEND_GENERATE_REPORT',                    result.generate_report_args)
+    result.parsed_generate_report_args    = parse_generate_report_args(result.generate_report_args, err)
+
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
             err.msg_list.append('Platform Apple was enabled but key_id was not specified')
@@ -398,6 +451,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.log_path = 'pro-backend.log'
 
     return result
+
 
 def entry_point() -> flask.Flask:
     log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
@@ -478,6 +532,12 @@ def entry_point() -> flask.Flask:
     info_string: str = backend.db_info_string(sql_conn=db.sql_conn, db_path=db.path, err=err)
     if len(err.msg_list) > 0:
         log.error(f"{err.msg_list}")
+        sys.exit(1)
+
+    if parsed_args.parsed_generate_report_args:
+        generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
+        report_rows:          list[backend.ReportRow] = backend.generate_report_rows(parsed_args.db_path, generate_report_args.period, limit=generate_report_args.count)
+        print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
         sys.exit(1)
 
     startup_log = '\n'
