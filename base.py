@@ -13,12 +13,13 @@ import math
 import os
 import pathlib
 import sqlite3
+import sys
 import threading
+import time
 import traceback
 import typing
 import typing_extensions
 import urllib.request
-import sys
 
 # NOTE: Constants
 SECONDS_IN_DAY:        int     = 60 * 60 * 24
@@ -176,21 +177,25 @@ class AsyncSessionWebhookLogHandler(logging.Handler):
         self._stop_event    = threading.Event()
         self._submit_thread.start()
 
+    def emit_text(self, text: str, date_prefix: bool = True):
+        prefix: str = ''
+        if date_prefix:
+            date   = datetime.datetime.fromtimestamp(time.time())
+            prefix = date.strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
 
-    def emit_text(self, text: str):
         max_size = 128
         with self._lock:
             if len(self.msg_queue) >= max_size:
                 self.msg_queue = self.msg_queue[-(max_size - 2):]
-                self.msg_queue.append('Message queue was full, overwriting old message')
-            self.msg_queue.append(text[:2000])
+                self.msg_queue.append(f"{prefix} Message queue was full, overwriting old message")
+            self.msg_queue.append(f"{prefix} {text}"[:2000])
         self._queue_dirtied.set()
 
     @typing_extensions.override
     def emit(self, record: logging.LogRecord):
         if record.levelno < logging.WARNING:
             return
-        self.emit_text(self.format(record)[:2000])
+        self.emit_text(self.format(record)[:2000], date_prefix=False)
 
     def _worker(self):
         while True:

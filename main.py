@@ -36,8 +36,9 @@ import server
 import platform_apple
 import platform_google
 
-log                   = logging.Logger('PRO')
-google_thread_context = platform_google.ThreadContext()
+log                                                       = logging.Logger('PRO')
+google_thread_context                                     = platform_google.ThreadContext()
+webhook_loggers: list[base.AsyncSessionWebhookLogHandler] = []
 
 @dataclasses.dataclass
 class SetUserErrorItem:
@@ -152,12 +153,15 @@ def backend_maintenance_thread_entry_point(db_path: str):
                 today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
                 if expire_result.success:
                     if not expire_result.already_done_by_someone_else:
-                        log.info('Daily pruning for {} completed on {}. Expired payments/revocations/users/apple notifs={}/{}/{}/{}'.format(yesterday_str,
-                                                                                                                         today_str,
-                                                                                                                         expire_result.payments,
-                                                                                                                         expire_result.revocations,
-                                                                                                                         expire_result.users,
-                                                                                                                         expire_result.apple_notification_uuid_history))
+                        log_line: str = ('Daily pruning for {} completed on {}. Expired payments/revocations/users/apple notifs={}/{}/{}/{}'.format(yesterday_str,
+                                                                                                                                                    today_str,
+                                                                                                                                                    expire_result.payments,
+                                                                                                                                                    expire_result.revocations,
+                                                                                                                                                    expire_result.users,
+                                                                                                                                                    expire_result.apple_notification_uuid_history))
+                        log.info(log_line)
+                        for it in webhook_loggers:
+                            it.emit_text(log_line)
                 else:
                     log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
@@ -177,6 +181,9 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     for it in dry_run.to_delete:
                         it.unlink()
 
+                    for it in webhook_loggers:
+                        it.emit_text(msg)
+
             # NOTE: Do a backup of the DB
             if 1:
                 backup_db_path: str = base.backup_file_path(pathlib.Path(db_path), next_day_date)
@@ -189,6 +196,8 @@ def backend_maintenance_thread_entry_point(db_path: str):
                         log.info(f"Backing up: {db_path} → {backup_db_path}")
                         src.sql_conn.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
                         log.info("Backup completed successfully!")
+                        for it in webhook_loggers:
+                            it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
                     except KeyboardInterrupt:
                         log.warning("Backup cancelled by user.")
                     except Exception:
@@ -196,6 +205,27 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     finally:
                         dest_sql_conn.close()
 
+            # NOTE: Generate the reports
+            if len(webhook_loggers):
+                daily_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Daily, 7)
+                daily_report_str   = backend.generate_report_str(backend.ReportPeriod.Daily, daily_report, backend.ReportType.Human)
+                weekly_report_str  = ''
+                monthly_report_str = ''
+                if next_day_date.weekday() == 0:
+                    weekly_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Weekly, 4)
+                    weekly_report_str = backend.generate_report_str(backend.ReportPeriod.Weekly, weekly_report, backend.ReportType.Human)
+
+                if next_day_date.day == 1:
+                    monthly_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Monthly, 3)
+                    monthly_report_str = backend.generate_report_str(backend.ReportPeriod.Monthly, monthly_report, backend.ReportType.Human)
+
+                for it in webhook_loggers:
+                    if len(daily_report_str):
+                        it.emit_text(daily_report_str)
+                    if len(weekly_report_str):
+                        it.emit_text(weekly_report_str)
+                    if len(monthly_report_str):
+                        it.emit_text(monthly_report_str)
 
 def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
@@ -487,7 +517,6 @@ def entry_point() -> flask.Flask:
         platform_apple.log.addHandler(file_logger)
 
     # NOTE: Equip the session webhook URL if it's configured
-    webhook_loggers: list[base.AsyncSessionWebhookLogHandler] = []
     for it in parsed_args.session_webhooks:
         if it.enabled:
             webhook_logger = base.AsyncSessionWebhookLogHandler(url=it.url, name=it.name)
@@ -578,9 +607,7 @@ def entry_point() -> flask.Flask:
 
     log.info(startup_log)
     for it in webhook_loggers:
-        date     = datetime.datetime.fromtimestamp(time.time())
-        date_str = date.strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
-        it.emit_text(f'{date_str} Starting up instance: {startup_log}')
+        it.emit_text(f'Starting up instance: {startup_log}')
 
     # NOTE: Handle printing of the DB to standard out if requested
     if parsed_args.print_tables:
