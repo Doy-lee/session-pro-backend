@@ -29,6 +29,7 @@ import dataclasses
 import enum
 import traceback
 import sqlite3
+import traceback
 
 import base
 import backend
@@ -62,6 +63,12 @@ class GenerateReportArgs:
     count:  int | None = None
 
 @dataclasses.dataclass
+class RevokeItem:
+    parsed_bytes: bytes = b''   # Master public key to revoke
+    unix_ts_s:    int   = 0     # Timestamp to assign to the revocation item if `is_delete` is false
+    is_delete:    bool  = False # If true the entry is deleted, `unix_ts_s` is ignored
+
+@dataclasses.dataclass
 class SessionWebhook:
     enabled: bool = False
     url:     str  = ''
@@ -76,14 +83,20 @@ class ParsedArgs:
     print_tables:                        bool                            = False
     dev:                                 bool                            = False
     unsafe_logging:                      bool                            = False
+
     with_platform_apple:                 bool                            = False
     with_platform_google:                bool                            = False
+
     platform_testing_env:                bool                            = False
+
     set_user_errors:                     str                             = ''
     parsed_set_user_errors:              list[SetUserErrorItem]          = dataclasses.field(default_factory=list)
+
     set_google_notification:             str                             = ''
     parsed_set_google_notification:      list[SetGoogleNotificationItem] = dataclasses.field(default_factory=list)
+
     session_webhooks:                    list[SessionWebhook]            = dataclasses.field(default_factory=list)
+
     apple_key_id:                        str                             = ''
     apple_issuer_id:                     str                             = ''
     apple_bundle_id:                     str                             = ''
@@ -104,6 +117,9 @@ class ParsedArgs:
 
     generate_report_args:                str                             = ''
     parsed_generate_report_args:         GenerateReportArgs | None       = None
+
+    revoke_args:                         str                             = ''
+    parsed_revoke_items:                 list[RevokeItem]                = dataclasses.field(default_factory=list)
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_maintenance_thread
@@ -335,6 +351,55 @@ def parse_generate_report_args(arg: str, err: base.ErrorSink) -> GenerateReportA
     result = GenerateReportArgs(type=parsed_type, period=parsed_period, count=parsed_count)
     return result
 
+def parse_revoke_args(arg: str, err: base.ErrorSink) -> list[RevokeItem]:
+    """Parse a <master pkey hex>=[delete|<timestamp>],... string into the result"""
+    result: list[RevokeItem] = []
+    if len(arg) == 0:
+        return result
+
+    parts = arg.split(",")
+    for index, it in enumerate(parts):
+        splits = it.split("=")
+        if len(splits) != 2:
+            err.msg_list.append(f"Failed to split revoke item ({it}) by '=', should produce 2 splits, received {len(splits)} (arg was: {arg})")
+            return result
+
+        # NOTE: Extract the hex/command
+        hex     = splits[0]
+        command = splits[1]
+
+        # NOTE: Validate the hex
+        if hex.startswith("0x"):
+            hex = hex[2:]
+
+        if len(hex) != 64:
+            err.msg_list.append(f"Failed to parse hex from item #{index} ({hex}) expected 64 hex chars, received {len(hex)} (arg was: {arg})")
+            return result
+
+        hex_bytes: bytes = b''
+        try:
+            hex_bytes = bytes.fromhex(hex)
+        except Exception:
+            err.msg_list.append(f"Failed to parse hex as hex from item #{index} ({hex}) (arg was: {arg}): {traceback.format_exc()}")
+            return result
+
+        # NOTE: Validate the command
+        is_delete: bool = False
+        unix_ts_s: int  = 0
+        if command.lower() == 'delete':
+            is_delete = True
+        else:
+            try:
+                unix_ts_s = int(command)
+            except Exception:
+                err.msg_list.append(f"Failed to parse timestamp from item #{index} ({command}) (arg was: {arg}): {traceback.format_exc()}")
+                return result
+
+        result.append(RevokeItem(parsed_bytes=hex_bytes, unix_ts_s=unix_ts_s, is_delete=is_delete))
+
+    return result
+
+
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Parse .INI file if present and get arguments for it
     result          = ParsedArgs()
@@ -354,11 +419,16 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
         result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
         result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',       fallback=False)
+
         result.with_platform_apple                 = base_section.getboolean(option='with_platform_apple',  fallback=False)
         result.with_platform_google                = base_section.getboolean(option='with_platform_google', fallback=False)
+
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
+
         result.set_user_errors                     = base_section.get(option='set_user_errors',             fallback='')
         result.set_google_notification             = base_section.get(option='set_google_notification',     fallback='')
+
+        result.generate_report_args                = base_section.get(option='generate_report',             fallback='')
 
         webhook_index = 0
         while True:
@@ -421,13 +491,18 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     result.with_platform_apple            = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
     result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
     result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
+
     result.set_user_errors                = os.getenv('SESH_PRO_BACKEND_SET_USER_ERRORS',                    result.set_user_errors)
     result.parsed_set_user_errors         = parse_set_user_error_arg(result.set_user_errors, err)
+
     result.set_google_notification        = os.getenv('SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION',            result.set_google_notification)
     result.parsed_set_google_notification = parse_set_google_notification_item_arg(result.set_google_notification, err)
 
     result.generate_report_args           = os.getenv('SESH_PRO_BACKEND_GENERATE_REPORT',                    result.generate_report_args)
     result.parsed_generate_report_args    = parse_generate_report_args(result.generate_report_args, err)
+
+    result.revoke_args                    = os.getenv('SESH_PRO_BACKEND_REVOKE',                             result.revoke_args)
+    result.parsed_revoke_items            = parse_revoke_args(result.revoke_args, err)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -563,55 +638,32 @@ def entry_point() -> flask.Flask:
         log.error(f"{err.msg_list}")
         sys.exit(1)
 
+    # NOTE: Generate a report if requested
     if parsed_args.parsed_generate_report_args:
         generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
         report_rows:          list[backend.ReportRow] = backend.generate_report_rows(parsed_args.db_path, generate_report_args.period, limit=generate_report_args.count)
         print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
         sys.exit(1)
 
-    startup_log = '\n'
-    if parsed_args.dev:
-        startup_log += "######################################\n"
-        startup_log += "###                                ###\n"
-        startup_log += "###        Dev Mode Enabled        ###\n"
-        startup_log += "###                                ###\n"
-        startup_log += "######################################\n"
+    # NOTE: Do revocation commands if requested
+    if len(parsed_args.parsed_revoke_items):
+        label = ''
+        for index, it in enumerate(parsed_args.parsed_revoke_items):
+            master_pkey                             = nacl.signing.VerifyKey(it.parsed_bytes)
+            with base.SQLTransaction(db.sql_conn) as tx:
+                set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=it.is_delete)
 
-    startup_log += f'Session Pro Backend\n{info_string}\n'
-    startup_log += f'  Features:\n'
-    if len(parsed_args.ini_path) > 0:
-        startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
-    if 1:
-        label = ' (URI)' if parsed_args.db_path_is_uri else ''
-        startup_log += f'    DB loaded from: {db.path}{label}\n'
-        startup_log += f'    Logging to: {parsed_args.log_path}\n'
-    if parsed_args.unsafe_logging:
-        startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
-    if parsed_args.platform_testing_env:
-        startup_log += f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)\n'
-    if parsed_args.with_platform_apple:
-        label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
-        startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
-    if parsed_args.with_platform_google:
-        startup_log += f'    Platform: Google Play Store notification handling enabled\n'
-    for it in parsed_args.session_webhooks:
-        if it.enabled:
-            startup_log += f'    Webhook Logger: Enabled (display name: {it.name})\n'
+            # NOTE: Construct log message
+            if index:
+                label += f'\n'
+            label += f'  {index:02d} {it.parsed_bytes.hex()}='
+            if it.is_delete:
+                label += f'delete'
+            else:
+                label += base.readable_unix_ts_ms(it.unix_ts_s * 1000)
+            label += f' ({set_result.value.lower()})'
 
-    if parsed_args.dev:
-        startup_log += "######################################\n"
-        startup_log += "###                                ###\n"
-        startup_log += "###        Dev Mode Enabled        ###\n"
-        startup_log += "###                                ###\n"
-        startup_log += "######################################\n"
-
-    log.info(startup_log)
-    for it in webhook_loggers:
-        it.emit_text(f'Starting up instance: {startup_log}')
-
-    # NOTE: Handle printing of the DB to standard out if requested
-    if parsed_args.print_tables:
-        base.print_db_to_stdout(db.sql_conn)
+        log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation updates\n{label}")
         sys.exit(1)
 
     # NOTE: Delete user errors if there were some specified
@@ -670,6 +722,51 @@ def entry_point() -> flask.Flask:
 
             log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
         sys.exit(1)
+
+    # NOTE: Handle printing of the DB to standard out if requested
+    if parsed_args.print_tables:
+        base.print_db_to_stdout(db.sql_conn)
+        sys.exit(1)
+
+    startup_log = '\n'
+    if parsed_args.dev:
+        startup_log += "######################################\n"
+        startup_log += "###                                ###\n"
+        startup_log += "###        Dev Mode Enabled        ###\n"
+        startup_log += "###                                ###\n"
+        startup_log += "######################################\n"
+
+    startup_log += f'Session Pro Backend\n{info_string}\n'
+    startup_log += f'  Features:\n'
+    if len(parsed_args.ini_path) > 0:
+        startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
+    if 1:
+        label = ' (URI)' if parsed_args.db_path_is_uri else ''
+        startup_log += f'    DB loaded from: {db.path}{label}\n'
+        startup_log += f'    Logging to: {parsed_args.log_path}\n'
+    if parsed_args.unsafe_logging:
+        startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
+    if parsed_args.platform_testing_env:
+        startup_log += f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)\n'
+    if parsed_args.with_platform_apple:
+        label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
+        startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
+    if parsed_args.with_platform_google:
+        startup_log += f'    Platform: Google Play Store notification handling enabled\n'
+    for it in parsed_args.session_webhooks:
+        if it.enabled:
+            startup_log += f'    Webhook Logger: Enabled (display name: {it.name})\n'
+
+    if parsed_args.dev:
+        startup_log += "######################################\n"
+        startup_log += "###                                ###\n"
+        startup_log += "###        Dev Mode Enabled        ###\n"
+        startup_log += "###                                ###\n"
+        startup_log += "######################################\n"
+
+    log.info(startup_log)
+    for it in webhook_loggers:
+        it.emit_text(f'Starting up instance: {startup_log}')
 
     # NOTE: Running the application just in Flask (e.g. local development) we
     # need a way to signal to the long-running payment expiry thread to

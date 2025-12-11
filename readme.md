@@ -139,13 +139,83 @@ set_user_errors              =
 # notifications that may be invalid or no longer necessary to process/impossible to process due to
 # inconsistent DB state, otherwise, do not use unless you know the intended consequences! Make a
 # backup of the DB before proceeding!
-set_google_notification      = <command...>
 
-session_webhook_url          = <url...>
+# set_google_notification      = <command...>
+
+# Generate a report of the payments for the given report type, period and optional count. The
+# following arguments are accepted
+#
+# Report Type
+#   Human
+#   CSV
+#
+# Period
+#   Daily
+#   Weekly
+#   Monthly
+#
+# Examples
+#   generate_report=Human:Daily
+#     Generates a human readable report of the payments in the backend for all days in the database
+#
+#   generate_report=Human:Daily:5
+#     Generates a human readable report of the payments in the backend from the last 5 days
+#
+#   generate_report=CSV:Monthly:12
+#     Generates a CSV report of payments from the last 12 months
+#
+# The fields of the report are defined as follows:
+#
+#   Active Users: Number of Session Pro payments that were still active (i.e. not expired or
+#   revoked) at the end of the reporting period.
+#
+#   Cancelling: Number of Session Pro payments that are scheduled to expire and not be renewed in
+#   that reporting period.
+
+# generate_report = <Report Type>:<Report Period>:[<Optional Count>]
+
+# Update the revocation status of one or more generation index hash by specifying a comma delimited 
+# list in the following format:
+#
+#   <master pkey hex>=[delete|<timestamp>],...
+#
+# Where
+#  <master pkey hex> should be the 64 hex character representation (optionally prefixed with 0x) of
+#  the Session Pro master public key to update the revocation for.
+#
+#  The current generation index associated with the pkey will be looked up and the corresponding
+#  hash will be revoked. If the user is not known by the database (e.g. the user doesn't exist, or,
+#  the user's master public key mapping has been pruned because the user was inactive for example)
+#  then no action is taken.
+#
+#  Followed by the string "delete" or unix epoch <timestamp> in seconds to delete the revocation or
+#  update the time at which the revocation expires respectively. If the entry doesn't exist and a
+#  timestamp was specified, the revocation item will be created. If it doesn't exist and a delete
+#  was requested no action is taken.
+#
+# For example
+#
+#  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=delete
+#    Deletes the revocation entry that has a generation index hash of 'aaa...' (if it exists).
+#
+#  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=123456789
+#    Updates (or adds a revocation by looking up the generation index hash for the public key
+#    'aaa...') the generation index hash that will expire at unix epoch timestamp 123456789. If the
+#    pkey does not exist and/or the associated generation index hash is not known then no action is
+#    taken.
+#
+#  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=delete,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=123456789
+#    As above but combining the actions by delimiting with a comma
+#
+# Note that executing any revoke action increments the global generation index counter to the next
+# value. This is expected behaviour.
+
+# revoke = <command...>
 
 # Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime. Each
 # subsequent webhook should be in a section with consecutive, incrementing indexes. Omit this
 # section to opt out
+
 # [session_webhook.0]
 # enabled = False
 # url     = <url...>
@@ -195,38 +265,6 @@ can only be specified as an environment variable.
 # Path to load the .INI file and hence the options to customise the runtime behaviour
 SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
 
-# Generate a report of the payments for the given report type, period and optional count. The
-# following arguments are accepted
-#
-# Report Type
-#   Human
-#   CSV
-#
-# Period
-#   Daily
-#   Weekly
-#   Monthly
-#
-# Examples
-#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=Human:Daily
-#     Generates a human readable report of the payments in the backend for all days in the database
-#
-#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=Human:Daily:5
-#     Generates a human readable report of the payments in the backend from the last 5 days
-#
-#   SESH_PRO_BACKEND_GENERATE_REPORT_ARGS=CSV:Monthly:12
-#     Generates a CSV report of payments from the last 12 months
-#
-# The fields of the report are defined as follows:
-#
-#   Active Users: Number of Session Pro payments that were still active (i.e. not expired or
-#   revoked) at the end of the reporting period.
-#
-#   Cancelling: Number of Session Pro payments that are scheduled to expire and not be renewed in
-#   that reporting period.
-
-SESH_PRO_BACKEND_GENERATE_REPORT=<Report Type>:<Report Period>:[<Optional Count>]
-
 # For the following options, see the .INI section for more information
 SESH_PRO_BACKEND_DB_PATH                 = <...>
 SESH_PRO_BACKEND_DB_PATH_IS_URI          = [0|1]
@@ -239,6 +277,8 @@ SESH_PRO_BACKEND_SET_USER_ERRORS         = <...>
 SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION = <...>
 SESH_PRO_BACKEND_SESSION_WEBHOOK_URL     = https://...
 SESH_PRO_BACKEND_SESSION_WEBHOOK_NAME    = <...>
+SESH_PRO_BACKEND_GENERATE_REPORT         = <...>
+SESH_PRO_BACKEND_REVOKE                  = <...>
 ```
 
 ## Build and run

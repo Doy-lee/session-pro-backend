@@ -27,6 +27,13 @@ assert len(GENERATE_PROOF_HASH_PERSONALISATION)  == hashlib.blake2b.PERSON_SIZE
 assert len(BUILD_PROOF_HASH_PERSONALISATION)     == hashlib.blake2b.PERSON_SIZE
 assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
+class SetRevocationResult(enum.StrEnum):
+    UserDoesNotExist = 'User does not exist'
+    Skipped          = 'Skipped'
+    Updated          = 'Updated'
+    Created          = 'Created'
+    Deleted          = 'Deleted'
+
 class ReportPeriod(enum.Enum):
     Daily   = 0
     Weekly  = 1
@@ -1050,6 +1057,31 @@ def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevoca
             master_pkey = nacl.signing.VerifyKey(it)
             _ = revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
 
+    return result
+
+def set_revocation_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, expiry_unix_ts_ms: int, delete_item: bool) -> SetRevocationResult:
+    # We have a session pro master public key, lookup the generation index hash
+    user:   UserRow = get_user_from_sql_tx(tx, master_pkey)
+    result          = SetRevocationResult.UserDoesNotExist
+    if user.found:
+        assert user.master_pkey == bytes(master_pkey), f"{user.master_pkey.hex()} vs {bytes(master_pkey).hex()}"
+        assert tx.cursor
+        existed = tx.cursor.execute("SELECT EXISTS (SELECT 1 FROM revocations WHERE gen_index = ?)", (user.gen_index,)).fetchone()[0] == 1
+
+        if delete_item:
+            if existed:
+                _ = tx.cursor.execute(f'''DELETE FROM revocations WHERE gen_index = ?''', (user.gen_index,))
+                result = SetRevocationResult.Deleted
+            else:
+                result = SetRevocationResult.Skipped
+        else:
+            _ = tx.cursor.execute(f'''
+                INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
+                VALUES      (?, ?)
+                ON CONFLICT (gen_index) DO UPDATE SET
+                    expiry_unix_ts_ms = excluded.expiry_unix_ts_ms
+            ''', (user.gen_index, expiry_unix_ts_ms))
+            result = SetRevocationResult.Updated if existed else SetRevocationResult.Created
     return result
 
 def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
