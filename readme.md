@@ -139,8 +139,7 @@ set_user_errors              =
 # notifications that may be invalid or no longer necessary to process/impossible to process due to
 # inconsistent DB state, otherwise, do not use unless you know the intended consequences! Make a
 # backup of the DB before proceeding!
-
-# set_google_notification      = <command...>
+set_google_notification =
 
 # Generate a report of the payments for the given report type, period and optional count. The
 # following arguments are accepted
@@ -171,11 +170,10 @@ set_user_errors              =
 #
 #   Cancelling: Number of Session Pro payments that are scheduled to expire and not be renewed in
 #   that reporting period.
+generate_report =
 
-# generate_report = <Report Type>:<Report Period>:[<Optional Count>]
-
-# Update the revocation status of one or more generation index hash by specifying a comma delimited 
-# list in the following format:
+# Update the revocation status of one or more Session Pro master public key by specifying a comma
+# delimited list in the following format:
 #
 #   <master pkey hex>=[delete|<timestamp>],...
 #
@@ -208,9 +206,8 @@ set_user_errors              =
 #    As above but combining the actions by delimiting with a comma
 #
 # Note that executing any revoke action increments the global generation index counter to the next
-# value. This is expected behaviour.
-
-# revoke = <command...>
+# value. This is expected behaviour as a side effect of modifying the revocation table.
+revoke =
 
 # Set the URL to the Session Webhook Manage URL to push warning and error logs to at runtime. Each
 # subsequent webhook should be in a section with consecutive, incrementing indexes. Omit this

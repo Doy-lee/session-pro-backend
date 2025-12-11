@@ -429,6 +429,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.set_google_notification             = base_section.get(option='set_google_notification',     fallback='')
 
         result.generate_report_args                = base_section.get(option='generate_report',             fallback='')
+        result.revoke_args                         = base_section.get(option='revoke',                      fallback='')
 
         webhook_index = 0
         while True:
