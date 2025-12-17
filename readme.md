@@ -175,7 +175,7 @@ generate_report =
 # Update the revocation status of one or more Session Pro master public key by specifying a comma
 # delimited list in the following format:
 #
-#   <master pkey hex>=[delete|<timestamp>],...
+#   <master pkey hex>=[list|delete|<timestamp>],...
 #
 # Where
 #  <master pkey hex> should be the 64 hex character representation (optionally prefixed with 0x) of
@@ -186,10 +186,16 @@ generate_report =
 #  the user's master public key mapping has been pruned because the user was inactive for example)
 #  then no action is taken.
 #
-#  Followed by the string "delete" or unix epoch <timestamp> in seconds to delete the revocation or
-#  update the time at which the revocation expires respectively. If the entry doesn't exist and a
-#  timestamp was specified, the revocation item will be created. If it doesn't exist and a delete
-#  was requested no action is taken.
+#  Followed by the string "delete" or "list" or unix epoch <timestamp> in seconds.
+#
+#    Delete will remove the revocation entry from the table if it exists, no-op if it doesn't.
+#
+#    List will show all the payments that haven't been expired/revoked yet for the user. It
+#    currently isn't possible to revoke an individual payment as this may interfere with the payment
+#    lifecycle which is largely dictated by the payment provider.
+#
+#    Unix epoch timestamp will update the time (or create a new revocation entry if it doesn't
+#    exist) at which the revocation item will be effective until.
 #
 # For example
 #
@@ -204,6 +210,10 @@ generate_report =
 #
 #  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=delete,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=123456789
 #    As above but combining the actions by delimiting with a comma
+#
+#  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=list
+#    Shows the list of payments that haven't been expired/revoked yet for the associated Session Pro
+#    Master public key.
 #
 # Note that executing any revoke action increments the global generation index counter to the next
 # value. This is expected behaviour as a side effect of modifying the revocation table.

@@ -921,6 +921,7 @@ def get_pro_details():
             payments_total                       = get_user.payments_count
             refund_requested_unix_ts_ms          = get_user.user.refund_requested_unix_ts_ms
             has_payments                         = False
+
             for row in get_user.payments_it:
                 # NOTE: If the user has at-least one payment, we mark them as being expired
                 # initially and every payment we come across, if they have a redeemed payment
@@ -991,6 +992,10 @@ def get_pro_details():
                 # status).
                 if len(items) >= count and user_pro_status == UserProStatus.Active:
                     break
+
+            # NOTE: Override user status if they are revoked
+            if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
+                user_pro_status = UserProStatus.Expired
 
     # NOTE: If auto-renewing is enabled and the grace period is not set yet then we assume that this
     # is a platform that only sets the grace period once the user has entered it. This is currently

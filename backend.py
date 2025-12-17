@@ -551,13 +551,17 @@ def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
             result.append(item)
     return result;
 
-def is_gen_index_revoked_tx(sql_conn: sqlite3.Connection, gen_index : int) -> bool:
+def is_gen_index_revoked_tx(tx: base.SQLTransaction, gen_index : int) -> bool:
+    assert tx.cursor is not None
+    _  = tx.cursor.execute('SELECT 1 FROM revocations WHERE gen_index = ?', (gen_index,))
+    row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+    result                 = row is not None
+    return result
+
+def is_gen_index_revoked(sql_conn: sqlite3.Connection, gen_index : int) -> bool:
     result = False
     with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _  = tx.cursor.execute('SELECT 1 FROM revocations WHERE gen_index = ?', (gen_index,))
-        row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-        result                 = row is not None
+        result = is_gen_index_revoked_tx(tx, gen_index)
     return result
 
 def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
@@ -2105,7 +2109,7 @@ def generate_pro_proof(sql_conn:       sqlite3.Connection,
 
     if get_user.user.master_pkey == bytes(master_pkey):
         # Check that the gen index hash is not revoked
-        if is_gen_index_revoked_tx(sql_conn, get_user.user.gen_index):
+        if is_gen_index_revoked(sql_conn, get_user.user.gen_index):
             err.msg_list.append(f'User {bytes(master_pkey).hex()} payment has been revoked')
         else:
             proof_deadline_unix_ts_ms: int = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms

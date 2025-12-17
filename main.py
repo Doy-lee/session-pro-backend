@@ -62,11 +62,19 @@ class GenerateReportArgs:
     period: backend.ReportPeriod
     count:  int | None = None
 
+class RevokeCommand(enum.Enum):
+    Nil       = 0
+    Delete    = 1
+    List      = 2
+    Timestamp = 3
+
 @dataclasses.dataclass
 class RevokeItem:
-    parsed_bytes: bytes = b''   # Master public key to revoke
-    unix_ts_s:    int   = 0     # Timestamp to assign to the revocation item if `is_delete` is false
-    is_delete:    bool  = False # If true the entry is deleted, `unix_ts_s` is ignored
+    parsed_bytes: bytes         = b'' # Master public key to revoke
+    command:      RevokeCommand = RevokeCommand.Nil
+    # Timestamp to assign to the revocation item at which it will be effective until. Only used
+    # if `command` is `Timestamp` otherwise ignored
+    unix_ts_s:    int           = 0
 
 @dataclasses.dataclass
 class SessionWebhook:
@@ -352,7 +360,9 @@ def parse_generate_report_args(arg: str, err: base.ErrorSink) -> GenerateReportA
     return result
 
 def parse_revoke_args(arg: str, err: base.ErrorSink) -> list[RevokeItem]:
-    """Parse a <master pkey hex>=[delete|<timestamp>],... string into the result"""
+    """
+    Parse a <master pkey hex>=[list|delete|<timestamp>],... string into the result
+    """
     result: list[RevokeItem] = []
     if len(arg) == 0:
         return result
@@ -384,18 +394,21 @@ def parse_revoke_args(arg: str, err: base.ErrorSink) -> list[RevokeItem]:
             return result
 
         # NOTE: Validate the command
-        is_delete: bool = False
-        unix_ts_s: int  = 0
+        enum_command   = RevokeCommand.Delete
+        unix_ts_s: int = 0
         if command.lower() == 'delete':
-            is_delete = True
+            enum_command = RevokeCommand.Delete
+        elif command.lower() == 'list':
+            enum_command = RevokeCommand.List
         else:
             try:
-                unix_ts_s = int(command)
+                unix_ts_s    = int(command)
+                enum_command = RevokeCommand.Timestamp
             except Exception:
                 err.msg_list.append(f"Failed to parse timestamp from item #{index} ({command}) (arg was: {arg}): {traceback.format_exc()}")
                 return result
 
-        result.append(RevokeItem(parsed_bytes=hex_bytes, unix_ts_s=unix_ts_s, is_delete=is_delete))
+        result.append(RevokeItem(parsed_bytes=hex_bytes, unix_ts_s=unix_ts_s, command=enum_command))
 
     return result
 
@@ -650,21 +663,53 @@ def entry_point() -> flask.Flask:
     if len(parsed_args.parsed_revoke_items):
         label = ''
         for index, it in enumerate(parsed_args.parsed_revoke_items):
-            master_pkey                             = nacl.signing.VerifyKey(it.parsed_bytes)
-            with base.SQLTransaction(db.sql_conn) as tx:
-                set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=it.is_delete)
+            master_pkey = nacl.signing.VerifyKey(it.parsed_bytes)
 
-            # NOTE: Construct log message
             if index:
                 label += f'\n'
-            label += f'  {index:02d} {it.parsed_bytes.hex()}='
-            if it.is_delete:
-                label += f'delete'
-            else:
-                label += base.readable_unix_ts_ms(it.unix_ts_s * 1000)
-            label += f' ({set_result.value.lower()})'
+            label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
 
-        log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation updates\n{label}")
+            with base.SQLTransaction(db.sql_conn) as tx:
+                match it.command:
+                    case RevokeCommand.Nil: pass
+                    case RevokeCommand.List:
+                        user_and_payments: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey)
+                        eligible_count = 0
+
+                        list_label = ''
+                        for row in user_and_payments.payments_it:
+                            faux_row_id                 = 0
+                            payment: backend.PaymentRow = backend.payment_row_from_tuple((faux_row_id, *row))
+
+                            plan_label = ''
+                            match payment.plan:
+                                case base.ProPlan.Nil:         plan_label = '??'
+                                case base.ProPlan.OneMonth:    plan_label = '1M'
+                                case base.ProPlan.ThreeMonth:  plan_label = '3M'
+                                case base.ProPlan.TwelveMonth: plan_label = '12M'
+
+                            payment_id = ''
+                            match payment.payment_provider:
+                                case base.PaymentProvider.Nil:             pass
+                                case base.PaymentProvider.GooglePlayStore: payment_id = f'{payment.google_payment_token}-{payment.google_order_id}'
+                                case base.PaymentProvider.iOSAppStore:     payment_id = f'{payment.apple.original_tx_id}'
+
+                            if payment.status == base.PaymentStatus.Expired or int(time.time() * 1000) >= payment.expiry_unix_ts_ms:
+                                continue
+
+                            list_label += f'\n    {eligible_count:02d} RevokeID={payment.payment_provider.name}-{payment_id}; Status={payment.status.name}; Plan={plan_label}; Unredeemed={base.readable_unix_ts_ms(payment.unredeemed_unix_ts_ms)}; Expiry={base.readable_unix_ts_ms(payment.expiry_unix_ts_ms)};'
+                            eligible_count += 1
+
+                        label += f' ({eligible_count} revocable payments){list_label}'
+
+                    case RevokeCommand.Delete:
+                        set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=True)
+                        label += f' ({set_result.value.lower()})'
+                    case RevokeCommand.Timestamp:
+                        set_result = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=False)
+                        label += f' {base.readable_unix_ts_ms(it.unix_ts_s * 1000)} ({set_result.value.lower()})'
+
+        log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation command\n{label}")
         sys.exit(1)
 
     # NOTE: Delete user errors if there were some specified
