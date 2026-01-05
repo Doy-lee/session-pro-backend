@@ -2378,9 +2378,8 @@ def generate_report_rows(db_path: str, period: ReportPeriod, limit: int | None) 
         for row in cursor.fetchall():  # pyright: ignore[reportAny]
             row = typing.cast(tuple[str, int], row)
             if period == ReportPeriod.Weekly:
-                # NOTE: Note that SQLite week goes from 0-53 but Python accepts 1-52, hence the +1
                 year, week           = row[0].split('-') # YYYY-W
-                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week) + 1, day=1)
+                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week), day=1)
                 custom_label         = date.strftime('%F') + f' (W{week})'
                 result[custom_label] = row[1]
             else:
@@ -2432,9 +2431,8 @@ def generate_report_rows(db_path: str, period: ReportPeriod, limit: int | None) 
             _          = cursor.execute(query)
             count      = cursor.fetchone()[0] or 0
             if period == ReportPeriod.Weekly:
-                # NOTE: Note that SQLite week goes from 0-53 but Python accepts 1-52, hence the +1
                 year, week           = it.split('-') # YYYY-W
-                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week) + 1, day=1)
+                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week), day=1)
                 custom_label         = date.strftime('%F') + f' (W{week})'
                 result[custom_label] = count
             else:
