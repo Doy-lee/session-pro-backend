@@ -433,7 +433,11 @@ def json_dict_require_google_money(d: dict[str, base.JSONValue], key: str, err: 
 
     currency_code = base.json_dict_require_str(price_obj, "currencyCode", err)
     units = base.json_dict_require_str(price_obj, "units", err)
-    nanos = base.json_dict_require_int(price_obj, "nanos", err)
+
+    # NOTE: Some currencies don't have a nanos field like HUF e.g. {"currencyCode": "HUF", "units": "12499"}
+    nanos: int = 0
+    if 'nanos' in price_obj:
+        nanos = base.json_dict_require_int(price_obj, "nanos", err)
 
     return GoogleMoney(currency_code=currency_code, units=units, nanos=nanos)
 
