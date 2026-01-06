@@ -298,20 +298,25 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     #
                                     # On any other error we raise the exception to the top-level handler
                                     # which will log it for us.
-                                        lookup = backend.GoogleNotificationMessageIDInDB()
-                                        with base.SQLTransaction(db.sql_conn) as tx:
-                                            # NOTE: By definition to be in the sorted list, the message must
-                                            # have also been submitted into the DB. So if for some reason the
-                                            # notification doesn't exist anymore (maybe someone deleted it
-                                            # out-of-band) then we skip the notification.
-                                            lookup                 = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
-                                            user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
-                                            handled                = (lookup.present and lookup.handled) or handle_parsed_notification(tx, msg.parse, err)
+                                    lookup = backend.GoogleNotificationMessageIDInDB()
+                                    with base.SQLTransaction(db.sql_conn) as tx:
+                                        # NOTE: By definition to be in the sorted list, the message must
+                                        # have also been submitted into the DB. So if for some reason the
+                                        # notification doesn't exist anymore (maybe someone deleted it
+                                        # out-of-band) then we skip the notification.
+                                        lookup                 = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+                                        user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                        if not lookup.present or lookup.present and lookup.handled:
+                                            handled = True
+                                        else:
+                                            handled = handle_parsed_notification(tx, msg.parse, err)
 
-                                            # NOTE: Clear user error if success, or add one if we failed
+                                        # NOTE: Clear user error if success, or add one if we failed
+                                        if lookup.present:
                                             if handled:
                                                 _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
-                                                _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                                if user_is_in_error_state:
+                                                    _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
                                             elif user_is_in_error_state == False:
                                                 user_error                      = backend.UserError()
                                                 user_error.provider             = base.PaymentProvider.GooglePlayStore
