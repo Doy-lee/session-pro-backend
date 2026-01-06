@@ -3440,7 +3440,9 @@ def test_google_platform_handle_notification(monkeypatch):
 
         err_rtdn = base.ErrorSink()
         parse    = platform_google.parse_notification(scenario.rtdn_event, err_rtdn)
-        handled  = platform_google.handle_parsed_notification(ctx.sql_conn, parse, err_rtdn)
+        handled  = False
+        with base.SQLTransaction(ctx.sql_conn) as tx:
+            handled = platform_google.handle_parsed_notification(tx, parse, err_rtdn)
         assert not err_rtdn.has() and handled and len(parse.purchase_token) > 0
 
         order_id            = current_state.line_items[0].latest_successful_order_id

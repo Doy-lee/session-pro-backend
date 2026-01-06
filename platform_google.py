@@ -75,6 +75,14 @@ class SortedMessage:
     parse:                ParsedNotification                            = dataclasses.field(default_factory=ParsedNotification)
     raw:                  google.pubsub_v1.types.ReceivedMessage | None = None
 
+    def increase_retry_delay(self, now_s: float):
+        MIN_RETRY_DELAY_S: float = 1
+        MAX_RETRY_DELAY_S: float = 600
+        self.curr_retry_delay_s    = max(self.curr_retry_delay_s, MIN_RETRY_DELAY_S)
+        self.curr_retry_delay_s   *= 2
+        self.curr_retry_delay_s    = min(self.curr_retry_delay_s, MAX_RETRY_DELAY_S)
+        self.next_retry_unix_ts_s  = now_s + self.curr_retry_delay_s
+
 def init(project_name:            str,
          package_name:            str,
          subscription_name:       str,
@@ -99,7 +107,7 @@ def init(project_name:            str,
     result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
     return result
 
-def handle_parsed_notification(sql_conn: sqlite3.Connection, parse: ParsedNotification, err: base.ErrorSink) -> bool:
+def handle_parsed_notification(tx: base.SQLTransaction, parse: ParsedNotification, err: base.ErrorSink) -> bool:
     result = False
     match parse.payload_type:
         case ParsedNotificationPayloadType.Nil:
@@ -119,7 +127,7 @@ def handle_parsed_notification(sql_conn: sqlite3.Connection, parse: ParsedNotifi
                     err.msg_list.append(f'Parsing data from subscription V2 details failed')
                     return result
 
-                handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, sql_conn=sql_conn, err=err)
+                handle_subscription_notification(tx_payment=tx_payment, tx_event=tx_event, tx=tx, err=err)
             except Exception:
                 err.msg_list.append(f"Handling notification failed: {traceback.format_exc()}")
         case ParsedNotificationPayloadType.Voided:
@@ -135,6 +143,8 @@ def handle_parsed_notification(sql_conn: sqlite3.Connection, parse: ParsedNotifi
             pass
 
     result = not err.has()
+    if err.has():
+        assert tx.cancel == True
     return result
 
 def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
@@ -251,11 +261,9 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                                                                   payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
 
                             base.retry_function_on_database_locked_error(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
-
                             if err.has():
                                 log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
                                 continue
-
 
                             if is_new_message:
                                 sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
@@ -270,8 +278,6 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
                     # NOTE: Attempt to process them in order
                     index = 0
-                    MIN_RETRY_DELAY_S: float = 1
-                    MAX_RETRY_DELAY_S: float = 600
                     while index < len(sorted_msg_list):
                         err                    = base.ErrorSink()
                         msg:     SortedMessage = sorted_msg_list[index]
@@ -283,33 +289,38 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         # out-of-band executed the SET_GOOGLE_NOTIFICATION command via environment/.ini
                         # file to mark a message as being done or handled so we check before proceeding.
                         if attempt:
-                            with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                                lookup                 = backend.GoogleNotificationMessageIDInDB()
-                                user_is_in_error_state = False
-                                with base.SQLTransaction(db.sql_conn) as tx:
-                                    # NOTE: By definition to be in the sorted list, the message must
-                                    # have also been submitted into the DB. So if for some reason the
-                                    # notification doesn't exist anymore (maybe someone deleted it
-                                    # out-of-band) then we skip the notification.
-                                    lookup = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
-                                    user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                            try:
+                                with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                                    # NOTE: If we try to mutate the database and it's locked, unlike
+                                    # before we just set the handled flag to false. This causes the
+                                    # message to be reattempted. In the add notification ID to DB phase
+                                    # we manually implement a retry to handle that.
+                                    #
+                                    # On any other error we raise the exception to the top-level handler
+                                    # which will log it for us.
+                                        lookup = backend.GoogleNotificationMessageIDInDB()
+                                        with base.SQLTransaction(db.sql_conn) as tx:
+                                            # NOTE: By definition to be in the sorted list, the message must
+                                            # have also been submitted into the DB. So if for some reason the
+                                            # notification doesn't exist anymore (maybe someone deleted it
+                                            # out-of-band) then we skip the notification.
+                                            lookup                 = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+                                            user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                            handled                = (lookup.present and lookup.handled) or handle_parsed_notification(tx, msg.parse, err)
 
-
-                                if lookup.present and lookup.handled:
-                                    handled = True
-                                else:
-                                    handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
-
-                                # NOTE: Clear user error if success, or add one if we failed
-                                with base.SQLTransaction(db.sql_conn) as tx:
-                                    if handled:
-                                        _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
-                                        _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
-                                    elif user_is_in_error_state == False:
-                                        user_error                      = backend.UserError()
-                                        user_error.provider             = base.PaymentProvider.GooglePlayStore
-                                        user_error.google_payment_token = msg.parse.purchase_token
-                                        backend.add_user_error_tx(tx, error = user_error, unix_ts_ms = int(now * 1000))
+                                            # NOTE: Clear user error if success, or add one if we failed
+                                            if handled:
+                                                _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
+                                                _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                            elif user_is_in_error_state == False:
+                                                user_error                      = backend.UserError()
+                                                user_error.provider             = base.PaymentProvider.GooglePlayStore
+                                                user_error.google_payment_token = msg.parse.purchase_token
+                                                backend.add_user_error_tx(tx, error = user_error, unix_ts_ms = int(now * 1000))
+                            except Exception as e:
+                                # NOTE: On exception failure we'll just mark the message as not
+                                # handled, this will bump the retry delay of the message
+                                handled = False
 
                         # NOTE: On success, we remove the message and add it to the acknowledge list
                         # (to stop Google resending it), or otherwise configure an exponential back-off
@@ -323,10 +334,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                 # NOTE: Exponential backoff on retries. Hopefully, this gives us some time,
                                 # for the out-of-order messages that this message is dependent on to arrive,
                                 # get sorted into order and then executed successfully.
-                                msg.curr_retry_delay_s    = max(msg.curr_retry_delay_s, MIN_RETRY_DELAY_S)
-                                msg.curr_retry_delay_s   *= 2
-                                msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
-                                msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
+                                msg.increase_retry_delay(now)
                                 log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{msg.raw}')
 
                     # NOTE: Acknowledge the messages we handled successfully to stop Google from
@@ -346,23 +354,23 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                 except Exception:
                     log.error(f'Google notification handling failed. Error was {traceback.format_exc()}')
 
-def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
+def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, tx: base.SQLTransaction, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
-    return backend.update_payment_renewal_info(
-        sql_conn                 = sql_conn,
+    return backend.update_payment_renewal_info_tx(
+        tx                       = tx,
         payment_tx               = tx_payment,
         grace_period_duration_ms = grace_period_duration_ms,
         auto_renewing            = auto_renewing,
         err                      = err,
     )
 
-def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    success = _update_payment_renewal_info(tx_payment, auto_renewing, None, sql_conn, err)
+def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, tx: base.SQLTransaction, err: base.ErrorSink):
+    success = _update_payment_renewal_info(tx_payment, auto_renewing, None, tx, err)
     if not success:
         err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
-def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, sql_conn, err)
+def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, tx: base.SQLTransaction, err: base.ErrorSink):
+    success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, tx, err)
     if not success:
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
@@ -371,7 +379,7 @@ def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sql
     if result:
         err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 
-def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, sql_conn: sqlite3.Connection, err: base.ErrorSink):
+def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, tx: base.SQLTransaction, err: base.ErrorSink):
     match tx_event.notification:
         case SubscriptionNotificationType.PURCHASED:
             """
@@ -396,33 +404,29 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                         payment_label: str = backend.payment_provider_tx_log_label(tx_payment)
                         log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={tx_event.linked_purchase_token}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
 
-                    with base.SQLTransaction(sql_conn) as tx:
-                        # NOTE: If a linked token is in the payload, it means that the old token
-                        # needs to be voided first before continuing as the link token is the new
-                        # token allocated to the user.
+                    # NOTE: If a linked token is in the payload, it means that the old token
+                    # needs to be voided first before continuing as the link token is the new
+                    # token allocated to the user.
 
-                        # NOTE: Revoke the old token
-                        if tx_event.linked_purchase_token is not None:
-                            # NOTE: For google, the only information we have about the previous order
-                            # is the purchase token. So we have to go and find the latest payment
-                            # valid for a purchase token and void that.
-                            _ = backend.add_google_revocation_tx(tx                   = tx,
-                                                                 google_payment_token = tx_event.linked_purchase_token,
-                                                                 revoke_unix_ts_ms    = tx_event.event_ts_ms,
-                                                                 err                  = err)
-                        # NOTE: Register the payment
-                        backend.add_unredeemed_payment_tx(
-                            tx                                = tx,
-                            payment_tx                        = tx_payment,
-                            plan                              = tx_event.pro_plan,
-                            expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
-                            unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
-                            platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
-                            err                               = err,
-                        )
-
-                        # NOTE: On error rollback changes made to the DB
-                        tx.cancel = err.has()
+                    # NOTE: Revoke the old token
+                    if tx_event.linked_purchase_token is not None:
+                        # NOTE: For google, the only information we have about the previous order
+                        # is the purchase token. So we have to go and find the latest payment
+                        # valid for a purchase token and void that.
+                        _ = backend.add_google_revocation_tx(tx                   = tx,
+                                                             google_payment_token = tx_event.linked_purchase_token,
+                                                             revoke_unix_ts_ms    = tx_event.event_ts_ms,
+                                                             err                  = err)
+                    # NOTE: Register the payment
+                    backend.add_unredeemed_payment_tx(
+                        tx                                = tx,
+                        payment_tx                        = tx_payment,
+                        plan                              = tx_event.pro_plan,
+                        expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
+                        unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
+                        platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
+                        err                               = err,
+                    )
 
         case SubscriptionNotificationType.IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2State.IN_GRACE_PERIOD:
@@ -437,7 +441,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     assert plan_details is not None
                     set_purchase_grace_period_duration(tx_payment               = tx_payment,
                                                        grace_period_duration_ms = plan_details.grace_period.milliseconds,
-                                                       sql_conn                 = sql_conn,
+                                                       tx                       = tx,
                                                        err                      = err)
 
         case SubscriptionNotificationType.RECOVERED | SubscriptionNotificationType.RENEWED:
@@ -449,17 +453,16 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, plan={tx_event.pro_plan.name}, unredeemed={unredeemed}, expiry={expiry})')
 
-                with base.SQLTransaction(sql_conn) as tx:
-                    assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
-                    assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
-                    backend.add_unredeemed_payment_tx(
-                        tx                                = tx,
-                        payment_tx                        = tx_payment,
-                        plan                              = tx_event.pro_plan,
-                        expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
-                        unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
-                        platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
-                        err                               = err)
+                assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
+                assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
+                backend.add_unredeemed_payment_tx(
+                    tx                                = tx,
+                    payment_tx                        = tx_payment,
+                    plan                              = tx_event.pro_plan,
+                    expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
+                    unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
+                    platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
+                    err                               = err)
 
         case SubscriptionNotificationType.CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
@@ -468,7 +471,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
-                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, sql_conn=sql_conn, err=err)
+                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, tx=tx, err=err)
 
         case SubscriptionNotificationType.RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
@@ -476,18 +479,17 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
-                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, sql_conn=sql_conn, err=err)
+                set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, tx=tx, err=err)
 
         case SubscriptionNotificationType.REVOKED:
             if tx_event.subscription_state == SubscriptionsV2State.EXPIRED:
                 if log.getEffectiveLevel() <= logging.INFO:
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
-                with base.SQLTransaction(sql_conn) as tx:
-                    _ = backend.add_google_revocation_tx(tx                   = tx,
-                                                         google_payment_token = tx_payment.google_payment_token,
-                                                         revoke_unix_ts_ms    = tx_event.event_ts_ms,
-                                                         err                  = err)
+                _ = backend.add_google_revocation_tx(tx                   = tx,
+                                                     google_payment_token = tx_payment.google_payment_token,
+                                                     revoke_unix_ts_ms    = tx_event.event_ts_ms,
+                                                     err                  = err)
 
         case SubscriptionNotificationType.EXPIRED | SubscriptionNotificationType.ON_HOLD:
             """The revocation function only actually revokes proofs that are not going to self-expire at the end of the UTC day, so
@@ -503,29 +505,28 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, revoke={base.readable_unix_ts_ms(tx_event.event_ts_ms)})')
 
-                with base.SQLTransaction(sql_conn) as tx:
-                    # TODO: If this function ever finds rounded(expiry_ts) > rounded(event_ts) the devs need to be notified somehow.
-                    """If everything works as intended, this function should always find that `rounded(expiry_ts) == rounded(event_ts)` and 
-                    not issue a revocation. If a payment is ever in a state where it should self-expire but isn't, we need to revoke it. In
-                    this case something has gone wrong and the user was over-entitled.
-                    """
-                    payment: backend.PaymentRow | None = backend.get_payment_tx(tx=tx, payment_tx=tx_payment, err=err)
-                    if payment is None or err.has():
-                        err.msg_list.append(f"Failed to get payment details for potential revocation!")
+                # TODO: If this function ever finds rounded(expiry_ts) > rounded(event_ts) the devs need to be notified somehow.
+                """If everything works as intended, this function should always find that `rounded(expiry_ts) == rounded(event_ts)` and 
+                not issue a revocation. If a payment is ever in a state where it should self-expire but isn't, we need to revoke it. In
+                this case something has gone wrong and the user was over-entitled.
+                """
+                payment: backend.PaymentRow | None = backend.get_payment_tx(tx=tx, payment_tx=tx_payment, err=err)
+                if payment is None or err.has():
+                    err.msg_list.append(f"Failed to get payment details for potential revocation!")
 
-                    if not err.has():
-                        assert payment is not None
-                        rounded_expiry_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=payment.expiry_unix_ts_ms)
-                        rounded_event_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=tx_event.event_ts_ms)
+                if not err.has():
+                    assert payment is not None
+                    rounded_expiry_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=payment.expiry_unix_ts_ms)
+                    rounded_event_ts_ms = backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=tx_payment.provider, unix_ts_ms=tx_event.event_ts_ms)
 
-                        # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
-                        # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
-                        # proofs that aren't going to self-expire by the end of the day.
-                        if rounded_expiry_ts_ms > rounded_event_ts_ms:
-                            _ = backend.add_google_revocation_tx(tx                   = tx,
-                                                                 google_payment_token = tx_payment.google_payment_token,
-                                                                 revoke_unix_ts_ms    = tx_event.event_ts_ms,
-                                                                 err                  = err)
+                    # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
+                    # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
+                    # proofs that aren't going to self-expire by the end of the day.
+                    if rounded_expiry_ts_ms > rounded_event_ts_ms:
+                        _ = backend.add_google_revocation_tx(tx                   = tx,
+                                                             google_payment_token = tx_payment.google_payment_token,
+                                                             revoke_unix_ts_ms    = tx_event.event_ts_ms,
+                                                             err                  = err)
 
         # NOTE: Explicitly unsupported cases
         case SubscriptionNotificationType.DEFERRED |\
@@ -543,6 +544,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
     if err.has():
         # Purchase token logging is included in the wrapper function
         err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {tx_payment.google_order_id if len(tx_payment.google_order_id) > 0 else "N/A"}')
+        tx.cancel = True
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):
     assert tx.product_type != ProductType.NIL

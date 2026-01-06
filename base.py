@@ -170,7 +170,7 @@ def retry_function_on_database_locked_error(callback: typing.Callable[[], typing
         try:
             callback()
         except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
+            if is_sql_database_locked_error(e):
                 log.warning(f'{error_prefix} attempt #{exc_attempt}/{max_attempts}, database was locked. Re-attempting in {sleep_time_s}s. Error was: {traceback.format_exc()}')
                 time.sleep(sleep_time_s)
                 sleep_time_s *= 2
