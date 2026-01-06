@@ -58,8 +58,8 @@ db_path                      = <path/to/db>
 #   https://www.sqlite.org/inmemorydb.html
 db_path_is_uri               = false
 
-# Set the path where logs and rotated logs will be stored (keep this line empty to use the default
-# and store logs in the executable directory)
+# Set the path where logs and rotated logs will be stored (omit this value/line to opt out of
+# logging to a file completely)
 log_path                     = <path/to/log>
 
 # Pretty print the contents of the tables in the database to standard out and exit

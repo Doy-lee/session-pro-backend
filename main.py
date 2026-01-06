@@ -566,9 +566,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         if len(result.google_subscription_product_id) == 0:
             err.msg_list.append('Platform Google was enabled but subscription_product_id was not specified')
 
-    if len(result.log_path) == 0:
-        result.log_path = 'pro-backend.log'
-
     return result
 
 
@@ -597,7 +594,7 @@ def entry_point() -> flask.Flask:
 
     # NOTE: Setup file logger
     file_logger: logging.handlers.RotatingFileHandler | None = None
-    if 1:
+    if len(parsed_args.log_path) > 0:
         file_logger = logging.handlers.RotatingFileHandler(filename=parsed_args.log_path, maxBytes=64 * 1024 * 1024, backupCount=2, encoding='utf-8')
         file_logger.setFormatter(log_formatter)
         log.addHandler(file_logger)
@@ -789,7 +786,10 @@ def entry_point() -> flask.Flask:
     if 1:
         label = ' (URI)' if parsed_args.db_path_is_uri else ''
         startup_log += f'    DB loaded from: {db.path}{label}\n'
+    if len(parsed_args.log_path):
         startup_log += f'    Logging to: {parsed_args.log_path}\n'
+    else:
+        startup_log += f'    Logging to disk disabled (no log_path specified in .INI file)\n'
     if parsed_args.unsafe_logging:
         startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
     if parsed_args.platform_testing_env:
