@@ -1985,7 +1985,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         # Ack-ing should be done after redeeming because we can't undo an ack on Google, so first we
         # make sure we can redeem it safely before lastly notifying Google that the payment is good
         # to go.
-        if result.status == RedeemPaymentStatus.Success:
+        if result.status == RedeemPaymentStatus.Success and payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
             # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
             # the most sensible option and binds the Session client's knowledge of their own payment and
@@ -1996,17 +1996,22 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
             # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
             # cannot be claimed and should be re-attempted.
-            if payment_tx.provider == base.PaymentProvider.GooglePlayStore and \
-               THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
+            if THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
                 sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
                                                                                                                               purchase_token=payment_tx.google_payment_token,
                                                                                                                               err=err)
                 if not sub_data:
+                    tx.cancel = True
                     return result
+
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
+                    log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
 
                 if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
                     platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
                     if len(err.msg_list) > 0:
+                        tx.cancel = True
                         return result
 
     return result
