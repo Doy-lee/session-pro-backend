@@ -2177,24 +2177,28 @@ def expire_payments_revocations_and_users(sql_conn: sqlite3.Connection, unix_ts_
         result.success                      = True
     return result
 
+def add_user_error_tx(tx: base.SQLTransaction, error: UserError, unix_ts_ms: int):
+    assert tx.cursor is not None
+    match error.provider:
+        case base.PaymentProvider.GooglePlayStore:
+            assert len(error.google_payment_token) > 0
+            _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
+                 (int(error.provider.value),
+                  error.google_payment_token,
+                  unix_ts_ms))
+
+        case base.PaymentProvider.iOSAppStore:
+            assert len(error.apple_original_tx_id) > 0
+            _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
+                 (int(error.provider.value),
+                  error.apple_original_tx_id,
+                  unix_ts_ms))
+
+
 def add_user_error(sql_conn: sqlite3.Connection, error: UserError, unix_ts_ms: int):
     assert error.provider != base.PaymentProvider.Nil
     with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        match error.provider:
-            case base.PaymentProvider.GooglePlayStore:
-                assert len(error.google_payment_token) > 0
-                _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
-                     (int(error.provider.value),
-                      error.google_payment_token,
-                      unix_ts_ms))
-
-            case base.PaymentProvider.iOSAppStore:
-                assert len(error.apple_original_tx_id) > 0
-                _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
-                     (int(error.provider.value),
-                      error.apple_original_tx_id,
-                      unix_ts_ms))
+        add_user_error_tx(tx, error, unix_ts_ms)
 
 def has_user_error_tx(tx: base.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     assert tx.cursor is not None
@@ -2225,12 +2229,17 @@ def has_user_error(sql_conn: sqlite3.Connection, payment_provider: base.PaymentP
         result = has_user_error_tx(tx, payment_provider, payment_id)
     return result;
 
+def delete_user_errors_tx(tx: base.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+    assert tx.cursor is not None
+    _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ? AND payment_id = ?''', (int(payment_provider.value), payment_id))
+    result = tx.cursor.rowcount > 0
+    return result
+
+
 def delete_user_errors(sql_conn: sqlite3.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     result = False
     with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ? AND payment_id = ?''', (int(payment_provider.value), payment_id))
-    result = tx.cursor.rowcount > 0
+        result = delete_user_errors_tx(tx, payment_provider, payment_id)
     return result
 
 def get_payment_tx(tx:          base.SQLTransaction,
@@ -2360,7 +2369,6 @@ def google_notification_message_id_is_in_db_tx(tx: base.SQLTransaction, message_
     assert tx.cursor
     _      = tx.cursor.execute(f'''SELECT handled FROM google_notification_history WHERE message_id = ?''', (message_id,))
     row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-    result = row is not None
     result = GoogleNotificationMessageIDInDB()
     if row is not None:
         result.present = True

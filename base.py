@@ -153,6 +153,36 @@ class SQLTransaction:
             self.conn.commit()
         return False
 
+def is_sql_database_locked_error(e: sqlite3.OperationalError) -> bool:
+    result = "database is locked" in str(e)
+    return result
+
+def retry_function_on_database_locked_error(callback: typing.Callable[[], typing.Any], log: logging.Logger, error_prefix: str, err: ErrorSink):
+    """
+    Execute a user-provided callable with retries on SQLite 'database is locked' errors. Pass a
+    lambda as the operation callable to be the function that should be retried on failure
+    """
+
+    sleep_time_s: int = 1
+    max_attempts: int = 8
+    for exc_attempt in range(max_attempts):
+        reattempt = False
+        try:
+            callback()
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                log.warning(f'{error_prefix} attempt #{exc_attempt}/{max_attempts}, database was locked. Re-attempting in {sleep_time_s}s. Error was: {traceback.format_exc()}')
+                time.sleep(sleep_time_s)
+                sleep_time_s *= 2
+                reattempt    = True
+            else:
+                err.msg_list.append(f'{error_prefix}. Error was: {traceback.format_exc()}')
+        except Exception as e:
+            err.msg_list.append(f'{error_prefix}. Error was: {traceback.format_exc()}')
+
+        if not reattempt:
+            break
+
 @dataclasses.dataclass
 class TableStrings:
     name:     str = ''

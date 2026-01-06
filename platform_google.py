@@ -205,145 +205,146 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
             #     }
             #   }, ...]
             while context.kill_thread == False:
-                # NOTE: Pull messages from Google
-                result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,  # pyright: ignore[reportUnknownMemberType]
-                                                                          return_immediately = False,
-                                                                          max_messages       = 64)
+                try:
+                    # NOTE: Pull messages from Google
+                    result: google.pubsub_v1.types.PullResponse = client.pull(subscription       = sub_path,  # pyright: ignore[reportUnknownMemberType]
+                                                                              return_immediately = False,
+                                                                              max_messages       = 64)
 
-                # NOTE: Parse the received_messages[].message.data into our queue of messages
-                now:     float = time.time()
-                ack_ids: list[str] = []
-                for index, it in enumerate(result.received_messages):
-                    err                              = base.ErrorSink()
-                    message_data: base.JSONObject    = json.loads(it.message.data)  # pyright: ignore[reportAny]
-                    parse:        ParsedNotification = parse_notification(message_data, err);
-                    message_id:   int                = int(it.message.message_id)
-                    if err.has():
-                        log.warning(f'Discarding message #{index} because we encountered an error parsing it (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
-                    else:
-                        is_new_message = True
-                        for sort_it in sorted_msg_list:
-                            if sort_it.message_id == message_id:
-                                is_new_message = False
-                                break;
-
-                        if is_new_message:
-                            sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
-                                                                 message_id         = message_id,
-                                                                 parse              = parse,
-                                                                 ack_id             = it.ack_id,
-                                                                 raw                = it))
-
-                        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                            with base.SQLTransaction(db.sql_conn) as tx:
-                                if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
-                                    # NOTE: Our message retention policy for this subscription is 7 days
-                                    # (default). We add a little buffer as we don't know exactly which
-                                    # timestamp Google uses.
-                                    #
-                                    # We always store the messages to mitigate network failures on
-                                    # acknowledgement. We store this in JSON because in the
-                                    # erroneous case there's highly likelihood we need human
-                                    # intervention and having human-readability there will be
-                                    # important.
-                                    backend.google_add_notification_id_tx(tx                = tx,
-                                                                          message_id        = message_id,
-                                                                          expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
-                                                                          payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
-
-                # NOTE: Sort the messages we've added
-                if len(result.received_messages):
-                    sorted_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
-
-                # NOTE: Attempt to process them in order
-                index = 0
-                MIN_RETRY_DELAY_S: float = 1
-                MAX_RETRY_DELAY_S: float = 600
-                while index < len(sorted_msg_list):
-                    err                    = base.ErrorSink()
-                    msg:     SortedMessage = sorted_msg_list[index]
-                    attempt: bool          = now > msg.next_retry_unix_ts_s
-                    handled: bool          = False
-
-                    # NOTE: Attempt to process the message. Just before we execute it, we also check
-                    # that it hasn't been handled in the DB already. It's possible that someone
-                    # out-of-band executed the SET_GOOGLE_NOTIFICATION command via environment/.ini
-                    # file to mark a message as being done or handled so we check before proceeding.
-                    if attempt:
-                        with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                            lookup = backend.GoogleNotificationMessageIDInDB()
-                            with base.SQLTransaction(db.sql_conn) as tx:
-                                # NOTE: By definition to be in the sorted list, the message must
-                                # have also been submitted into the DB. So if for some reason the
-                                # notification doesn't exist anymore (maybe someone deleted it
-                                # out-of-band) then we skip the notification.
-                                lookup = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
-
-                            if lookup.present and lookup.handled:
-                                handled = True
-                            else:
-                                handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
-
-                    # NOTE: On success, we remove the message and add it to the acknowledge list
-                    # (to stop Google resending it), or otherwise configure an exponential back-off
-                    # on the retry and skip the message
-                    if handled:
-                        _ = sorted_msg_list.pop(index)
-                        ack_ids.append(msg.ack_id)
-                    else:
-                        index += 1
-                        if attempt:
-                            # NOTE: Exponential backoff on retries. Hopefully, this gives us some time,
-                            # for the out-of-order messages that this message is dependent on to arrive,
-                            # get sorted into order and then executed successfully.
-                            msg.curr_retry_delay_s    = max(msg.curr_retry_delay_s, MIN_RETRY_DELAY_S)
-                            msg.curr_retry_delay_s   *= 2
-                            msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
-                            msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
-                            log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{msg.raw}')
-
-                    # NOTE: Additionally, clear or mark the payment token from the error table if it
-                    # needs to be updated
-                    with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                        # NOTE: Check first before doing any op on the DB (since this _only_ uses a
-                        # read transaction)
-                        user_is_in_error_state = backend.has_user_error(sql_conn         = db.sql_conn,
-                                                                        payment_provider = base.PaymentProvider.GooglePlayStore,
-                                                                        payment_id       = msg.parse.purchase_token)
-
-                        # NOTE: Clear error if success, or add one if we failed
-                        if handled:
-                            if user_is_in_error_state:
-                                _ = backend.delete_user_errors(sql_conn         = db.sql_conn,
-                                                               payment_provider = base.PaymentProvider.GooglePlayStore,
-                                                               payment_id       = msg.parse.purchase_token)
-
-                            with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                                with base.SQLTransaction(db.sql_conn) as tx:
-                                    _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
+                    # NOTE: Parse the received_messages[].message.data into our queue of messages
+                    now:     float = time.time()
+                    ack_ids: list[str] = []
+                    for index, it in enumerate(result.received_messages):
+                        err                              = base.ErrorSink()
+                        message_data: base.JSONObject    = json.loads(it.message.data)  # pyright: ignore[reportAny]
+                        parse:        ParsedNotification = parse_notification(message_data, err);
+                        message_id:   int                = int(it.message.message_id)
+                        if err.has():
+                            log.warning(f'Discarding message #{index} because we encountered an error parsing it (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
                         else:
-                            if not user_is_in_error_state:
-                                user_error                      = backend.UserError()
-                                user_error.provider             = base.PaymentProvider.GooglePlayStore
-                                user_error.google_payment_token = msg.parse.purchase_token
-                                backend.add_user_error(sql_conn   = db.sql_conn,
-                                                       error      = user_error,
-                                                       unix_ts_ms = int(now * 1000))
+                            is_new_message = True
+                            for sort_it in sorted_msg_list:
+                                if sort_it.message_id == message_id:
+                                    is_new_message = False
+                                    break;
 
-                # NOTE: Acknowledge the messages we handled successfully to stop Google from
-                # resending it to us
-                if len(ack_ids):
-                    try:
-                        client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
-                    except google.api_core.exceptions.InvalidArgument:
-                        # NOTE: Ignore double-ack, especially if the notification we had was very
-                        # old and we only got around to completing it now rather than when it was
-                        # still ackable
-                        #
-                        #  InvalidArgument: 400 Some acknowledgement ids in the request were
-                        # invalid. This could be because the acknowledgement ids have expired or the
-                        # acknowledgement ids were malformed. [reason: "EXACTLY_ONCE_ACKID_FAILURE"
-                        pass
+                            # NOTE: Try add it to the DB first, if this fails then we will not add
+                            # it to the sorted message list otherwise our code to check that
+                            # notification is handled or not is going to be bypassed and cause state
+                            # inconsistencies.
+                            def add_notification_id_to_db():
+                                with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                                    with base.SQLTransaction(db.sql_conn) as tx:
+                                        if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
+                                            # NOTE: Our message retention policy for this subscription is 7 days
+                                            # (default). We add a little buffer as we don't know exactly which
+                                            # timestamp Google uses.
+                                            #
+                                            # We always store the messages to mitigate network failures on
+                                            # acknowledgement. We store this in JSON because in the
+                                            # erroneous case there's highly likelihood we need human
+                                            # intervention and having human-readability there will be
+                                            # important.
+                                            backend.google_add_notification_id_tx(tx                = tx,
+                                                                                  message_id        = message_id,
+                                                                                  expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
+                                                                                  payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
+
+                            base.retry_function_on_database_locked_error(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
+
+                            if err.has():
+                                log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
+                                continue
+
+
+                            if is_new_message:
+                                sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
+                                                                     message_id         = message_id,
+                                                                     parse              = parse,
+                                                                     ack_id             = it.ack_id,
+                                                                     raw                = it))
+
+                    # NOTE: Sort the messages we've added
+                    if len(result.received_messages):
+                        sorted_msg_list.sort(key=lambda it: it.event_unix_ts_ms)
+
+                    # NOTE: Attempt to process them in order
+                    index = 0
+                    MIN_RETRY_DELAY_S: float = 1
+                    MAX_RETRY_DELAY_S: float = 600
+                    while index < len(sorted_msg_list):
+                        err                    = base.ErrorSink()
+                        msg:     SortedMessage = sorted_msg_list[index]
+                        attempt: bool          = now > msg.next_retry_unix_ts_s
+                        handled: bool          = False
+
+                        # NOTE: Attempt to process the message. Just before we execute it, we also check
+                        # that it hasn't been handled in the DB already. It's possible that someone
+                        # out-of-band executed the SET_GOOGLE_NOTIFICATION command via environment/.ini
+                        # file to mark a message as being done or handled so we check before proceeding.
+                        if attempt:
+                            with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                                lookup                 = backend.GoogleNotificationMessageIDInDB()
+                                user_is_in_error_state = False
+                                with base.SQLTransaction(db.sql_conn) as tx:
+                                    # NOTE: By definition to be in the sorted list, the message must
+                                    # have also been submitted into the DB. So if for some reason the
+                                    # notification doesn't exist anymore (maybe someone deleted it
+                                    # out-of-band) then we skip the notification.
+                                    lookup = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+                                    user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+
+
+                                if lookup.present and lookup.handled:
+                                    handled = True
+                                else:
+                                    handled = handle_parsed_notification(db.sql_conn, msg.parse, err)
+
+                                # NOTE: Clear user error if success, or add one if we failed
+                                with base.SQLTransaction(db.sql_conn) as tx:
+                                    if handled:
+                                        _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
+                                        _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                    elif user_is_in_error_state == False:
+                                        user_error                      = backend.UserError()
+                                        user_error.provider             = base.PaymentProvider.GooglePlayStore
+                                        user_error.google_payment_token = msg.parse.purchase_token
+                                        backend.add_user_error_tx(tx, error = user_error, unix_ts_ms = int(now * 1000))
+
+                        # NOTE: On success, we remove the message and add it to the acknowledge list
+                        # (to stop Google resending it), or otherwise configure an exponential back-off
+                        # on the retry and skip the message
+                        if handled:
+                            _ = sorted_msg_list.pop(index)
+                            ack_ids.append(msg.ack_id)
+                        else:
+                            index += 1
+                            if attempt:
+                                # NOTE: Exponential backoff on retries. Hopefully, this gives us some time,
+                                # for the out-of-order messages that this message is dependent on to arrive,
+                                # get sorted into order and then executed successfully.
+                                msg.curr_retry_delay_s    = max(msg.curr_retry_delay_s, MIN_RETRY_DELAY_S)
+                                msg.curr_retry_delay_s   *= 2
+                                msg.curr_retry_delay_s    = min(msg.curr_retry_delay_s, MAX_RETRY_DELAY_S)
+                                msg.next_retry_unix_ts_s  = now + msg.curr_retry_delay_s
+                                log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{msg.raw}')
+
+                    # NOTE: Acknowledge the messages we handled successfully to stop Google from
+                    # resending it to us
+                    if len(ack_ids):
+                        try:
+                            client.acknowledge(subscription=sub_path, ack_ids = ack_ids)  # pyright: ignore[reportUnknownMemberType]
+                        except google.api_core.exceptions.InvalidArgument:
+                            # NOTE: Ignore double-ack, especially if the notification we had was very
+                            # old and we only got around to completing it now rather than when it was
+                            # still ackable
+                            #
+                            #  InvalidArgument: 400 Some acknowledgement ids in the request were
+                            # invalid. This could be because the acknowledgement ids have expired or the
+                            # acknowledgement ids were malformed. [reason: "EXACTLY_ONCE_ACKID_FAILURE"
+                            pass
+                except Exception:
+                    log.error(f'Google notification handling failed. Error was {traceback.format_exc()}')
 
 def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, sql_conn: sqlite3.Connection, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
@@ -596,9 +597,9 @@ def parse_notification(body: JSONObject, err: base.ErrorSink) -> ParsedNotificat
 
     elif is_voided_notification:
         result.purchase_token = json_dict_require_str(voided_purchase, "purchaseToken", err)
-        order_id               = json_dict_require_str(voided_purchase, "orderId", err)
-        product_type           = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
-        refund_type            = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
+        order_id              = json_dict_require_str(voided_purchase, "orderId", err)
+        product_type          = json_dict_require_int_coerce_to_enum(voided_purchase, "productType", ProductType, err)
+        refund_type           = json_dict_require_int_coerce_to_enum(voided_purchase, "refundType", RefundType, err)
 
         assert refund_type is not None and product_type is not None and len(result.purchase_token) > 0 and \
         len(order_id) > 0 and isinstance(product_type, ProductType) and isinstance(refund_type, RefundType)

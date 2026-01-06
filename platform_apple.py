@@ -12,6 +12,7 @@ import dataclasses
 import pprint
 import logging
 import time
+import traceback
 
 from appstoreserverlibrary.models.SendTestNotificationResponse    import SendTestNotificationResponse    as AppleSendTestNotificationResponse
 from appstoreserverlibrary.models.CheckTestNotificationResponse   import CheckTestNotificationResponse   as AppleCheckTestNotificationResponse
@@ -934,7 +935,10 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
     with server.open_db_from_flask_request_context(flask.current_app) as db:
-        _ = handle_notification(decoded_notification, db.sql_conn, core.notification_retry_duration_ms, err)
+        base.retry_function_on_database_locked_error(lambda: handle_notification(decoded_notification, db.sql_conn, core.notification_retry_duration_ms, err),
+                                                     log,
+                                                     "Apple notification handling failed",
+                                                     err)
 
     # NOTE: Handle errors
     if err.has():
