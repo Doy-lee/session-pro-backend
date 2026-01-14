@@ -1337,19 +1337,23 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     # registered for it yet (e.g. the user has not associated a master public key with the payment
     # yet by redeeming it).
     _ = tx.cursor.execute(f'''
-        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms
+        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id
         FROM      payments
         WHERE     master_pkey = ? AND (status = ? OR status = ? OR status = ?)
-        ORDER BY  id ASC
+        ORDER BY  id DESC
+        LIMIT     20
     ''', (bytes(master_pkey),
           int(base.PaymentStatus.Redeemed.value),
           int(base.PaymentStatus.Revoked.value),
           int(base.PaymentStatus.Expired.value),))
 
+    used_google_order_ids:  list[str] = []
+    used_apple_orig_tx_ids: set[int]  = set()
+
     # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
     # the expiry time (inclusive of the grace period if applicable)
     result      = LookupUserExpiryUnixTsMs()
-    rows        = typing.cast(list[tuple[int, int, int, int, int]], tx.cursor.fetchall())
+    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str]], tx.cursor.fetchall())
     best_status = base.PaymentStatus.Nil
     for row in rows:
         expiry_unix_ts_ms:           int = row[0]
@@ -1357,32 +1361,79 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
         auto_renewing:               int = row[2]
         status:                      int = row[3]
         refund_requested_unix_ts_ms: int = row[4]
+        payment_provider:            int = row[5]
+        apple_original_tx_id:        int = row[6]
+        google_order_id:             str = row[7]
 
-        # NOTE: A revoke does not round the timestamp to EOD, it's effective immediately so we use
-        # the expiry time verbatim
-        payment_expiry_unix_ts_ms: int = expiry_unix_ts_ms
-        if status == base.PaymentStatus.Revoked.value:
-            assert auto_renewing == False
+        # NOTE: Consecutive subscription payments are added to the DB under _roughly_ the same
+        # transaction ID (this differs between platforms). We only want to consider that latest
+        # subscription payment as the user's "best" payment that we should show as their entitlement
+        #
+        # For google they do an <order_id> but then append a suffix to disambiguate such as
+        # <order_id>, <order_id>..0, <order_id>..1 and so forth
+        #
+        # For apple they have a <original_transaction_id> that is shared across all transactions for
+        # a given subscription.
+        #
+        # Our SQL query sorts the rows by insertion order and grabs the top 20 and looks for the
+        # _latest_ instance of the transactions associated with the user and selects those.
+        seen_before = False
+        if payment_provider == base.PaymentProvider.GooglePlayStore.value:
+            order_split: list[str] = google_order_id.split('..')
+            if len(order_split) <= 0:
+                log.warning(f"Failed to split order google order ID by '..' for {bytes(master_pkey).hex()}: {base.obfuscate(google_order_id)}")
+                continue
+
+            for used_it in used_google_order_ids:
+                if used_it.startswith(order_split[0]):
+                    seen_before = True
+                    break
+
+            if not seen_before:
+                used_google_order_ids.append(google_order_id)
+        elif payment_provider == base.PaymentProvider.iOSAppStore.value:
+            if apple_original_tx_id in used_apple_orig_tx_ids:
+                seen_before = True
+            else:
+                used_apple_orig_tx_ids.add(apple_original_tx_id)
+        else:
+            log.warning(f"Unrecognised payment provider in {row} for {bytes(master_pkey).hex()}: {payment_provider}")
+            continue
+
+        if seen_before:
+            continue
+
+        best_expiry_wo_grace_unix_ts_ms_from_redeemed: int = result.expiry_unix_ts_ms_from_redeemed
+        best_expiry_wo_grace_unix_ts_ms:               int = result.best_expiry_unix_ts_ms
+        payment_expiry_unix_ts_ms:                     int = expiry_unix_ts_ms
+        if result.auto_renewing_from_redeemed:
+            best_expiry_wo_grace_unix_ts_ms_from_redeemed -= result.grace_duration_ms_from_redeemed
+
+        if result.best_auto_renewing:
+            best_expiry_wo_grace_unix_ts_ms -= result.best_grace_duration_ms
 
         if auto_renewing:
             payment_expiry_unix_ts_ms += grace_period_duration_ms
 
+        if status == base.PaymentStatus.Revoked.value:
+            assert auto_renewing == False
+
         if status == base.PaymentStatus.Redeemed:
-            if payment_expiry_unix_ts_ms > result.expiry_unix_ts_ms_from_redeemed:
+            if expiry_unix_ts_ms > best_expiry_wo_grace_unix_ts_ms_from_redeemed:
                 result.expiry_unix_ts_ms_from_redeemed           = payment_expiry_unix_ts_ms
                 result.grace_duration_ms_from_redeemed           = grace_period_duration_ms
                 result.refund_requested_unix_ts_ms_from_redeemed = refund_requested_unix_ts_ms
                 result.auto_renewing_from_redeemed               = bool(auto_renewing)
 
-        # NOTE: Choose the latest expiring payment, but we always prefer a currently redeemed
-        # payment over non-expired payments. For example if the user accidentally attains 2 active
-        # payments and one gets revoked (e.g. bought apple and google mistakenly, then cancels
-        # google) we want to return the values of the unrevoked one (apple) as the actively entitled
-        # one even if potentially google expires later.
-        #
-        # This would more accurately reflect that they're currently on Apple and that auto-renewing
-        # would be visible the user.
-        if payment_expiry_unix_ts_ms >= result.best_expiry_unix_ts_ms or best_status == base.PaymentStatus.Expired or best_status == base.PaymentStatus.Revoked:
+        # NOTE: Select latest payment but prioritising a non-revoked payment if they
+        # have one. For example if the user accidentally attains 2 active payments and one gets
+        # revoked (e.g. bought apple and google mistakenly, then cancels google) we want to return
+        # the values of the unrevoked one (apple)
+        has_better_status = False
+        if best_status == base.PaymentStatus.Revoked:
+            has_better_status = status != base.PaymentStatus.Revoked
+
+        if expiry_unix_ts_ms > best_expiry_wo_grace_unix_ts_ms or has_better_status:
             best_status                             = status
             result.best_expiry_unix_ts_ms           = payment_expiry_unix_ts_ms
             result.best_grace_duration_ms           = grace_period_duration_ms
@@ -1528,7 +1579,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   int(base.PaymentStatus.Unredeemed.value),
                   expiry_unix_ts_ms,
                   platform_refund_expiry_unix_ts_ms,
-                  0, # grace period (updated authoritatively by a Google notification when the user enters grace)
+                  0, # non-null grace period
                   unredeemed_unix_ts_ms,
                   1, # auto_renewing is enabled by default until notified otherwise by Google
                   0, # refund request unix ts ms
@@ -1578,7 +1629,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   int(base.PaymentStatus.Unredeemed.value),
                   expiry_unix_ts_ms,
                   platform_refund_expiry_unix_ts_ms,
-                  0, # non-null grace_period_duration_ms
+                  0, # non-null grace period
                   unredeemed_unix_ts_ms,
                   1, # auto_renewing is enabled by default until notified otherwise by Apple
                   0, # refund request unix ts ms

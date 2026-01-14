@@ -309,9 +309,15 @@ API
         expiry_unix_ts_ms: 8 byte UNIX timestamp indicating the latest timestamp to which a user is
                            allowed to request a Session Pro Proof from the backend. This timestamp
                            is inclusive of the grace period a user may be allocated if they have an
-                           auto- renewing subscription. This expiry value was calculated as the
-                           `max(subscription expiry + maybe grace period)` timestamp from their list
-                           of payments that are active.
+                           auto- renewing subscription. This expiry value is roughly calculated as
+                           the `max(subscription expiry + maybe grace period)` timestamp from their
+                           list of payments that are active.
+
+                           Application developers should prefer using this value to determine the
+                           when a user's entitlement to Session Pro expires because selecting this
+                           then defers the responsibility of choosing the best/most relevant active
+                           payment associated with an account to the server which is the
+                           authoritative source of truth.
         refund_requested_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
                                      refund for their latest subscription that would be otherwise be
                                      expiring at the payment associated with the
@@ -327,7 +333,8 @@ API
                                    `expiry_unix_ts_ms - grace_duration_ms` and that `auto_renewing`
                                    is true. Note: on some platforms, the grace period is not known
                                    until the user enters the grace period (such as Google) and as
-                                   such this value may be 0 whilst `auto_renewing` is true.
+                                   such this value may be set at different value whilst
+                                   `auto_renewing` is true before being updated to its final value.
         error_report:    1 byte integer error code where any non-zero value indicates that the
                          Session Pro Backend encountered an error book-keeping Session Pro for the
                          user. Their Session Pro status may be out-of-date, hence if this value is
@@ -1003,26 +1010,6 @@ def get_pro_details():
             # NOTE: Override user status if they are revoked
             if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
                 user_pro_status = UserProStatus.Expired
-
-    # NOTE: If auto-renewing is enabled and the grace period is not set yet then we assume that this
-    # is a platform that only sets the grace period once the user has entered it. This is currently
-    # only relevant for Google.
-    #
-    # There's a small race-condition where the clients intend to wake up at "expiry_unix_ts_ms" to
-    # query the status where the backend has not received the notification that the user has
-    # entered the grace period yet.
-    #
-    # We self-insert a small grace period to cover the gap in time when the client queries the pro
-    # details and that the server has not received the notification yet. We give the device a 15s
-    # period and double-check that the returned pro-status is patched up.
-    #
-    # From recent measurements we've witnessed that Google can be up to 8-15s delayed but typically
-    # averages around 3s.
-    if grace_period_duration_ms == 0 and auto_renewing:
-        grace_period_duration_ms  = 15_000
-        expiry_unix_ts_ms        += grace_period_duration_ms
-        if unix_ts_ms <= expiry_unix_ts_ms + grace_period_duration_ms:
-            user_pro_status = UserProStatus.Active
 
     result = make_success_response(dict_result={
         'version':                     0,

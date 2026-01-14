@@ -433,6 +433,12 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                         err                               = err,
                     )
 
+                    if not err.has():
+                        set_purchase_grace_period_duration(tx_payment               = tx_payment,
+                                                           tx                       = tx,
+                                                           grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                           err                      = err)
+
         case SubscriptionNotificationType.IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2State.IN_GRACE_PERIOD:
                 plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
@@ -468,6 +474,12 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
                     platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
                     err                               = err)
+
+                if not err.has():
+                    set_purchase_grace_period_duration(tx_payment               = tx_payment,
+                                                       tx                       = tx,
+                                                       grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                       err                      = err)
 
         case SubscriptionNotificationType.CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""

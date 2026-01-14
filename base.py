@@ -29,6 +29,26 @@ SECONDS_IN_MONTH:      int     = SECONDS_IN_DAY * 30
 MILLISECONDS_IN_YEAR:  int     = MILLISECONDS_IN_DAY * 365
 SECONDS_IN_YEAR:       int     = SECONDS_IN_DAY * 365
 
+# NOTE: Default grace period we add to the subscription payments because in real world situations
+# no payment processor/billing cycle is going to bill exactly on the dot due to real-world
+# extenuating circumstances. In those cases we provide a small but reasonable grace period of 1
+# hour to cover that.
+#
+# For Google we are not informed of the user's grace period until they enter the renewing state.
+# What this means then is if the user is observing their Pro state at the boundary of expiry they
+# may witness their account flicker from Pro to not-pro, to Pro again once they enter the renewal
+# phase (and that the Session Pro Backend server is awaiting for the notification from Google which
+# tells us of their _real_ grace period).
+#
+# In this situation having a small, temporary grace period of 1 hour prevents that edge case.
+#
+# For Apple no grace period is configured but again due to extenuating circumstances the time at
+# which the billing for the end of the subscription cycle is executed can vary and similarly, users
+# may encounter that they lose Pro because the billing was late. The 1 hour grace period looks to
+# minimise that.
+DEFAULT_GRACE_PERIOD_DURATION_MS:  int = 60 * 60 * 1 * 1000
+
+
 # NOTE: Global variables
 DB_PATH                        = ''
 DB_PATH_IS_URI                 = False

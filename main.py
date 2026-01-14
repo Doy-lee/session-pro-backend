@@ -29,7 +29,6 @@ import dataclasses
 import enum
 import traceback
 import sqlite3
-import traceback
 
 import base
 import backend
