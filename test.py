@@ -1095,7 +1095,7 @@ def test_server_add_payment_flow(monkeypatch):
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.grace_period_duration_ms > 0
-            pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms
+            pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
 
         # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
         request_version: int   = 0
@@ -1115,7 +1115,7 @@ def test_server_add_payment_flow(monkeypatch):
                                                                          master_sig     = bytes(master_key.sign(hash_to_sign).signature),
                                                                          rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
                                                                          err            = err)
-        assert not err.has()
+        assert not err.has(), base.readable_unix_ts_ms(pro_proof_deadline_unix_ts_ms)
 
         # NOTE: Check that the proof is invalid
         proof_hash = backend.build_proof_hash(proof.version,

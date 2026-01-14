@@ -255,12 +255,12 @@ class PaymentRow:
 
 @dataclasses.dataclass
 class UserRow:
-    found:                     bool  = False
-    master_pkey:               bytes = ZERO_BYTES32
-    gen_index:                 int   = 0
-    expiry_unix_ts_ms:         int   = 0
-    grace_period_duration_ms:  int   = 0
-    auto_renewing:             bool  = False
+    found:                       bool  = False
+    master_pkey:                 bytes = ZERO_BYTES32
+    gen_index:                   int   = 0
+    expiry_unix_ts_ms:           int   = 0
+    grace_period_duration_ms:    int   = 0
+    auto_renewing:               bool  = False
     refund_requested_unix_ts_ms: int   = 0
 
 @dataclasses.dataclass
@@ -2146,9 +2146,9 @@ def generate_pro_proof(sql_conn:       sqlite3.Connection,
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_generate_pro_proof_hash(version       = version,
-                                                  master_pkey   = master_pkey,
-                                                  rotating_pkey = rotating_pkey,
-                                                  unix_ts_ms    = unix_ts_ms)
+                                                       master_pkey   = master_pkey,
+                                                       rotating_pkey = rotating_pkey,
+                                                       unix_ts_ms    = unix_ts_ms)
 
     _ = internal_verify_add_payment_and_get_proof_common_arguments(signing_key   = signing_key,
                                                                    master_pkey   = master_pkey,
@@ -2176,8 +2176,7 @@ def generate_pro_proof(sql_conn:       sqlite3.Connection,
         if is_gen_index_revoked(sql_conn, get_user.user.gen_index):
             err.msg_list.append(f'User {bytes(master_pkey).hex()} payment has been revoked')
         else:
-            proof_deadline_unix_ts_ms: int = get_user.user.expiry_unix_ts_ms + get_user.user.grace_period_duration_ms
-            proof_expiry_unix_ts_ms:   int = _build_proof_clamped_expiry_time(unix_ts_ms=unix_ts_ms, proposed_expiry_unix_ts_ms=proof_deadline_unix_ts_ms)
+            proof_expiry_unix_ts_ms: int = _build_proof_clamped_expiry_time(unix_ts_ms=unix_ts_ms, proposed_expiry_unix_ts_ms=get_user.user.expiry_unix_ts_ms)
             if unix_ts_ms <= proof_expiry_unix_ts_ms:
                 result = build_proof(gen_index         = get_user.user.gen_index,
                                      rotating_pkey     = rotating_pkey,
@@ -2185,7 +2184,8 @@ def generate_pro_proof(sql_conn:       sqlite3.Connection,
                                      signing_key       = signing_key,
                                      gen_index_salt    = gen_index_salt);
             else:
-                err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(proof_deadline_unix_ts_ms)} ({base.readable_unix_ts_ms(get_user.user.expiry_unix_ts_ms)} + {get_user.user.grace_period_duration_ms})')
+                payment_expiry_unix_ts_ms = get_user.user.expiry_unix_ts_ms - get_user.user.grace_period_duration_ms if get_user.user.auto_renewing else 0
+                err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(get_user.user.expiry_unix_ts_ms)} ({base.readable_unix_ts_ms(payment_expiry_unix_ts_ms)} + {get_user.user.grace_period_duration_ms})')
     else:
         err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(get_user.user.master_pkey).hex()} {get_user.user.gen_index} {get_user.user.expiry_unix_ts_ms}')
 
