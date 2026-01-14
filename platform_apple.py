@@ -307,7 +307,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                     expiry        = base.readable_unix_ts_ms(expiry_unix_ts_ms)
                     unredeemed    = base.readable_unix_ts_ms(unredeemed_unix_ts_ms)
                     refund        = base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)
-                    log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: New payment (expiry/unredeemed/refund expiry) ts = {expiry}/{unredeemed}/{refund}, grace period = {base.DEFAULT_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
+                    log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: New payment (expiry/unredeemed/refund expiry) ts = {expiry}/{unredeemed}/{refund}, grace period = {base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
 
                 # NOTE: Process notification
                 sql_tx.cancel = True
@@ -323,7 +323,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                 if not err.has():
                     _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                                payment_tx               = payment_tx,
-                                                               grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                               grace_period_duration_ms = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS,
                                                                auto_renewing            = auto_renewing,
                                                                err                      = err)
                 sql_tx.cancel = err.has()
@@ -398,11 +398,11 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                         # transaction that the user made. In this case the TX info has the current
                         # subscription before the downgrade is to take effect, e.g. it has the TX
                         # info that we need to set auto-renewal back on for
-                        log.debug(f'{decoded_notification.body.notificationType.name}+DOWNGRADE for {payment_tx_id_label(payment_tx)}: Grace period = {base.DEFAULT_GRACE_PERIOD_DURATION_MS}, auto-renewing = true')
+                        log.debug(f'{decoded_notification.body.notificationType.name}+DOWNGRADE for {payment_tx_id_label(payment_tx)}: Grace period = {base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS}, auto-renewing = true')
                         sql_tx.cancel = True
                         _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                                    payment_tx               = payment_tx,
-                                                                   grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                                   grace_period_duration_ms = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS,
                                                                    auto_renewing            = True,
                                                                    err                      = err)
                         sql_tx.cancel = err.has()
@@ -428,7 +428,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                             unredeemed    = base.readable_unix_ts_ms(unredeemed_unix_ts_ms)
                             refund        = base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)
                             revoke        = base.readable_unix_ts_ms(tx.purchaseDate)
-                            log.debug(f'{decoded_notification.body.notificationType.name}+UPGRADE for {payment_tx_id_label(payment_tx)}: Revoke (orig. TX ID) date = {revoke}, new payment (expiry/unredeemed/refund expiry) ts = {expiry}/{unredeemed}/{refund}, grace period = {base.DEFAULT_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
+                            log.debug(f'{decoded_notification.body.notificationType.name}+UPGRADE for {payment_tx_id_label(payment_tx)}: Revoke (orig. TX ID) date = {revoke}, new payment (expiry/unredeemed/refund expiry) ts = {expiry}/{unredeemed}/{refund}, grace period = {base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
 
                         sql_tx.cancel = True
                         revoked: bool = backend.add_apple_revocation_tx(tx                   = sql_tx,
@@ -457,7 +457,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                         if not err.has():
                             _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                                        payment_tx               = payment_tx,
-                                                                       grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                                       grace_period_duration_ms = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS,
                                                                        auto_renewing            = None,
                                                                        err                      = err)
                         sql_tx.cancel = err.has()
@@ -560,7 +560,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                         unredeemed    = base.readable_unix_ts_ms(unredeemed_unix_ts_ms)
                         revoke        = base.readable_unix_ts_ms(tx.purchaseDate)
                         refund        = base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)
-                        log.debug(f'{decoded_notification.body.notificationType.name}+UPGRADE for {payment_tx_id_label(payment_tx)}: Revoking (orig TX id) at = {revoke}, new payment (expiry/unredeemed/refund ts) = {expiry}/{unredeemed}/{refund}, grace = {base.DEFAULT_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
+                        log.debug(f'{decoded_notification.body.notificationType.name}+UPGRADE for {payment_tx_id_label(payment_tx)}: Revoking (orig TX id) at = {revoke}, new payment (expiry/unredeemed/refund ts) = {expiry}/{unredeemed}/{refund}, grace = {base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS}, auto-renewing = {auto_renewing}')
 
                     revoked = backend.add_apple_revocation_tx(tx                   = sql_tx,
                                                               apple_original_tx_id = tx.originalTransactionId,
@@ -582,7 +582,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                     if not err.has():
                         _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                                    payment_tx               = payment_tx,
-                                                                   grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                                   grace_period_duration_ms = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS,
                                                                    auto_renewing            = auto_renewing,
                                                                    err                      = err)
 
@@ -691,7 +691,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
             payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
             if not err.has():
                 auto_renewing: bool = decoded_notification.body.subtype == AppleSubtype.AUTO_RENEW_ENABLED
-                log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Auto-renewing = {auto_renewing}, grace period = {base.DEFAULT_GRACE_PERIOD_DURATION_MS}')
+                log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Auto-renewing = {auto_renewing}, grace period = {base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS}')
                 _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
                                                            payment_tx               = payment_tx,
                                                            grace_period_duration_ms = None,

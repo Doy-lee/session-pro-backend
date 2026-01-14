@@ -436,7 +436,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     if not err.has():
                         set_purchase_grace_period_duration(tx_payment               = tx_payment,
                                                            tx                       = tx,
-                                                           grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                           grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                                                            err                      = err)
 
         case SubscriptionNotificationType.IN_GRACE_PERIOD:
@@ -478,7 +478,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                 if not err.has():
                     set_purchase_grace_period_duration(tx_payment               = tx_payment,
                                                        tx                       = tx,
-                                                       grace_period_duration_ms = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                                                       grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                                                        err                      = err)
 
         case SubscriptionNotificationType.CANCELED:

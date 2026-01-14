@@ -74,12 +74,14 @@ class TestingContext:
     platform_testing_env: bool = False
 
     def __init__(self, db_path: str, uri: bool, platform_testing_env: bool = False):
-        self.db_path = db_path
-        self.uri     = uri
-        self.platform_testing_env = platform_testing_env
+        self.db_path                           = db_path
+        self.uri                               = uri
+        self.platform_testing_env              = platform_testing_env
 
     def __enter__(self):
         base.PLATFORM_TESTING_ENV = self.platform_testing_env
+        if base.PLATFORM_TESTING_ENV:
+            base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
         err     = base.ErrorSink()
         self.db = backend.setup_db(path=self.db_path, uri=self.uri, err=err)
         assert len(err.msg_list) == 0
@@ -101,6 +103,7 @@ class TestingContext:
         self.db.sql_conn.close()
         self.sql_conn.close()
         base.PLATFORM_TESTING_ENV = False
+        base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
         return False
 
 def test_dry_run_backup_rotation():
@@ -1701,7 +1704,7 @@ def test_platform_apple():
             assert unredeemed_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
             assert unredeemed_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert unredeemed_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert unredeemed_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert unredeemed_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_list[0].apple.original_tx_id              == tx_info.originalTransactionId
@@ -1833,7 +1836,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
@@ -1967,7 +1970,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
@@ -1987,7 +1990,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               == None
             assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
@@ -2766,7 +2769,7 @@ def test_platform_apple():
             assert unredeemed_payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert unredeemed_payment_list[0].redeemed_unix_ts_ms               == None
             assert unredeemed_payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
-            assert unredeemed_payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert unredeemed_payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert unredeemed_payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert unredeemed_payment_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
@@ -2807,7 +2810,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
@@ -2837,7 +2840,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
@@ -2871,7 +2874,7 @@ def test_platform_apple():
             assert payment_list[1].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[1].redeemed_unix_ts_ms               == backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(e01_upgrade_to_1wk_tx_info.purchaseDate)
             assert payment_list[1].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
-            assert payment_list[1].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[1].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[1].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert payment_list[1].revoked_unix_ts_ms                == None
             assert payment_list[1].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
@@ -2910,7 +2913,7 @@ def test_platform_apple():
             assert payment_list[-1].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[-1].redeemed_unix_ts_ms               == backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(e01_upgrade_to_1wk_tx_info.purchaseDate)
             assert payment_list[-1].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
-            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[-1].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert payment_list[-1].revoked_unix_ts_ms                == None
             assert payment_list[-1].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
@@ -2933,7 +2936,7 @@ def test_platform_apple():
             assert payment_list[0].unredeemed_unix_ts_ms             == e00_sub_to_3_months_tx_info.purchaseDate
             assert payment_list[0].redeemed_unix_ts_ms               != None
             assert payment_list[0].expiry_unix_ts_ms                 == e00_sub_to_3_months_tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[0].platform_refund_expiry_unix_ts_ms == e00_sub_to_3_months_tx_info.expiresDate
             assert payment_list[0].revoked_unix_ts_ms                == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[0].apple.original_tx_id              == e00_sub_to_3_months_tx_info.originalTransactionId
@@ -2952,7 +2955,7 @@ def test_platform_apple():
             assert payment_list[-1].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[-1].redeemed_unix_ts_ms               == backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(e01_upgrade_to_1wk_tx_info.purchaseDate)
             assert payment_list[-1].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
-            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[-1].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert payment_list[-1].revoked_unix_ts_ms                == None
             assert payment_list[-1].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
@@ -2986,7 +2989,7 @@ def test_platform_apple():
             assert payment_list[-1].unredeemed_unix_ts_ms             == e01_upgrade_to_1wk_tx_info.purchaseDate
             assert payment_list[-1].redeemed_unix_ts_ms               == backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(e01_upgrade_to_1wk_tx_info.purchaseDate)
             assert payment_list[-1].expiry_unix_ts_ms                 == e01_upgrade_to_1wk_tx_info.expiresDate
-            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+            assert payment_list[-1].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
             assert payment_list[-1].platform_refund_expiry_unix_ts_ms == e01_upgrade_to_1wk_tx_info.expiresDate
             assert payment_list[-1].revoked_unix_ts_ms                == None
             assert payment_list[-1].apple.original_tx_id              == e01_upgrade_to_1wk_tx_info.originalTransactionId
@@ -3548,7 +3551,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert payment.payment_provider                                                == base.PaymentProvider.GooglePlayStore
         assert payment.redeemed_unix_ts_ms is not None and payment.redeemed_unix_ts_ms == redeemed_ts_ms_rounded
         assert payment.expiry_unix_ts_ms                                               == tx.expiry_unix_ts_ms
-        assert payment.grace_period_duration_ms                                        == base.DEFAULT_GRACE_PERIOD_DURATION_MS
+        assert payment.grace_period_duration_ms                                        == base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS
         assert payment.platform_refund_expiry_unix_ts_ms                               == platform_refund_expiry_unix_ts_ms
         assert payment.revoked_unix_ts_ms                                              == None
         assert payment.apple                                                           == backend.AppleTransaction()
@@ -3560,7 +3563,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert isinstance(user, backend.UserRow)
         assert user.master_pkey == bytes(user_ctx.master_key.verify_key)
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
-        assert user.expiry_unix_ts_ms == tx.expiry_unix_ts_ms + base.DEFAULT_GRACE_PERIOD_DURATION_MS
+        assert user.expiry_unix_ts_ms == tx.expiry_unix_ts_ms + base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS
 
     def assert_pro_details(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
         status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx, unix_ts_ms=tx.event_ms)
@@ -3624,7 +3627,7 @@ def test_google_platform_handle_notification(monkeypatch):
         user_ctx.payments += 1
         assert_has_payment(tx=tx, plan=plan, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         assert_has_user(tx=tx, user_ctx=user_ctx, ctx=ctx)
-        assert_pro_details(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=base.DEFAULT_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         return tx, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
@@ -3662,7 +3665,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx, ctx=ctx)
@@ -3673,7 +3676,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = True,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx, ctx = ctx)
@@ -3684,7 +3687,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Revoked,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx, ctx=ctx)
@@ -3760,7 +3763,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx, ctx=ctx)
@@ -3772,7 +3775,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx, ctx=ctx)
@@ -3782,7 +3785,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Expired,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          =user_ctx, ctx=ctx)
@@ -3862,7 +3865,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx,
@@ -3875,7 +3878,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = False,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -3888,7 +3891,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Expired,
                            auto_renew                        = False,
-                           grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                           grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx,
@@ -4077,7 +4080,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -4131,7 +4134,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -4198,7 +4201,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -4274,7 +4277,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -4343,7 +4346,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           pro_status                        = server.UserProStatus.Active,
                           payment_status                    = base.PaymentStatus.Redeemed,
                           auto_renew                        = True,
-                          grace_duration_ms                 = base.DEFAULT_GRACE_PERIOD_DURATION_MS,
+                          grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                           redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx.event_ms),
                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                           user_ctx                          = user_ctx,
@@ -4407,7 +4410,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         _ = test_notification(refund_a, ctx)
         _ = test_notification(refund_b, ctx)
 
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=base.DEFAULT_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """

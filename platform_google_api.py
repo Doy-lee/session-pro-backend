@@ -57,11 +57,20 @@ from platform_google_types import (
 )
 
 # NOTE: Globals specifically for interacting with the Google APIs
-credentials:             service_account.Credentials        | None = None
-publisher_service:       googleapiclient.discovery.Resource | None = None
-package_name:            str                                       = ''
-subscription_product_id: str                                       = ''
-refund_deadline_duration_ms = base.MILLISECONDS_IN_DAY * 2
+credentials:                      service_account.Credentials        | None = None
+publisher_service:                googleapiclient.discovery.Resource | None = None
+package_name:                     str                                       = ''
+subscription_product_id:          str                                       = ''
+refund_deadline_duration_ms:      int                                       = base.MILLISECONDS_IN_DAY * 2
+
+# NOTE: In the testing environment on Google, 1 day gets shortened to 10s. This means the default
+# grace period which at this time is set to 1hr is going to largely overrun the subscription's
+# testing duration, this causes weird/difficult to explain things to happen that we can avoid by
+# patching the grace period here.
+#
+# This value gets assigned to base.DEFAULT_GOOGLE_PERIOD_DURATION_MS when in said testing
+# environment
+testing_grace_period_duration_ms: int                                       = 10 * 1000
 
 def get_publisher_service() -> googleapiclient.discovery.Resource:
     assert credentials,       "Platform google initialisation has not been called yet"

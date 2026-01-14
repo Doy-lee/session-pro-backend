@@ -902,6 +902,8 @@ def entry_point() -> flask.Flask:
     # to a thread. We use Google's asynchronous streaming pull client which spawns a thread pool
     # (10 threads by default) to process messages.
     if parsed_args.with_platform_google:
+        if base.PLATFORM_TESTING_ENV:
+            base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
         global google_thread_context
         google_thread_context = platform_google.init(project_name            = parsed_args.google_project_name,
                                                      package_name            = parsed_args.google_package_name,
