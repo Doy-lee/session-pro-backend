@@ -35,6 +35,7 @@ import backend
 import server
 import platform_apple
 import platform_google
+import platform_google_api
 
 log                                                       = logging.Logger('PRO')
 google_thread_context                                     = platform_google.ThreadContext()
