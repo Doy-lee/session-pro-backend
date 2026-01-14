@@ -569,10 +569,18 @@ FLASK_ROUTE_GET_PRO_REVOCATIONS                     = '/get_pro_revocations'
 FLASK_ROUTE_GET_PRO_DETAILS                         = '/get_pro_details'
 FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED            = '/set_payment_refund_requested'
 
-# How many seconds can the timestamp in the get all payments route can drift
-# from the current server's timestamp before it's flat out rejected
-GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS             = 5 * 1000
-SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS = 5 * 1000
+# How many seconds can the timestamp in requests can differ from the Pro Backend's clock. This
+# currently matches the storage server's store tolerance for onion-request forwarded messages as
+# per:
+#
+#   https://github.com/session-foundation/session-storage-server/blob/3d159a10d465678d758131c1075c9a6e5b4d95cc/oxenss/rpc/request_handler.h#L48
+#
+# We choose the upper-bound of tolerance for requests for maximum compatibility. Currently, in the
+# flask context, no information is available to indicate if the request was forwarded or not so we
+# default to assuming it is.
+#
+# All platforms are designed to interact with the backend using onion requests.
+DEFAULT_TIMESTAMP_TOLERANCE_MS                      = 70 * 1000
 SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
 GET_PRO_PAYMENTS_DETAIL_HASH_PERSONALISATION        = b'ProGetProDetReq_'
 assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
@@ -773,10 +781,9 @@ def generate_pro_proof() -> flask.Response:
     rotating_sig_bytes  = base.hex_to_bytes(hex=rotating_sig,  label='Rotating key signature', hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
 
     # Validate the timestamp is within 5 minutes of the current time (mitigate replay attacks)
-    UNIX_TS_MS_THRESHOLD: int = 60 * 5 * 1000;
     now:                  int = int(time_now() * 1000)
-    max_unix_ts_ms:       int = now + UNIX_TS_MS_THRESHOLD
-    min_unix_ts_ms:       int = now - UNIX_TS_MS_THRESHOLD
+    max_unix_ts_ms:       int = now + DEFAULT_TIMESTAMP_TOLERANCE_MS
+    min_unix_ts_ms:       int = now - DEFAULT_TIMESTAMP_TOLERANCE_MS
 
     if unix_ts_ms < min_unix_ts_ms:
         err.msg_list.append(f'Nonce timestamp is too far in the past: {unix_ts_ms} (min {min_unix_ts_ms})')
@@ -884,7 +891,7 @@ def get_pro_details():
     # requests to completely reject replay attacks if we cared enough but onion requests probably
     # suffice to mask the ability to replay a query.
     timestamp_delta: float = (time_now() * 1000) - float(unix_ts_ms)
-    if abs(timestamp_delta) >= GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS:
+    if abs(timestamp_delta) >= DEFAULT_TIMESTAMP_TOLERANCE_MS:
         err.msg_list.append(f'Timestamp is too old to permit retrieval of payments, delta was {timestamp_delta}ms')
 
     if len(err.msg_list):
@@ -1069,7 +1076,7 @@ def set_payment_refund_requested():
 
     # Validate timestamp
     timestamp_delta: float = (time_now() * 1000) - float(unix_ts_ms)
-    if abs(timestamp_delta) >= SET_PAYMENT_REFUND_REQUESTED_MAX_TIMESTAMP_DELTA_MS:
+    if abs(timestamp_delta) >= DEFAULT_TIMESTAMP_TOLERANCE_MS:
         err.msg_list.append(f'Timestamp is too old to permit refund request update, delta was {timestamp_delta}ms')
 
     if len(err.msg_list):

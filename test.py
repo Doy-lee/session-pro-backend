@@ -976,7 +976,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         # Retry the request but use a too old timestamp
         if 1:
-            unix_ts_ms:   int   = int((time.time() * 1000) + (server.GET_ALL_PAYMENTS_MAX_TIMESTAMP_DELTA_MS * 2))
+            unix_ts_ms:   int   = int((time.time() * 1000) + (server.DEFAULT_TIMESTAMP_TOLERANCE_MS * 2))
             hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
