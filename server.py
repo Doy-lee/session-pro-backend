@@ -934,30 +934,25 @@ def get_pro_details():
             auto_renewing                        = get_user.user.auto_renewing
             payments_total                       = get_user.payments_count
             refund_requested_unix_ts_ms          = get_user.user.refund_requested_unix_ts_ms
-            has_payments                         = False
 
-            for row in get_user.payments_it:
-                # NOTE: If the user has at-least one payment, we mark them as being expired
-                # initially and every payment we come across, if they have a redeemed payment
-                # in their current history, we report them as active.
-                if not has_payments:
-                    user_pro_status = UserProStatus.Expired
-                    has_payments    = True
+            # NOTE: Collect payment history
+            if count > 0:
+                for row in get_user.payments_it:
+                    if len(items) >= count:
+                        break
 
-                faux_row_id                                             = 0
-                row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
-                payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
+                    faux_row_id                                             = 0
+                    row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
+                    payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
 
-                # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
-                # confidential until the user actually registers the token themselves which they
-                # should witness from the payment provider independently from us so there should be
-                # no need to reveal this to the user until they've confirmed their own receipt of
-                # it.
-                if payment.status == base.PaymentStatus.Unredeemed:
-                    continue
+                    # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
+                    # confidential until the user actually registers the token themselves which they
+                    # should witness from the payment provider independently from us so there should be
+                    # no need to reveal this to the user until they've confirmed their own receipt of
+                    # it.
+                    if payment.status == base.PaymentStatus.Unredeemed:
+                        continue
 
-                # NOTE: Collect the payment if history was requested
-                if len(items) < count:
                     if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
                         items.append({
                             'status':                               int(payment.status.value),
@@ -992,24 +987,15 @@ def get_pro_details():
                             'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
                         })
 
-                # NOTE: Determine pro status if it is relevant
-                if payment.status == base.PaymentStatus.Redeemed:
-                    # NOTE: If the user requests pro-details after a payment has expired by
-                    # timestamp but the expiry job hasn't been run yet then the payment is redeemed
-                    # but it should be expired. We add an additional check here to detect payments
-                    # in that state.
-                    if unix_ts_ms <= payment.expiry_unix_ts_ms + payment.grace_period_duration_ms:
-                        user_pro_status = UserProStatus.Active
+            # NOTE: Determine pro status of user
+            if get_user.payments_count > 0:
+                if unix_ts_ms <= get_user.user.expiry_unix_ts_ms:
+                    user_pro_status = UserProStatus.Active
+                else:
+                    user_pro_status = UserProStatus.Expired
 
-                # NOTE: If we determine that the user is active and the user didn't request for
-                # history, we can early terminate the loop as we've found what we wanted (their pro
-                # status).
-                if len(items) >= count and user_pro_status == UserProStatus.Active:
-                    break
-
-            # NOTE: Override user status if they are revoked
-            if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
-                user_pro_status = UserProStatus.Expired
+                if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
+                    user_pro_status = UserProStatus.Expired
 
     result = make_success_response(dict_result={
         'version':                     0,

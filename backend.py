@@ -1337,7 +1337,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     # registered for it yet (e.g. the user has not associated a master public key with the payment
     # yet by redeeming it).
     _ = tx.cursor.execute(f'''
-        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id
+        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id, revoked_unix_ts_ms
         FROM      payments
         WHERE     master_pkey = ? AND (status = ? OR status = ? OR status = ?)
         ORDER BY  id DESC
@@ -1353,8 +1353,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
     # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
     # the expiry time (inclusive of the grace period if applicable)
     result      = LookupUserExpiryUnixTsMs()
-    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str]], tx.cursor.fetchall())
-    best_status = base.PaymentStatus.Nil
+    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str, int]], tx.cursor.fetchall())
     for row in rows:
         expiry_unix_ts_ms:           int = row[0]
         grace_period_duration_ms:    int = row[1]
@@ -1364,6 +1363,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
         payment_provider:            int = row[5]
         apple_original_tx_id:        int = row[6]
         google_order_id:             str = row[7]
+        revoked_unix_ts_ms:          int = row[8]
 
         # NOTE: Consecutive subscription payments are added to the DB under _roughly_ the same
         # transaction ID (this differs between platforms). We only want to consider that latest
@@ -1403,21 +1403,28 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
         if seen_before:
             continue
 
+        # NOTE: Calculate the current best timestamp (newest payment that entitles them to Pro)
         best_expiry_wo_grace_unix_ts_ms_from_redeemed: int = result.expiry_unix_ts_ms_from_redeemed
         best_expiry_wo_grace_unix_ts_ms:               int = result.best_expiry_unix_ts_ms
-        payment_expiry_unix_ts_ms:                     int = expiry_unix_ts_ms
         if result.auto_renewing_from_redeemed:
             best_expiry_wo_grace_unix_ts_ms_from_redeemed -= result.grace_duration_ms_from_redeemed
 
         if result.best_auto_renewing:
             best_expiry_wo_grace_unix_ts_ms -= result.best_grace_duration_ms
 
-        if auto_renewing:
-            payment_expiry_unix_ts_ms += grace_period_duration_ms
-
+        # NOTE: If we're revoked, the expiry and payment expiry that we store into the result is
+        # clamped to the revoke timestamp (e.g. the user entitlement is stopped effective at the
+        # revoke time)
         if status == base.PaymentStatus.Revoked.value:
             assert auto_renewing == False
+            payment_expiry_unix_ts_ms = revoked_unix_ts_ms
+            expiry_unix_ts_ms         = revoked_unix_ts_ms
+        else:
+            payment_expiry_unix_ts_ms = expiry_unix_ts_ms
+            if auto_renewing:
+                payment_expiry_unix_ts_ms += grace_period_duration_ms
 
+        # NOTE: Evaluate if we should accept this payment
         if status == base.PaymentStatus.Redeemed:
             if expiry_unix_ts_ms > best_expiry_wo_grace_unix_ts_ms_from_redeemed:
                 result.expiry_unix_ts_ms_from_redeemed           = payment_expiry_unix_ts_ms
@@ -1425,16 +1432,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: base.SQLTr
                 result.refund_requested_unix_ts_ms_from_redeemed = refund_requested_unix_ts_ms
                 result.auto_renewing_from_redeemed               = bool(auto_renewing)
 
-        # NOTE: Select latest payment but prioritising a non-revoked payment if they
-        # have one. For example if the user accidentally attains 2 active payments and one gets
-        # revoked (e.g. bought apple and google mistakenly, then cancels google) we want to return
-        # the values of the unrevoked one (apple)
-        has_better_status = False
-        if best_status == base.PaymentStatus.Revoked:
-            has_better_status = status != base.PaymentStatus.Revoked
-
-        if expiry_unix_ts_ms > best_expiry_wo_grace_unix_ts_ms or has_better_status:
-            best_status                             = status
+        if expiry_unix_ts_ms > best_expiry_wo_grace_unix_ts_ms:
             result.best_expiry_unix_ts_ms           = payment_expiry_unix_ts_ms
             result.best_grace_duration_ms           = grace_period_duration_ms
             result.best_refund_requested_unix_ts_ms = refund_requested_unix_ts_ms

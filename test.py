@@ -3452,7 +3452,6 @@ def test_google_platform_handle_notification(monkeypatch):
         expiry_time_unix_ms = current_state.line_items[0].expiry_time.unix_milliseconds
         assert order_id is not None and len(order_id) > 0
         assert purchase_token is not None and len(purchase_token) > 0
-
         return TestTx(purchase_token=purchase_token, order_id=order_id, event_ms=event_ms, expiry_unix_ts_ms=expiry_time_unix_ms)
 
     """
@@ -3565,8 +3564,18 @@ def test_google_platform_handle_notification(monkeypatch):
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
         assert user.expiry_unix_ts_ms == tx.expiry_unix_ts_ms + base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS
 
-    def assert_pro_details(tx: TestTx, pro_status: server.UserProStatus, payment_status: base.PaymentStatus, auto_renew: bool, grace_duration_ms: int, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
-        status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx, unix_ts_ms=tx.event_ms)
+    def assert_pro_details(tx:                                TestTx,
+                           pro_status:                        server.UserProStatus,
+                           payment_status:                    base.PaymentStatus,
+                           auto_renew:                        bool,
+                           grace_duration_ms:                 int,
+                           redeemed_ts_ms_rounded:            int,
+                           platform_refund_expiry_unix_ts_ms: int,
+                           user_ctx:                          TestUserCtx,
+                           ctx:                               TestingContext,
+                           unix_ts_ms:                        int | None = None,
+                           revoke_unix_ts_ms:                 int | None = None):
+        status                       = get_pro_details(user_ctx=user_ctx, ctx=ctx, unix_ts_ms=unix_ts_ms if unix_ts_ms else tx.event_ms)
         err                          = base.ErrorSink()
         result                       = base.json_dict_require_obj(status, "result", err)
         res_auto_renewing            = base.json_dict_require_bool(result, "auto_renewing", err)
@@ -3578,7 +3587,8 @@ def test_google_platform_handle_notification(monkeypatch):
         assert res_auto_renewing == auto_renew, json.dumps(result, indent=1)
         revoked = payment_status == base.PaymentStatus.Revoked
         if revoked:
-            assert res_expiry_unix_ts_ms == tx.expiry_unix_ts_ms
+            assert revoke_unix_ts_ms != None
+            assert res_expiry_unix_ts_ms == revoke_unix_ts_ms
         else:
             expiry_unix_ts_ms = res_expiry_unix_ts_ms
             if res_auto_renewing:
@@ -3682,7 +3692,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            user_ctx                          = user_ctx, ctx = ctx)
 
         """4. User refunds"""
-        _ = test_notification(refund, ctx)
+        refund_tx = test_notification(refund, ctx)
         assert_pro_details(tx                                = tx_subscribe,
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Revoked,
@@ -3690,7 +3700,10 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                           user_ctx                          = user_ctx, ctx=ctx)
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx,
+                           revoke_unix_ts_ms                 = refund_tx.event_ms,
+                           unix_ts_ms                        = refund_tx.event_ms + 1)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3740,7 +3753,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         # Expire payments at the EOD of the resubscribe expiry_ts (note the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
+        # Now that payments up to the expiry time has been expired, this user's status should be expired (we need to also time-travel the clock past the grace period they were allocated)
         assert_pro_details(tx                                = tx_subscribe,
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Expired,
@@ -3748,7 +3761,9 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            grace_duration_ms                 = test_product_details.grace_period.milliseconds,
                            redeemed_ts_ms_rounded            = redeemed_ts_ms_rounded,
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                           user_ctx                          = user_ctx, ctx=ctx)
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx,
+                           unix_ts_ms                        = tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """3. User renews"""
         # NOTE: We don't check that the payment is unredeemed because this renewal will get
@@ -3758,7 +3773,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         user_ctx.payments += 1 # Auto-redeem, so 1 extra payment was done
 
         """4. User cancels"""
-        _ = test_notification(cancel, ctx)
+        tx_cancel = test_notification(cancel, ctx)
         assert_pro_details(tx                                = tx_renew,
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
@@ -3766,11 +3781,13 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                           user_ctx                          = user_ctx, ctx=ctx)
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx,
+                           unix_ts_ms                        = tx_cancel.event_ms)
 
         """5. Subscription expires"""
-        tx_expire = test_notification(expire, ctx)
         # status isnt expired yet as the rounded expiry time hasnt happend and the sweeper hasn't run, so there should be no status change
+        tx_expire = test_notification(expire, ctx)
         assert_pro_details(tx                                = tx_renew,
                            pro_status                        = server.UserProStatus.Active,
                            payment_status                    = base.PaymentStatus.Redeemed,
@@ -3778,9 +3795,11 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                           user_ctx                          = user_ctx, ctx=ctx)
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx)
+
         backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
+        # Now that payments up to the expiry time has been expired, this user's status should be expired
         assert_pro_details(tx                                = tx_renew,
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Expired,
@@ -3788,7 +3807,9 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            grace_duration_ms                 = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
-                           user_ctx                          =user_ctx, ctx=ctx)
+                           user_ctx                          = user_ctx,
+                           ctx                               = ctx,
+                           unix_ts_ms                        = tx_expire.event_ms)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3885,8 +3906,8 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
         # Expire payments
-        backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
         # Now that payments up to the expiry time has been expired, this user's status should be expired
+        backend_expire_payments_at_end_of_day(event_ms=tx_expire.event_ms, assert_success=True)
         assert_pro_details(tx                                = tx_renew_2,
                            pro_status                        = server.UserProStatus.Expired,
                            payment_status                    = base.PaymentStatus.Expired,
@@ -3895,7 +3916,8 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            redeemed_ts_ms_rounded            = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(tx_renew_2.event_ms),
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx,
-                           ctx                               = ctx)
+                           ctx                               = ctx,
+                           unix_ts_ms                        = tx_expire.event_ms)
 
         """6. User purchased (SUBSCRIPTION_PURCHASED)"""
         tx_resubscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase = resubscribe,
@@ -3914,19 +3936,46 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_tx_ms,
                            user_ctx                          = user_ctx,
                            ctx                               = ctx)
-        backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
         # Now that payments up to the expiry time has been expired, this user's status should be expired
-        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
+        assert_pro_details(tx=tx_resubscribe,
+                           pro_status=server.UserProStatus.Expired,
+                           payment_status=base.PaymentStatus.Expired,
+                           auto_renew=True,
+                           grace_duration_ms=test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+                           user_ctx=user_ctx,
+                           ctx=ctx,
+                           unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """8. User fails to renew (enter account hold)"""
-        _ = test_notification(hold, ctx)
-        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        tx_hold = test_notification(hold, ctx)
+        assert_pro_details(tx=tx_resubscribe,
+                           pro_status=server.UserProStatus.Expired,
+                           payment_status=base.PaymentStatus.Expired,
+                           auto_renew=True,
+                           grace_duration_ms=test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+                           user_ctx=user_ctx,
+                           ctx=ctx,
+                           unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """9. User fails to renew, cancelling and expiring"""
         _ = test_notification(fail_after_hold_a, ctx)
         _ = test_notification(fail_after_hold_b, ctx)
-        assert_pro_details(tx=tx_resubscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_resubscribe,
+                            pro_status=server.UserProStatus.Expired,
+                            payment_status=base.PaymentStatus.Expired,
+                            auto_renew=False,
+                            grace_duration_ms=test_product_details.grace_period.milliseconds,
+                            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+                            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+                            user_ctx=user_ctx,
+                            ctx=ctx,
+                            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -3960,13 +4009,30 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         tx_grace = test_notification(grace, ctx)
         assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        # Now that payments up to the expiry time has been expired, this user's status should be expired
+        assert_pro_details(tx=tx_subscribe,
+                           pro_status=server.UserProStatus.Expired,
+                           payment_status=base.PaymentStatus.Expired,
+                           auto_renew=True,
+                           grace_duration_ms=test_product_details.grace_period.milliseconds,
+                           redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+                           platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+                           user_ctx=user_ctx,
+                           ctx=ctx,
+                           unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """3. User cancels, exiting grace period"""
         _ = test_notification(cancel_after_grace_a, ctx)
         _ = test_notification(cancel_after_grace_b, ctx)
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe,
+        pro_status=server.UserProStatus.Expired,
+        payment_status=base.PaymentStatus.Expired,
+        auto_renew=False,
+        grace_duration_ms=test_product_details.grace_period.milliseconds,
+        redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+        platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+        user_ctx=user_ctx, ctx=ctx,
+        unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -4006,17 +4072,44 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         # Expire payments at the EOD of the resubscribe expiry_ts (not the extend expiry_ts from the grace period tx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        # Now that payments up to the expiry time has been expired, this user's status should be expired
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """4. User cancels"""
         _ = test_notification(cancel_after_hold_a, ctx)
         _ = test_notification(cancel_after_hold_b, ctx)
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=False, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=False,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
@@ -4051,12 +4144,30 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         tx_grace = test_notification(grace, ctx)
         assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        # Now that payments up to the expiry time has been expired, this user's status should be expired
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """4. User renews (SUBSCRIPTION_RECOVERED)"""
         # NOTE: Auto-redeem kicks in
@@ -4183,7 +4294,16 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
 
         # Now that payments up to the expiry time has been expired, this user's status should be expired
-        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """4. User renews"""
         # NOTE: Auto-renew kicks in
@@ -4254,12 +4374,30 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         tx_grace = test_notification(grace, ctx)
         assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         backend_expire_payments_at_end_of_day(event_ms=tx_grace.event_ms, assert_success=True)
-        # Now that payments up to the expiry time has beeen expired, this user's status should be expired
-        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        # Now that payments up to the expiry time has been expired, this user's status should be expired
+        assert_pro_details(tx=tx_change_plan,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Expired,
+            auto_renew=True,
+            grace_duration_ms=test_product_details.grace_period.milliseconds,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """3. User fails to renew (enter account hold)"""
         _ = test_notification(hold, ctx)
-        assert_pro_details(tx=tx_change_plan, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Expired, auto_renew=True, grace_duration_ms=test_product_details.grace_period.milliseconds, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_change_plan,
+        pro_status=server.UserProStatus.Expired,
+        payment_status=base.PaymentStatus.Expired,
+        auto_renew=True,
+        grace_duration_ms=test_product_details.grace_period.milliseconds,
+        redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+        platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+        user_ctx=user_ctx,
+        ctx=ctx,
+        unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
         """4. User renews"""
         # NOTE: Auto-renew kicks in
@@ -4407,10 +4545,22 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
         """2. Developer refunds subscription (removing entitlement)"""
-        _ = test_notification(refund_a, ctx)
-        _ = test_notification(refund_b, ctx)
+        # Note that, refund_a is the event that causes the user in question to be revoked. Hence the
+        # timestamp that we pass into the verify function uses event 'a'
+        tx_refund_a = test_notification(refund_a, ctx)
+        tx_refund_b = test_notification(refund_b, ctx)
 
-        assert_pro_details(tx=tx_subscribe, pro_status=server.UserProStatus.Expired, payment_status=base.PaymentStatus.Revoked, auto_renew=False, grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
+        assert_pro_details(tx=tx_subscribe,
+            pro_status=server.UserProStatus.Expired,
+            payment_status=base.PaymentStatus.Revoked,
+            auto_renew=False,
+            grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
+            redeemed_ts_ms_rounded=redeemed_ts_ms_rounded,
+            platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms,
+            user_ctx=user_ctx,
+            ctx=ctx,
+            unix_ts_ms=tx_refund_a.event_ms + 1, # +1 to increment us over the threshold to be expired
+            revoke_unix_ts_ms=tx_refund_a.event_ms)
 
     with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """

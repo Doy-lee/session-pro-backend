@@ -49,7 +49,7 @@ SECONDS_IN_YEAR:       int     = SECONDS_IN_DAY * 365
 DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS:  int = 60 * 60 * 1 * 1000
 
 # NOTE: Always the same as Apple, unless we're in a testing environment where this gets changed
-DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS:       int = DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
+DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS: int = DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
 
 # NOTE: Global variables
 DB_PATH                        = ''
