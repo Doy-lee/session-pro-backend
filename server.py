@@ -997,7 +997,7 @@ def get_pro_details():
                 if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
                     user_pro_status = UserProStatus.Expired
 
-    result = make_success_response(dict_result={
+    dict_result = {
         'version':                     0,
         'status':                      int(user_pro_status.value),
         'auto_renewing':               auto_renewing,
@@ -1007,7 +1007,11 @@ def get_pro_details():
         'payments_total':              payments_total,
         'error_report':                error_report,
         'items':                       items
-    })
+    }
+
+    result = make_success_response(dict_result)
+    if 1:
+        flask.current_app.logger.debug(f"Request (their_clock={base.readable_unix_ts_ms(unix_ts_ms)}, master_pkey={master_pkey}) => ({json.dumps(dict_result)})")
     return result
 
 @flask_blueprint.route(FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED, methods=['POST'])
