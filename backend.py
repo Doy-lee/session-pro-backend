@@ -352,12 +352,11 @@ class SetupDBResult:
 @dataclasses.dataclass
 class OpenDBAtPath:
     """
-    Open a pre-existing DB at the specified path. This class should be used in a `with` context to
+    Open a pre-existing DB at the specified path. This class can be used in a `with` context to
     ensure that the connection established to the database is closed on scope exit, e.g.:
 
     with OpenDBAtPath(...) as db:
         # Use db.sql_conn =
-        pass
     """
 
     sql_conn: sqlite3.Connection
