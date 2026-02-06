@@ -754,11 +754,12 @@ def add_pro_payment():
     # Submit the payment to the DB
     redeemed_payment    = backend.RedeemPayment()
     db                  = open_db_from_flask_request_context(flask.current_app)
+    runtime             = backend.get_runtime(db.sql_conn)
     unix_ts_ms          = int(time_now() * 1000)
     redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
     redeemed_payment = backend.add_pro_payment(sql_conn            = db.sql_conn,
                                                version             = version,
-                                               signing_key         = db.runtime.backend_key,
+                                               signing_key         = runtime.backend_key,
                                                unix_ts_ms          = unix_ts_ms,
                                                redeemed_unix_ts_ms = redeemed_unix_ts_ms,
                                                master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
@@ -822,10 +823,11 @@ def generate_pro_proof() -> flask.Response:
 
     # Request proof from the backend
     db = open_db_from_flask_request_context(flask.current_app)
+    runtime = backend.get_runtime(db.sql_conn)
     proof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
                                        version        = version,
-                                       signing_key    = db.runtime.backend_key,
-                                       gen_index_salt = db.runtime.gen_index_salt,
+                                       signing_key    = runtime.backend_key,
+                                       gen_index_salt = runtime.gen_index_salt,
                                        master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
                                        rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
                                        unix_ts_ms     = unix_ts_ms,
@@ -866,13 +868,14 @@ def get_pro_revocations():
     revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
     if ticket < revocation_ticket:
         with base.SQLTransaction(db.sql_conn) as tx:
+            runtime = backend.get_runtime_tx(tx)
             list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_pro_revocations_iterator(tx)
             for row in list_it:
                 gen_index:         int   = row[0]
                 expiry_unix_ts_ms: int   = row[1]
-                gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=db.runtime.gen_index_salt)
-                assert gen_index < db.runtime.gen_index, f"lhs={gen_index}, rhs={db.runtime.gen_index}"
-                assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
+                gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
+                assert gen_index < runtime.gen_index, f"lhs={gen_index}, rhs={runtime.gen_index}"
+                assert len(runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
                 revocation_items.append({
                     'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
                     'gen_index_hash':    gen_index_hash.hex(),

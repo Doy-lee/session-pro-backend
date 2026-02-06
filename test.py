@@ -86,10 +86,11 @@ class TestingContext:
         self.db = backend.setup_db(path=self.db_path, uri=self.uri, err=err)
         assert len(err.msg_list) == 0
 
+        runtime = backend.get_runtime(self.db.sql_conn)
         self.flask_app   = server.init(testing_mode=True,
                                        db_path=self.db_path,
                                        db_path_is_uri=self.uri,
-                                       server_x25519_skey=self.db.runtime.backend_key.to_curve25519_private_key())
+                                       server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
         self.flask_client = self.flask_app.test_client()
         assert self.db.sql_conn
         self.sql_conn = self.db.sql_conn
@@ -495,14 +496,15 @@ def test_server_add_payment_flow(monkeypatch):
     assert db.sql_conn
 
     # Setup local flask instance
+    runtime = backend.get_runtime(db.sql_conn)
     flask_app:    flask.Flask     = server.init(testing_mode=True,
                                                 db_path=db.path,
                                                 db_path_is_uri=True,
-                                                server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+                                                server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Setup keys for onion requests
-    server_x25519_skey = db.runtime.backend_key.to_curve25519_private_key()
+    server_x25519_skey = runtime.backend_key.to_curve25519_private_key()
     our_x25519_skey    = nacl.public.PrivateKey.generate()
     shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey,
                                                    server_x25519_pkey=server_x25519_skey.public_key)
@@ -633,7 +635,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
                                                      result_expiry_unix_ts_ms)
-        _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+        runtime = backend.get_runtime(db.sql_conn)
+        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         with base.SQLTransaction(db.sql_conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
@@ -701,7 +704,8 @@ def test_server_add_payment_flow(monkeypatch):
                                               result_gen_index_hash,
                                               result_rotating_pkey,
                                               result_expiry_unix_ts_ms)
-        _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+        runtime = backend.get_runtime(db.sql_conn)
+        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
         # overrun of 30 days we round up to 31 days)
@@ -788,7 +792,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
                                                      result_expiry_unix_ts_ms)
-        _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+        runtime = backend.get_runtime(db.sql_conn)
+        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
@@ -1105,16 +1110,17 @@ def test_server_add_payment_flow(monkeypatch):
                                                                  rotating_pkey = rotating_key.verify_key,
                                                                  unix_ts_ms    = unix_ts_ms)
 
+        runtime = backend.get_runtime(db.sql_conn)
         proof: backend.ProSubscriptionProof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
-                                                                         version        = request_version,
-                                                                         signing_key    = db.runtime.backend_key,
-                                                                         gen_index_salt = db.runtime.gen_index_salt,
-                                                                         master_pkey    = master_key.verify_key,
-                                                                         rotating_pkey  = rotating_key.verify_key,
-                                                                         unix_ts_ms     = unix_ts_ms,
-                                                                         master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                                                         rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                                                         err            = err)
+                                                                          version        = request_version,
+                                                                          signing_key    = runtime.backend_key,
+                                                                          gen_index_salt = runtime.gen_index_salt,
+                                                                          master_pkey    = master_key.verify_key,
+                                                                          rotating_pkey  = rotating_key.verify_key,
+                                                                          unix_ts_ms     = unix_ts_ms,
+                                                                          master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                                                          rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                                                          err            = err)
         assert not err.has(), base.readable_unix_ts_ms(pro_proof_deadline_unix_ts_ms)
 
         # NOTE: Check that the proof is invalid
@@ -1122,7 +1128,7 @@ def test_server_add_payment_flow(monkeypatch):
                                               proof.gen_index_hash,
                                               proof.rotating_pkey,
                                               proof.expiry_unix_ts_ms)
-        _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
 
 
         # NOTE: Try to generate a proof after the deadline (should fail)
@@ -1132,10 +1138,11 @@ def test_server_add_payment_flow(monkeypatch):
                                                               rotating_pkey = rotating_key.verify_key,
                                                               unix_ts_ms    = unix_ts_ms)
 
+        runtime = backend.get_runtime(db.sql_conn)
         proof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
                                            version        = request_version,
-                                           signing_key    = db.runtime.backend_key,
-                                           gen_index_salt = db.runtime.gen_index_salt,
+                                           signing_key    = runtime.backend_key,
+                                           gen_index_salt = runtime.gen_index_salt,
                                            master_pkey    = master_key.verify_key,
                                            rotating_pkey  = rotating_key.verify_key,
                                            unix_ts_ms     = unix_ts_ms,
@@ -1150,7 +1157,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         failed: bool = False
         try:
-            _ = db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+            _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
         except:
             failed = True
         assert err.has() and failed
@@ -1565,7 +1572,8 @@ def test_platform_apple():
 
         # NOTE: Check that the server signed our proof w/ their public key
         proof_hash: bytes = backend.build_proof_hash(result_version, result_gen_index_hash, result_rotating_pkey, result_expiry_unix_ts_ms)
-        _ = test.db.runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+        runtime = backend.get_runtime(test.db.sql_conn)
+        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     # The following is a sequence of notifications/events that transpired for the same account under
     # the same billing cycle (e.g. a subscribe, cancelling of subscription, then expiring). Since

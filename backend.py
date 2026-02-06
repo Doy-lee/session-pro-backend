@@ -346,7 +346,6 @@ class SetupDBResult:
     """
     path:     str                       = ''
     success:  bool                      = False
-    runtime:  RuntimeRow                = dataclasses.field(default_factory=RuntimeRow)
     sql_conn: sqlite3.Connection | None = None
 
 @dataclasses.dataclass
@@ -360,10 +359,8 @@ class OpenDBAtPath:
     """
 
     sql_conn: sqlite3.Connection
-    runtime:  RuntimeRow
     def __init__(self, db_path: str, uri: bool = False):
         self.sql_conn = sqlite3.connect(db_path, uri=uri)
-        self.runtime  = get_runtime(self.sql_conn)
 
     def __enter__(self):
         return self
@@ -892,9 +889,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
         except Exception:
             err.msg_list.append(f"Failed to bootstrap DB tables: {traceback.format_exc()}")
 
-    if result.success:
-        result.runtime = get_runtime(result.sql_conn)
-    else:
+    if not result.success:
         result.sql_conn.close()
 
     return result

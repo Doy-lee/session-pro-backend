@@ -868,10 +868,11 @@ def entry_point() -> flask.Flask:
     thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
     thread.start()
 
+    runtime = backend.get_runtime(db.sql_conn)
     result: flask.Flask = server.init(testing_mode=False,
                                       db_path=db.path,
                                       db_path_is_uri=parsed_args.db_path_is_uri,
-                                      server_x25519_skey=db.runtime.backend_key.to_curve25519_private_key())
+                                      server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
 
     # NOTE: Add flask to our global logger
     if 1:
