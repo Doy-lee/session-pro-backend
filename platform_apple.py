@@ -527,13 +527,13 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                         refund        = base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)
                         log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: New payment (unredeemed/refund expiry/expiry) ts = ({unredeemed}/{refund}/{expiry})')
 
-                    backend.add_unredeemed_payment(sql_conn                          = sql_conn,
-                                                   payment_tx                        = payment_tx,
-                                                   plan                              = pro_plan,
-                                                   unredeemed_unix_ts_ms             = tx.purchaseDate,
-                                                   platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
-                                                   expiry_unix_ts_ms                 = tx.expiresDate,
-                                                   err                               = err)
+                    backend.add_unredeemed_payment_tx(tx                                = sql_tx,
+                                                      payment_tx                        = payment_tx,
+                                                      plan                              = pro_plan,
+                                                      expiry_unix_ts_ms                 = tx.expiresDate,
+                                                      unredeemed_unix_ts_ms             = tx.purchaseDate,
+                                                      platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
+                                                      err                               = err)
 
                 elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
                     # NOTE: User is downgrading to a lesser subscription. Downgrade happens at
@@ -734,11 +734,11 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
 
                 elif decoded_notification.body.subtype == AppleSubtype.GRACE_PERIOD:
                     log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: Auto-renewing = true, grace period = {renewal.gracePeriodExpiresDate}')
-                    _ = backend.update_payment_renewal_info(sql_conn                 = sql_conn,
-                                                            payment_tx               = payment_tx,
-                                                            grace_period_duration_ms = renewal.gracePeriodExpiresDate,
-                                                            auto_renewing            = True,
-                                                            err                      = err)
+                    _ = backend.update_payment_renewal_info_tx(tx                       = sql_tx,
+                                                               payment_tx               = payment_tx,
+                                                               grace_period_duration_ms = renewal.gracePeriodExpiresDate,
+                                                               auto_renewing            = True,
+                                                               err                      = err)
                 else:
                     err.msg_list.append(f'Received TX: {print_obj(tx)}, with unrecognised subtype for a DID_FAIL_TO_RENEW notification')
 
@@ -758,9 +758,11 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
             assert tx
             payment_tx = payment_tx_from_apple_jws_transaction(tx, err)
             if not err.has():
+                user_payment_tx = backend.UserPaymentTransaction(provider=payment_tx.provider,
+                                                                 apple_tx_id=payment_tx.apple_tx_id)
                 log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: refund_requested_unix_ts_ms = 0')
-                if backend.set_refund_requested_unix_ts_ms_tx(tx=sql_tx, payment_tx=payment_tx, unix_ts_ms=0) == False:
-                    log.warning
+                if backend.set_refund_requested_unix_ts_ms_tx(tx=tx, payment_tx=user_payment_tx, unix_ts_ms=0) == False:
+                    log.warning(f"{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)} failed to remove refund timestamp")
 
     elif decoded_notification.body.notificationType == AppleNotificationV2.TEST:
         # NOTE: Test notification that we can invoke for testing. No-op

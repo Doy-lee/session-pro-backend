@@ -549,6 +549,7 @@ import nacl.public
 import nacl.signing
 import time
 import typing
+import logging
 
 import base
 import backend
@@ -870,7 +871,7 @@ def get_pro_revocations():
                 gen_index:         int   = row[0]
                 expiry_unix_ts_ms: int   = row[1]
                 gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=db.runtime.gen_index_salt)
-                assert gen_index < db.runtime.gen_index
+                assert gen_index < db.runtime.gen_index, f"lhs={gen_index}, rhs={db.runtime.gen_index}"
                 assert len(db.runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
                 revocation_items.append({
                     'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
@@ -1029,6 +1030,7 @@ def get_pro_details():
 
     result = make_success_response(dict_result)
     if 1:
+        flask.current_app.logger.setLevel(logging.DEBUG)
         flask.current_app.logger.debug(f"Request (their_clock={base.readable_unix_ts_ms(unix_ts_ms)}, master_pkey={master_pkey}) => ({json.dumps(dict_result)})")
     return result
 

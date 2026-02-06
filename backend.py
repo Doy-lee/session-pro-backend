@@ -2339,26 +2339,57 @@ def get_payment(sql_conn:   sqlite3.Connection,
                               payment_tx=payment_tx,
                               err=err)
 
+def set_refund_requested_unix_ts_ms_tx(tx: base.SQLTransaction, payment_tx: UserPaymentTransaction, unix_ts_ms: int) -> bool:
+    assert tx.cursor
+    if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        _ = tx.cursor.execute(f'''
+            UPDATE payments
+            SET    refund_requested_unix_ts_ms = ?
+            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
+        ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        _ = tx.cursor.execute(f'''
+            UPDATE payments
+            SET    refund_requested_unix_ts_ms = ?
+            WHERE  payment_provider = ? AND apple_tx_id = ?
+        ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.apple_tx_id))
+
+
+    assert tx.cursor.rowcount == 0 or tx.cursor.rowcount == 1
+    result = tx.cursor.rowcount > 0
+
+    # If the refund timestamp has been set, immediately refresh the user's row.
+    #
+    # When a client hits /get_pro_details, that endpoint uses the user's row which caches the
+    # "best" payment that should be used to entitle a user to pro. Hence if their refund
+    # timestamp changes for that best payment, that metadata that is cached in the user details
+    # must be updated.
+    if result:
+        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+            _ = tx.cursor.execute(f'''
+                SELECT master_pkey
+                FROM   payments
+                WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
+            ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
+        else:
+            _ = tx.cursor.execute(f'''
+                SELECT master_pkey
+                FROM   payments
+                WHERE  payment_provider = ? AND apple_tx_id = ?
+            ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id))
+
+        row         = tx.cursor.fetchone()
+        master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, row[0]))
+        _update_user_expiry_grace_and_renew_flag_from_payment_list(tx, master_pkey)
+
+    return result
+
 def set_refund_requested_unix_ts_ms(sql_conn:   sqlite3.Connection,
                                     payment_tx: UserPaymentTransaction,
                                     unix_ts_ms: int) -> bool:
+    result = False
     with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor
-        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET    refund_requested_unix_ts_ms = ?
-                WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-            ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
-        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-            _ = tx.cursor.execute(f'''
-                UPDATE payments
-                SET    refund_requested_unix_ts_ms = ?
-                WHERE  payment_provider = ? AND apple_tx_id = ?
-            ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.apple_tx_id))
-
-        assert tx.cursor.rowcount == 0 or tx.cursor.rowcount == 1
-        result = tx.cursor.rowcount > 0
+        result = set_refund_requested_unix_ts_ms_tx(tx, payment_tx, unix_ts_ms)
     return result
 
 def apple_add_notification_uuid_tx(tx: base.SQLTransaction, uuid: str, expiry_unix_ts_ms: int):
