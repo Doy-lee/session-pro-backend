@@ -1397,7 +1397,7 @@ def test_platform_apple():
     # intended to test, is still being tested despite changing the productId from 1 week to 1 month.
 
     # NOTE: Did renew notification
-    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_1?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (requires keys to decrypt)
         if 0:
             core:                      platform_apple.Core       = platform_apple.init()
@@ -1586,7 +1586,7 @@ def test_platform_apple():
     #
     # This was done by executing these sequences in the time-frame that a subscription is active for
     # on Apple's sandbox environment.
-    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_2?mode=memory&cache=shared', uri=True) as test:
         if 1: # Subscribe notification
             # NOTE: Original payload (requires keys to decrypt)
             if 0:
@@ -2014,7 +2014,7 @@ def test_platform_apple():
     #  - 4 [DID_CHANGE_RENEWAL_PREF]                             Cancel the downgrade (we are now back at 1wk subscription)
     #  - 5 [DID_CHANGE_RENEWAL_STATUS, sub: AUTO_RENEW_DISABLED] Disable auto-renew
     #  - 6 [EXPIRED,                   sub: VOLUNTARY]           ??
-    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_3?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
             e00_sub_to_3_months: dict[str, base.JSONValue] = json.loads('''
@@ -3020,7 +3020,7 @@ def test_platform_apple():
     #
     #  - 1 [APPLE CONSUMPTION REQUEST, sub: ??] No-op
     #  - 2 [APPLE REFUND,              sub: ??] Disable auto-renew
-    with TestingContext(db_path='file:test_platform_apple_db?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_4?mode=memory&cache=shared', uri=True) as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
             e00_sub_to_3_months: dict[str, base.JSONValue] = json.loads('''
@@ -3378,7 +3378,7 @@ def test_platform_apple():
         assert payments[0].revoked_unix_ts_ms         == e02_apple_refund_tx_info.revocationDate
 
 def test_google_platform_handle_notification(monkeypatch):
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_1?mode=memory&cache=shared', uri=True) as ctx:
         _ = platform_google.init(project_name            = 'loki-5a81e',
                                  package_name            = 'network.loki.messenger',
                                  subscription_name       = 'session-pro-sub',
@@ -3648,7 +3648,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert_pro_details(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         return tx, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_2?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User cancels
@@ -3713,7 +3713,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            revoke_unix_ts_ms                 = refund_tx.event_ms,
                            unix_ts_ms                        = refund_tx.event_ms + 1)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_3?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as subscription fails to renew
@@ -3819,7 +3819,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            ctx                               = ctx,
                            unix_ts_ms                        = tx_expire.event_ms)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_4?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User renews 1-month subscription
@@ -3985,7 +3985,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                             ctx=ctx,
                             unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_5?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4042,7 +4042,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         user_ctx=user_ctx, ctx=ctx,
         unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_6?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4119,7 +4119,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
             ctx=ctx,
             unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_7?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4205,7 +4205,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           user_ctx                          = user_ctx,
                           ctx                               = ctx)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_8?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4259,7 +4259,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           user_ctx                          = user_ctx,
                           ctx                               = ctx)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_9?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4336,7 +4336,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_10?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4430,7 +4430,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_11?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4499,7 +4499,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_12?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 3-month subscription
         2. Renews
@@ -4507,7 +4507,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. Expires
         """
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_13?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. Renews
@@ -4515,21 +4515,21 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. Expires
         """
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_14?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 3-month subscription
         2. User changes to 1-month subscription
         3. Renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_15?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. User changes to 1-month subscription
         3. Renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_16?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4570,7 +4570,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
             unix_ts_ms=tx_refund_a.event_ms + 1, # +1 to increment us over the threshold to be expired
             revoke_unix_ts_ms=tx_refund_a.event_ms)
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_17?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4578,7 +4578,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_18?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4587,7 +4587,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         """
 
 
-    with TestingContext(db_path='file:test_platform_google_db?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_19?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription, but does not redeem it.
         2. Developer refunds subscription (removing entitlement)
