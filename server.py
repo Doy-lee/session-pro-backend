@@ -34,7 +34,7 @@ API
       The embedded `master_sig` and `rotating_sig` signature must sign over a 32 byte hash of the
       request components (in little endian) for example:
 
-        google_hash = blake2b32(person='ProAddPayment___', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.google_payment_token)
+        google_hash = blake2b32(person='ProAddPayment___', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.google_payment_token || payment_tx.google_order_id)
         apple_hash  = blake2b32(person='ProAddPayment___', version || master_pkey || rotating_pkey || payment_tx.provider || payment_tx.apple_tx_id)
 
       This request will fail if the Session Pro backend has not witnessed the equivalent payment
@@ -81,13 +81,17 @@ API
                            back-end.
       status: 1 byte integer corresponding to the status code of the request with the following
               mapping from 'AddProPaymentStatus':
-                0 => Success:          Payment was claimed and the pro proof is in the result object
-                1 => Error:            Backend encountered an error when attempting to claim the payment
-                2 => Already Redeemed: Payment is already claimed
-                3 => Unknown Payment:  Payment transaction attempted to claim a payment that the
-                                       backend does not have. Either the payment doesn't exist or
-                                       the backend has not witnessed the payment from the provider
-                                       yet.
+                0   => Success:          Payment was claimed and the pro proof is in the result
+                                         object
+                1   => Error:            Backend encountered an error when attempting to claim the
+                                         payment
+                2   => Parse Error:      Request specified the incorrect fields or fields with
+                                         unusable values
+                100 => Already Redeemed: Payment is already claimed
+                101 => Unknown Payment:  Payment transaction attempted to claim a payment that the
+                                         backend does not have. Either the payment doesn't exist or
+                                         the backend has not witnessed the payment from the provider
+                                         yet.
 
     Example
       Request
@@ -372,9 +376,10 @@ API
                                     registered is coming from with the following mapping:
                                       1 => Google Play Store
                                       2 => Apple iOS App Store
-          auto_renewing:            1 byte boolean representing if the user had auto-renewing enabled
-                                    to repeat this payment. It additionally indicates that the user
-                                    is to be granted the grace period marked on the payment.
+          auto_renewing:            1 byte boolean representing if the user had auto-renewing
+                                    enabled to repeat this payment. It additionally indicates that
+                                    the user is to be granted the grace period marked on the
+                                    payment.
           unredeemed_unix_ts_ms:    8 byte UNIX timestamp indicating when the payment was executed.
           redeemed_unix_ts_ms:      8 byte UNIX timestamp indicating when the payment was
                                     registered. This timestamp is rounded up to the next day
@@ -389,24 +394,24 @@ API
                                              platform.
           revoked_unix_ts_ms:                8 byte UNIX timestamp indicating when the payment was
                                              revoked. 0 if it never revoked.
-          google_payment_token:      When payment provider is Google Play Store, a string which is
-                                     set to the platform-specific purchase token for the
-                                     subscription.
-          google_order_id:           When payment provider is Google Play Store, a string which is
-                                     set to the platform-specific order ID for the subscription.
-          apple_original_tx_id:      When payment provider is Apple iOS App Store, a string which is
-                                     set to the platform-specific original transaction ID for the
-                                     subscription.
-          apple_tx_id:               When payment provider is Apple iOS App Store, a string which is
-                                     set to the platform-specific transaction ID for the
-                                     subscription.
-          apple_web_line_order_id:   When payment provider is Apple iOS App Store, a string which is
-                                     set to the platform-specific transaction web line order ID for
-                                     the subscription.
-          refunded_request_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
+          google_payment_token:        When payment provider is Google Play Store, a string which is
+                                       set to the platform-specific purchase token for the
+                                       subscription.
+          google_order_id:             When payment provider is Google Play Store, a string which is
+                                       set to the platform-specific order ID for the subscription.
+          apple_original_tx_id:        When payment provider is Apple iOS App Store, a string which
+                                       is set to the platform-specific original transaction ID for
+                                       the subscription.
+          apple_tx_id:                 When payment provider is Apple iOS App Store, a string which
+                                       is set to the platform-specific transaction ID for the
+                                       subscription.
+          apple_web_line_order_id:     When payment provider is Apple iOS App Store, a string which
+                                       is set to the platform-specific transaction web line order ID
+                                       for the subscription.
+          refund_requested_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
                                        refund for this payment. This value is set to 0 if no refund
-                                       has been initiated. Setting the refund request value for a
-                                       payment is optional and platforms must call the set refund
+                                       has been initiated. Setting the refund request value for
+                                       a payment is optional and platforms must call the set refund
                                        request endpoint if they wish to set this value.
 
     Examples
@@ -425,16 +430,18 @@ API
           "items": [
             {
               "status": 2,
-              "subscription_duration_s": 2592000
+              "plan": 1,
               "payment_provider": 1,
+              "auto_renewing": 1,
+              "unredeemed_unix_ts_ms": 1759190400000,
+              "redeemed_unix_ts_ms": 1759190400000,
               "expiry_unix_ts_ms": 1761718134941,
               "grace_period_duration_ms": 0,
               "platform_refund_expiry_unix_ts_ms": 1761718134941,
-              "refund_requested_unix_ts_ms": 0,
-              "redeemed_unix_ts_ms": 1759190400000,
               "revoked_unix_ts_ms": 0,
-              "google_order_id": "993f7d1bbcf4dfda482a8bce4f2b62acfc8c2d3d06b6512dfc981738ddf85562490b016f27b07a17c080c0765ada43f2e4c0618196f667e1174d1b3d67752b86",
               "google_payment_token": "ad8b67960eb91e8e2c0a4e8f191ea77b5ad593508b52ecc36c69c059cab39397fbf1e96142fa7fbcc7391cc3369ad110e3f9cbfccef284a925dcd470a4670aec",
+              "google_order_id": "993f7d1bbcf4dfda482a8bce4f2b62acfc8c2d3d06b6512dfc981738ddf85562490b016f27b07a17c080c0765ada43f2e4c0618196f667e1174d1b3d67752b86",
+              "refund_requested_unix_ts_ms": 0,
             }
           ],
           "auto_renewing": 1,
@@ -479,7 +486,7 @@ API
       The embedded `master_sig` signature must sign over the 32 byte hash of the requests contents
       (in little endian):
 
-        google_hash = blake2b32(person='ProSetRefundReq_', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.google_payment_token)
+        google_hash = blake2b32(person='ProSetRefundReq_', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.google_payment_token || payment_tx.google_order_id)
         apple_hash  = blake2b32(person='ProSetRefundReq_', version || master_pkey || unix_ts_ms || refund_requested_unix_ts_ms || payment_tx.provider || payment_tx.apple_tx_id)
 
     Request
@@ -604,7 +611,6 @@ RESPONSE_PARSE_ERROR   = 2
 class AddProPaymentStatus(enum.Enum):
     Success         = RESPONSE_SUCCESS
     Error           = RESPONSE_GENERIC_ERROR
-    ParseError      = RESPONSE_PARSE_ERROR
     AlreadyRedeemed = 100
     UnknownPayment  = 101
 
