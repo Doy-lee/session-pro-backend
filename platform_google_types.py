@@ -416,6 +416,8 @@ class SubscriptionV2Data:
 
     acknowledgement_state:  SubscriptionsV2AcknowledgementState = SubscriptionsV2AcknowledgementState.UNSPECIFIED
 
+    obfuscated_external_account_id:  str | None = None
+
 @dataclasses.dataclass
 class Monetizationv3SubscriptionData:
     """

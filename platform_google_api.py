@@ -316,17 +316,23 @@ def parse_get_subscription_v2_response(response: typing.Any, err: ErrorSink) -> 
 
         acknowledgement_state = json_dict_require_str_coerce_to_enum(response, "acknowledgementState", SubscriptionsV2AcknowledgementState, err)
 
+        obfuscated_external_account_id: str | None = None
+        if "externalAccountIdentifiers" in response:
+            external_account_identifiers: base.JSONObject = base.json_dict_require_obj(response, "externalAccountIdentifiers", err)
+            obfuscated_external_account_id                = base.json_dict_require_str(external_account_identifiers, "obfuscatedExternalAccountId", err)
+
         if not err.has() and acknowledgement_state is not None:
             result = SubscriptionV2Data(
-                kind                   = kind,
-                line_items             = line_items,
-                start_time             = start_time,
-                subscription_state     = subscription_state,
-                linked_purchase_token  = linked_purchase_token,
-                paused_state_context   = paused_state_context,
-                canceled_state_context = canceled_state_context,
-                test_purchase          = is_test_purchase,
-                acknowledgement_state  = acknowledgement_state,
+                kind                           = kind,
+                line_items                     = line_items,
+                start_time                     = start_time,
+                subscription_state             = subscription_state,
+                linked_purchase_token          = linked_purchase_token,
+                paused_state_context           = paused_state_context,
+                canceled_state_context         = canceled_state_context,
+                test_purchase                  = is_test_purchase,
+                acknowledgement_state          = acknowledgement_state,
+                obfuscated_external_account_id = obfuscated_external_account_id,
             )
     else:
         err.msg_list.append('Failed to get subscription details, result not a dict')
