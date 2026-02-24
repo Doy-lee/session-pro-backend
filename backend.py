@@ -213,6 +213,8 @@ UserRowIterator:                     typing.TypeAlias = tuple[bytes, # master_pk
                                                               int,   # grace_period_duration_ms
                                                               int,   # auto_renewing
                                                               int,   # refund_requested_unix_ts_ms
+                                                              bytes, # google_obfuscated_account_id
+                                                              str,   # apple_app_account_token
                                                              ]
 
 @dataclasses.dataclass
@@ -255,13 +257,15 @@ class PaymentRow:
 
 @dataclasses.dataclass
 class UserRow:
-    found:                       bool  = False
-    master_pkey:                 bytes = ZERO_BYTES32
-    gen_index:                   int   = 0
-    expiry_unix_ts_ms:           int   = 0
-    grace_period_duration_ms:    int   = 0
-    auto_renewing:               bool  = False
-    refund_requested_unix_ts_ms: int   = 0
+    found:                        bool  = False
+    master_pkey:                  bytes = ZERO_BYTES32
+    gen_index:                    int   = 0
+    expiry_unix_ts_ms:            int   = 0
+    grace_period_duration_ms:     int   = 0
+    auto_renewing:                bool  = False
+    refund_requested_unix_ts_ms:  int   = 0
+    google_obfuscated_account_id: bytes = b''
+    apple_app_account_token:      str   = ''
 
 @dataclasses.dataclass
 class GetUserAndPayments:
@@ -507,13 +511,15 @@ def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
     result.grace_period_duration_ms    = row[3]
     result.auto_renewing               = bool(row[4])
     result.refund_requested_unix_ts_ms = row[5]
+    result.google_obfuscated_account_id = row[6]
+    result.apple_app_account_token      = row[7]
     return result
 
 def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
     result: list[UserRow] = []
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        _ = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms FROM users')
+        _ = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users')
         rows = typing.cast(collections.abc.Iterator[UserRowIterator], tx.cursor)
         for row in rows:
             result.append(_user_from_row_iterator(row))
@@ -521,7 +527,7 @@ def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
 
 def get_user_from_sql_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> UserRow:
     assert tx.cursor is not None
-    _               = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
+    _               = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
     result: UserRow = UserRow()
     row             = typing.cast(UserRowIterator | None, tx.cursor.fetchone())
     if row:
@@ -710,7 +716,16 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                 auto_renewing               INTEGER NOT NULL,
 
                 -- See the comment on this field in the payments table
-                refund_requested_unix_ts_ms INTEGER NOT NULL
+                refund_requested_unix_ts_ms INTEGER NOT NULL,
+
+                -- Per platform masked account identifiers to distinguish between different Session
+                -- accounts that purchase a subscription using the same platform account.
+
+                -- Obfuscated account ID for Google Play subscriptions. Calculated as sha256(master_pkey)
+                google_obfuscated_account_id BLOB NOT NULL,
+
+                -- Apple's per account user token
+                apple_app_account_token STRING NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS revocations (
@@ -808,7 +823,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             _ = tx.cursor.execute('''PRAGMA journal_mode=WAL''')
 
             # NOTE: Version migration
-            target_db_version = 5
+            target_db_version = 6
             if 1:
                 db_version: int = tx.cursor.execute('PRAGMA user_version').fetchone()[0]  # pyright: ignore[reportAny]
 
@@ -865,6 +880,23 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                         ALTER TABLE payments RENAME COLUMN refund_request_unix_ts_ms TO refund_requested_unix_ts_ms;
                         ALTER TABLE users    RENAME COLUMN refund_request_unix_ts_ms TO refund_requested_unix_ts_ms;
                     ''')
+                    db_version += 1 # NOTE: Bump the version
+                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
+                if db_version == 5:
+                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                    _ = tx.cursor.executescript('''
+                        ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X'';
+                        ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT '';
+                    ''')
+                    _ = tx.cursor.execute('SELECT master_pkey FROM users')
+                    for row in tx.cursor.fetchall():
+                        master_pkey: bytes = row[0]
+                        google_obfuscated_account_id: bytes = hashlib.sha256(master_pkey).digest()
+                        _ = tx.cursor.execute(
+                            'UPDATE users SET google_obfuscated_account_id = ? WHERE master_pkey = ?',
+                            (google_obfuscated_account_id, master_pkey)
+                        )
                     db_version += 1 # NOTE: Bump the version
                     _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
 
@@ -1764,20 +1796,24 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, ma
         # This means that for the most part, consumers can just rely on the top level object to
         # determine the current state of the user subscription payment.
         _ = tx.cursor.execute('''
-            INSERT INTO users (master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms)
-            VALUES            (?, ?, ?, ?, ?, ?)
+            INSERT INTO users (master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token)
+            VALUES            (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (master_pkey) DO UPDATE SET
-                gen_index                   = excluded.gen_index,
-                expiry_unix_ts_ms           = excluded.expiry_unix_ts_ms,
-                grace_period_duration_ms    = excluded.grace_period_duration_ms,
-                auto_renewing               = excluded.auto_renewing,
-                refund_requested_unix_ts_ms = excluded.refund_requested_unix_ts_ms
+                gen_index                    = excluded.gen_index,
+                expiry_unix_ts_ms            = excluded.expiry_unix_ts_ms,
+                grace_period_duration_ms     = excluded.grace_period_duration_ms,
+                auto_renewing                = excluded.auto_renewing,
+                refund_requested_unix_ts_ms  = excluded.refund_requested_unix_ts_ms,
+                google_obfuscated_account_id = excluded.google_obfuscated_account_id,
+                apple_app_account_token      = excluded.apple_app_account_token
         ''', (master_pkey_bytes,
               result.gen_index,
               lookup.best_expiry_unix_ts_ms,
               lookup.best_grace_duration_ms,
               lookup.best_auto_renewing,
-              lookup.best_refund_requested_unix_ts_ms))
+              lookup.best_refund_requested_unix_ts_ms,
+              hashlib.sha256(master_pkey_bytes).digest(),
+              ''))
 
     return result
 
