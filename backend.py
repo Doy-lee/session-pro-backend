@@ -390,6 +390,10 @@ def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) 
     result: bytes = hashlib.sha256(bytes(pkey)).digest()
     return result
 
+def apple_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) -> str:
+    result = '' # TODO: Figure out how we derive Apple's app token account id from the master pkey
+    return result
+
 def payment_provider_tx_log_label(tx: base.PaymentProviderTransaction):
     result = f'{tx.provider.name}, apple (orig/tx/web)=({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google=({tx.google_payment_token}/{tx.google_order_id})'
     return result
@@ -1271,7 +1275,7 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
         _ = tx.cursor.execute(f'''
             UPDATE payments
             SET    {set_expr}
-            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status = ?
+            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status = ? AND google_obfuscated_account_id = ?
         ''', (# SET values
               master_pkey_bytes,
               int(base.PaymentStatus.Redeemed.value),
@@ -1280,12 +1284,13 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
               int(payment_tx.provider.value),
               payment_tx.google_payment_token,
               payment_tx.google_order_id,
-              int(base.PaymentStatus.Unredeemed.value)))
+              int(base.PaymentStatus.Unredeemed.value),
+              google_obfuscated_account_id_from_master_pkey(master_pkey),))
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         _ = tx.cursor.execute(f'''
             UPDATE payments
             SET    {set_expr}
-            WHERE  payment_provider = ? AND apple_tx_id = ? AND status = ?
+            WHERE  payment_provider = ? AND apple_tx_id = ? AND status = ? AND apple_app_account_token = ?
         ''', (# SET fields
               master_pkey_bytes,
               int(base.PaymentStatus.Redeemed.value),
@@ -1293,7 +1298,8 @@ def redeem_payment_tx(tx:                  base.SQLTransaction,
               # WHERE fields
               int(payment_tx.provider.value),
               payment_tx.apple_tx_id,
-              int(base.PaymentStatus.Unredeemed.value)))
+              int(base.PaymentStatus.Unredeemed.value),
+              apple_obfuscated_account_id_from_master_pkey(master_pkey),))
     else:
         err.msg_list.append('Payment to register specifies an unknown payment provider')
 
@@ -1853,7 +1859,7 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, ma
               lookup.best_auto_renewing,
               lookup.best_refund_requested_unix_ts_ms,
               google_obfuscated_account_id_from_master_pkey(master_pkey),
-              '' # TODO Calc the apple obfuscated account ID when we agree on how it's derived
+              apple_obfuscated_account_id_from_master_pkey(master_pkey),
               ))
 
     return result
@@ -2046,7 +2052,7 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
             if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
                 platform_obfuscated_account_id = google_obfuscated_account_id_from_master_pkey(master_pkey)
             elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-                platform_obfuscated_account_id = '' # TODO: We have yet to determine how we are deriving this from the master pkey for apple as they use UUIDs
+                platform_obfuscated_account_id = apple_obfuscated_account_id_from_master_pkey(master_pkey)
             else:
                 assert False, "Invalid code path"
 

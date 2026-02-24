@@ -312,13 +312,17 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                 # NOTE: Process notification
                 sql_tx.cancel = True
                 if not err.has():
+                    # TODO: To be updated when Session iOS figures out how it will generate UUID from the
+                    # master pkey, then this can be asserted to have to exist in the payload
+                    platform_obfuscated_account_id: str = tx.appAccountToken if tx.appAccountToken else ''
+
                     backend.add_unredeemed_payment_tx(tx                                = sql_tx,
                                                       payment_tx                        = payment_tx,
                                                       plan                              = pro_plan,
                                                       unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                       platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
                                                       expiry_unix_ts_ms                 = expiry_unix_ts_ms,
-                                                      platform_obfuscated_account_id    = '', # TODO grab from payload
+                                                      platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                                       err                               = err)
 
                 if not err.has():
@@ -441,13 +445,17 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
 
                         # NOTE: Submit the upgraded payment (e.g. the new payment)
                         if not err.has():
+                            # TODO: To be updated when Session iOS figures out how it will generate UUID from the
+                            # master pkey, then this can be asserted to have to exist in the payload
+                            platform_obfuscated_account_id: str = tx.appAccountToken if tx.appAccountToken else ''
+
                             backend.add_unredeemed_payment_tx(tx                                = sql_tx,
                                                               payment_tx                        = payment_tx,
                                                               plan                              = pro_plan,
                                                               expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                                               unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                               platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
-                                                              platform_obfuscated_account_id    = '', # TODO grab from payload
+                                                              platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                                               err                               = err)
 
                         # NOTE: Update grace period, note we do not update the auto-renewing flag
@@ -529,13 +537,17 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                         refund        = base.readable_unix_ts_ms(platform_refund_expiry_unix_ts_ms)
                         log.debug(f'{decoded_notification.body.notificationType.name} for {payment_tx_id_label(payment_tx)}: New payment (unredeemed/refund expiry/expiry) ts = ({unredeemed}/{refund}/{expiry})')
 
+                    # TODO: To be updated when Session iOS figures out how it will generate UUID from the
+                    # master pkey, then this can be asserted to have to exist in the payload
+                    platform_obfuscated_account_id: str = tx.appAccountToken if tx.appAccountToken else ''
+
                     backend.add_unredeemed_payment_tx(tx                                = sql_tx,
                                                       payment_tx                        = payment_tx,
                                                       plan                              = pro_plan,
                                                       expiry_unix_ts_ms                 = tx.expiresDate,
                                                       unredeemed_unix_ts_ms             = tx.purchaseDate,
                                                       platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
-                                                      platform_obfuscated_account_id    = '', # TODO grab from payload
+                                                      platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                                       err                               = err)
 
                 elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
@@ -574,13 +586,17 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
 
                     # NOTE: Submit the 'new' payment
                     if not err.has():
+                        # TODO: To be updated when Session iOS figures out how it will generate UUID from the
+                        # master pkey, then this can be asserted to have to exist in the payload
+                        platform_obfuscated_account_id: str = tx.appAccountToken if tx.appAccountToken else ''
+
                         backend.add_unredeemed_payment_tx(tx                                = sql_tx,
                                                           payment_tx                        = payment_tx,
                                                           plan                              = pro_plan,
                                                           expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                                           unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
-                                                          platform_obfuscated_account_id    = '', # TODO grab from payload
+                                                          platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                                           err                               = err)
 
                     if not err.has():
