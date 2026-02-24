@@ -386,8 +386,8 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
-def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey):
-    result = hashlib.sha256(bytes(pkey)).digest()
+def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) -> bytes:
+    result: bytes = hashlib.sha256(bytes(pkey)).digest()
     return result
 
 def payment_provider_tx_log_label(tx: base.PaymentProviderTransaction):

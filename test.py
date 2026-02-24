@@ -3412,14 +3412,17 @@ def test_google_platform_handle_notification(monkeypatch):
 
     @dataclasses.dataclass
     class TestUserCtx:
-        master_key:     nacl.signing.SigningKey 
-        rotating_key:   nacl.signing.SigningKey 
-        payments:       int
+        master_key:                   nacl.signing.SigningKey
+        rotating_key:                 nacl.signing.SigningKey
+        payments:                     int
+        google_obfuscated_account_id: bytes
 
         def __init__(self):
-            self.payments       = 0
-            self.master_key     = nacl.signing.SigningKey.generate()
-            self.rotating_key   = nacl.signing.SigningKey.generate()
+            self.payments                     = 0
+            seed                              = bytes([0x01] * 32)
+            self.master_key                   = nacl.signing.SigningKey(seed)
+            self.rotating_key                 = nacl.signing.SigningKey.generate()
+            self.google_obfuscated_account_id = backend.google_obfuscated_account_id_from_master_pkey(self.master_key.verify_key)
 
     @dataclasses.dataclass
     class TestTx:
@@ -3659,25 +3662,41 @@ def test_google_platform_handle_notification(monkeypatch):
         3. User un-cancels
         4. User refunds
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723091078', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
                                 )
         cancel = TestScenario(# 2. User cancels
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723188437', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-06T03:59:48.074Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-06T03:59:48.074Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
                                 )
         uncancel = TestScenario(# 3. User uncancels
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723199349', 'subscriptionNotification': {'version': '1.0', 'notificationType': 7, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:10.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
                                )
         refund = TestScenario(# 4. User refunds
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1759723392088', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'lgmmicancjpmkconmddnaicb.AO-J1OyZa0o1Xez6T7kCcaIpqyIKzt5n1D_cTEFQhHJzVKw4INw2cMmckgE-ME0DgO1xJuFAYDuiYuM-Sy87HLQ8qvitpiMGrMnu1iL_-yvAYc4CoAx8u_Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:11.808Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-06T03:58:10.981Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3354-3745-5570-25336', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-06T04:03:11.808Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3354-3745-5570-25336'}]},
                               )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -3725,29 +3744,49 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User cancels (probably dont need this)
         5. Expires (probably dont need this)
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760056968727', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'jflmajbhbddmjjjihphljklh.AO-J1Ox0T3IQHCVuZkRq61fkTGJbMwFmw30uxSrI5N9uRofnf-X8HE8F78bhPKWzYd85OHzzkHC3WAkCRi6FeNyyRu6Trff9dQObNQycH6c2ymaU4mCWSLY', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3375-6103-0197-44778', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:47:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3375-6103-0197-44778', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:47:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778'}]}
                                 )
         grace = TestScenario(# 2. User enters grace period as subscription fails to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760057276700', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'jflmajbhbddmjjjihphljklh.AO-J1Ox0T3IQHCVuZkRq61fkTGJbMwFmw30uxSrI5N9uRofnf-X8HE8F78bhPKWzYd85OHzzkHC3WAkCRi6FeNyyRu6Trff9dQObNQycH6c2ymaU4mCWSLY', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778'}]}
                              )
         renew_after_grace = TestScenario(# 3. User renews, exiting grace period
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760057286988', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'jflmajbhbddmjjjihphljklh.AO-J1Ox0T3IQHCVuZkRq61fkTGJbMwFmw30uxSrI5N9uRofnf-X8HE8F78bhPKWzYd85OHzzkHC3WAkCRi6FeNyyRu6Trff9dQObNQycH6c2ymaU4mCWSLY', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
                                          )
         cancel = TestScenario(# 4. User cancels (probably dont need this)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760057334978', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'jflmajbhbddmjjjihphljklh.AO-J1Ox0T3IQHCVuZkRq61fkTGJbMwFmw30uxSrI5N9uRofnf-X8HE8F78bhPKWzYd85OHzzkHC3WAkCRi6FeNyyRu6Trff9dQObNQycH6c2ymaU4mCWSLY', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:48:53.285Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:48:53.285Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
                               )
         expire = TestScenario(# 5. Expires (probably dont need this)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760057579735', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'jflmajbhbddmjjjihphljklh.AO-J1Ox0T3IQHCVuZkRq61fkTGJbMwFmw30uxSrI5N9uRofnf-X8HE8F78bhPKWzYd85OHzzkHC3WAkCRi6FeNyyRu6Trff9dQObNQycH6c2ymaU4mCWSLY', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:48:53.285Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:42:48.626Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3375-6103-0197-44778..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:48:53.285Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:52:48.269Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3375-6103-0197-44778..0'}]}
                               )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -3835,49 +3874,89 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         8. User fails to renew, entering account hold
         9. User fails to renew, cancelling and expiring
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760054059175', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'lnddpdboobddmpoiaonnneoe.AO-J1Ow9QQNKenAPxf9XeH3xwcbAnaVWSLGGcVA9Tsui1d8IqFsESiqvO0VcC5uv1IIHneWY95eQ5RyRBsW7Q1p7GFAs7OJPFHAvNo3T1q-yg08eL53UB88', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-09T23:59:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-09T23:59:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127'}]}
                                 )
         renew_1 = TestScenario(# 2. User renews 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760054493266', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'lnddpdboobddmpoiaonnneoe.AO-J1Ow9QQNKenAPxf9XeH3xwcbAnaVWSLGGcVA9Tsui1d8IqFsESiqvO0VcC5uv1IIHneWY95eQ5RyRBsW7Q1p7GFAs7OJPFHAvNo3T1q-yg08eL53UB88', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:04:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..0'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:04:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..0'}]},
                                )
         renew_2 = TestScenario(# 3. User renews 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760054662501', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'lnddpdboobddmpoiaonnneoe.AO-J1Ow9QQNKenAPxf9XeH3xwcbAnaVWSLGGcVA9Tsui1d8IqFsESiqvO0VcC5uv1IIHneWY95eQ5RyRBsW7Q1p7GFAs7OJPFHAvNo3T1q-yg08eL53UB88', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
                                )
         cancel = TestScenario(# 4. User cancels 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760054819931', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'lnddpdboobddmpoiaonnneoe.AO-J1Ow9QQNKenAPxf9XeH3xwcbAnaVWSLGGcVA9Tsui1d8IqFsESiqvO0VcC5uv1IIHneWY95eQ5RyRBsW7Q1p7GFAs7OJPFHAvNo3T1q-yg08eL53UB88', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:06:59.489Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_CANCELED', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:06:59.489Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
                               )
         expire = TestScenario(# 5. Subscription expires
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760054959804', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'lnddpdboobddmpoiaonnneoe.AO-J1Ow9QQNKenAPxf9XeH3xwcbAnaVWSLGGcVA9Tsui1d8IqFsESiqvO0VcC5uv1IIHneWY95eQ5RyRBsW7Q1p7GFAs7OJPFHAvNo3T1q-yg08eL53UB88', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:06:59.489Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-09T23:54:19.001Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3309-4032-8192-54127..1', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T00:06:59.489Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:09:18.613Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3309-4032-8192-54127..1'}]},
                               )
         resubscribe = TestScenario(# 6. User purchases (SUBSCRIPTION_PURCHASED)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760055149918', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'jpdlliaaipkedokapkmchknd.AO-J1OyO0nXUZyOJqpgh7Rzie_FWawzMdrgHkLFH0JUxTZZSIxikffSv1oKcktXkiJnRCuevUxW4Al5AENkfTZZnDQFZqfqqJQf3CHHLjWk_fw7kjewoRDk', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3326-4415-9310-90534', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:17:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3326-4415-9310-90534', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:17:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
                                    )
         grace = TestScenario(# 7. User fail to renew, entering grace period (SUBSCRIPTION_IN_GRACE_PERIOD)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760055456738', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'jpdlliaaipkedokapkmchknd.AO-J1OyO0nXUZyOJqpgh7Rzie_FWawzMdrgHkLFH0JUxTZZSIxikffSv1oKcktXkiJnRCuevUxW4Al5AENkfTZZnDQFZqfqqJQf3CHHLjWk_fw7kjewoRDk', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:22:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:22:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
                              )
         hold = TestScenario(# 8. User fails to renew, entering account hold
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760055750572', 'subscriptionNotification': {'version': '1.0', 'notificationType': 5, 'purchaseToken': 'jpdlliaaipkedokapkmchknd.AO-J1OyO0nXUZyOJqpgh7Rzie_FWawzMdrgHkLFH0JUxTZZSIxikffSv1oKcktXkiJnRCuevUxW4Al5AENkfTZZnDQFZqfqqJQf3CHHLjWk_fw7kjewoRDk', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:22:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:22:29.313Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]},
                             )
         fail_after_hold_a = TestScenario(# 9. User fails to renew, cancelling and expiring
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760056350982', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'jpdlliaaipkedokapkmchknd.AO-J1OyO0nXUZyOJqpgh7Rzie_FWawzMdrgHkLFH0JUxTZZSIxikffSv1oKcktXkiJnRCuevUxW4Al5AENkfTZZnDQFZqfqqJQf3CHHLjWk_fw7kjewoRDk', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:32:30.758Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:32:30.758Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]}
                                          )
         fail_after_hold_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760056353213', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'jpdlliaaipkedokapkmchknd.AO-J1OyO0nXUZyOJqpgh7Rzie_FWawzMdrgHkLFH0JUxTZZSIxikffSv1oKcktXkiJnRCuevUxW4Al5AENkfTZZnDQFZqfqqJQf3CHHLjWk_fw7kjewoRDk', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:32:30.758Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T00:12:29.781Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3326-4415-9310-90534..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T00:32:30.758Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3326-4415-9310-90534'}]}
         )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         _ = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -3995,25 +4074,41 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         2. User enters grace period as they fail to renew
         3. User cancels, exiting grace period
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058070950', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'ehkfchpacbicpfpnkedempao.AO-J1OxW86ZtW-xdq2l1Xo5HkpOC2DvuqCL6xKJrMrIib5URdpVL6n0NzbSMkwyOjK6_CR2A9myRvVVqIodIxuSsEFypEByw57XoLN3NKDJPiGnK4zvodQg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-3546-4929-55699', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:10.406Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-3546-4929-55699', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:10.406Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
                                 )
         grace = TestScenario(# 2. User enters grace period as they fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058375847', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'ehkfchpacbicpfpnkedempao.AO-J1OxW86ZtW-xdq2l1Xo5HkpOC2DvuqCL6xKJrMrIib5URdpVL6n0NzbSMkwyOjK6_CR2A9myRvVVqIodIxuSsEFypEByw57XoLN3NKDJPiGnK4zvodQg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:11:10.406Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:11:10.406Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
                              )
         cancel_after_grace_a = TestScenario(# 3. User cancels, exiting grace period
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058385564', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'ehkfchpacbicpfpnkedempao.AO-J1OxW86ZtW-xdq2l1Xo5HkpOC2DvuqCL6xKJrMrIib5URdpVL6n0NzbSMkwyOjK6_CR2A9myRvVVqIodIxuSsEFypEByw57XoLN3NKDJPiGnK4zvodQg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T01:06:25.090Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:25.090Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T01:06:25.090Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:25.090Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
                                             )
         cancel_after_grace_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058388512', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'ehkfchpacbicpfpnkedempao.AO-J1OxW86ZtW-xdq2l1Xo5HkpOC2DvuqCL6xKJrMrIib5URdpVL6n0NzbSMkwyOjK6_CR2A9myRvVVqIodIxuSsEFypEByw57XoLN3NKDJPiGnK4zvodQg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T01:06:25.090Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:25.090Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:01:10.821Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-3546-4929-55699..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T01:06:25.090Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:06:25.090Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-3546-4929-55699'}]}
         )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4053,29 +4148,49 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. User enters account hold as they continue to fail to renew
         4. User cancels
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058562006', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'jcbkgneihmbdlpmngappmhll.AO-J1OwzyOh1uez7lSwcsrAEyQ6eHswTVZXAMKuBqHEIxIJFnbv0u16Cs4qS7xqcB_M0sCMslIajcYdjCaeJ-7SI2NkgUSVwdqj4II5_WatWtfBAa9vgp74', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-4424-2558-38000', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:14:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-4424-2558-38000', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:14:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
                                 )
         grace = TestScenario(# 2. User enters grace period as they fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760058876825', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'jcbkgneihmbdlpmngappmhll.AO-J1OwzyOh1uez7lSwcsrAEyQ6eHswTVZXAMKuBqHEIxIJFnbv0u16Cs4qS7xqcB_M0sCMslIajcYdjCaeJ-7SI2NkgUSVwdqj4II5_WatWtfBAa9vgp74', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:19:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:19:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
                              )
         hold = TestScenario(# 3. User enters account hold as they continue to fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760059162455', 'subscriptionNotification': {'version': '1.0', 'notificationType': 5, 'purchaseToken': 'jcbkgneihmbdlpmngappmhll.AO-J1OwzyOh1uez7lSwcsrAEyQ6eHswTVZXAMKuBqHEIxIJFnbv0u16Cs4qS7xqcB_M0sCMslIajcYdjCaeJ-7SI2NkgUSVwdqj4II5_WatWtfBAa9vgp74', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:19:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:19:21.418Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
                             )
         cancel_after_hold_a = TestScenario(# 4. User cancels
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760059762429', 'subscriptionNotification': {'version': '1.0', 'notificationType': 3, 'purchaseToken': 'jcbkgneihmbdlpmngappmhll.AO-J1OwzyOh1uez7lSwcsrAEyQ6eHswTVZXAMKuBqHEIxIJFnbv0u16Cs4qS7xqcB_M0sCMslIajcYdjCaeJ-7SI2NkgUSVwdqj4II5_WatWtfBAa9vgp74', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:29:22.310Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:29:22.310Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
                                            )
         cancel_after_hold_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760059764910', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'jcbkgneihmbdlpmngappmhll.AO-J1OwzyOh1uez7lSwcsrAEyQ6eHswTVZXAMKuBqHEIxIJFnbv0u16Cs4qS7xqcB_M0sCMslIajcYdjCaeJ-7SI2NkgUSVwdqj4II5_WatWtfBAa9vgp74', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:29:22.310Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T01:09:21.833Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3385-4424-2558-38000..0', 'canceledStateContext': {'systemInitiatedCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T01:29:22.310Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3385-4424-2558-38000'}]}
         )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User resubscribed"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4130,25 +4245,41 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. User enters account hold as they continue to fail to renew
         4. User renews, exiting account hold
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760063571318', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'fiamkojbeobfecknhdfhfgdk.AO-J1OxpMbHczoHY4AbpJsd9gwqzTs-_9zpEGMedCUMXkjrvBgTVdNyl0eowweuNYlVYTR7_D1NN_LYO8U8ScP8cnqbzZ5qB_TrWWQtXif7Es6Xp2PEE1SI', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-4002-2060-79596', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:37:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-4002-2060-79596', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:37:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
                                 )
         grace = TestScenario(# 2. User enters grace period as they fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760063877258', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'fiamkojbeobfecknhdfhfgdk.AO-J1OxpMbHczoHY4AbpJsd9gwqzTs-_9zpEGMedCUMXkjrvBgTVdNyl0eowweuNYlVYTR7_D1NN_LYO8U8ScP8cnqbzZ5qB_TrWWQtXif7Es6Xp2PEE1SI', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:42:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:42:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
                              )
         hold = TestScenario(# 3. User enters account hold as they continue to fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760064172032', 'subscriptionNotification': {'version': '1.0', 'notificationType': 5, 'purchaseToken': 'fiamkojbeobfecknhdfhfgdk.AO-J1OxpMbHczoHY4AbpJsd9gwqzTs-_9zpEGMedCUMXkjrvBgTVdNyl0eowweuNYlVYTR7_D1NN_LYO8U8ScP8cnqbzZ5qB_TrWWQtXif7Es6Xp2PEE1SI', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:42:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:42:50.765Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596'}]}
                             )
         renew = TestScenario(# 4. User renews, exiting account hold (SUBSCRIPTION_RECOVERED)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760064181132', 'subscriptionNotification': {'version': '1.0', 'notificationType': 1, 'purchaseToken': 'fiamkojbeobfecknhdfhfgdk.AO-J1OxpMbHczoHY4AbpJsd9gwqzTs-_9zpEGMedCUMXkjrvBgTVdNyl0eowweuNYlVYTR7_D1NN_LYO8U8ScP8cnqbzZ5qB_TrWWQtXif7Es6Xp2PEE1SI', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:48:00.760Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:32:51.206Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-4002-2060-79596..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:48:00.760Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-4002-2060-79596..0'}]}
                              )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User resubscribed"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4215,25 +4346,41 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         2. User changes to 3-month plan
         3. User renews
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760064664489', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:04.303Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3361-2060-7612-01550', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:56:03.854Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-2060-7612-01550'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:04.303Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3361-2060-7612-01550', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:56:03.854Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-2060-7612-01550'}]}
                                 )
         change_plan_a = TestScenario(# 2. User changes to 3-month plan
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760064707992', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'nbcpbihedkkbpihikkahjhhn.AO-J1OzYWzZdp7VGTVIrZH_WBoLTIBlRN8F_LB5Pu3DK0Hk4GtZzcZzS6tRsVLBLUNH19SxsI6Yq4DFMvyh-SHGT35BXUPg_jufa03is3zDblMMA_FWSwQ4', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:47.820Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3346-9218-7706-30541', 'linkedPurchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:56:07.125Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3346-9218-7706-30541'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:47.820Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3346-9218-7706-30541', 'linkedPurchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:56:07.125Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3346-9218-7706-30541'}]}
                                      )
         change_plan_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760064712021', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:04.303Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3361-2060-7612-01550', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:51:47.692Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-2060-7612-01550'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:04.303Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3361-2060-7612-01550', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T02:51:47.692Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-2060-7612-01550'}]}
         )
         renew = TestScenario(# 3. User renews
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065012245', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'nbcpbihedkkbpihikkahjhhn.AO-J1OzYWzZdp7VGTVIrZH_WBoLTIBlRN8F_LB5Pu3DK0Hk4GtZzcZzS6tRsVLBLUNH19SxsI6Yq4DFMvyh-SHGT35BXUPg_jufa03is3zDblMMA_FWSwQ4', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:47.820Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3346-9218-7706-30541..0', 'linkedPurchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:06:07.125Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3346-9218-7706-30541..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T02:51:47.820Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3346-9218-7706-30541..0', 'linkedPurchaseToken': 'djmaggipjlbmnncfpnaiecgp.AO-J1OzsodQ6LAqNSpZq4F8pvQCko4BhEvKfI8x4JU95p3v0lVVEIis2J-L8WwifcHwYGuCl0fZ4Tjby9Cyig9R5NUYVGqq156Gezco_-Dbw-pyHAZWVM3E', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:06:07.125Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3346-9218-7706-30541..0'}]}
                              )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         _ = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4270,29 +4417,49 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. User enters grace period as they fail to renew
         4. User renews, exiting grace period
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065659150', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:39.032Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3361-4036-2635-52589', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:12:38.652Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-4036-2635-52589'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:39.032Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3361-4036-2635-52589', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:12:38.652Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-4036-2635-52589'}]}
                                 )
         change_plan_a = TestScenario(# 2. User changes to 3-month plan
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065678442', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'cmmdicdefdehlffhmchedffo.AO-J1OwdBoWT8t_cCjOY_aa1RcIG6QK31BNBXtXtrNIAqpDQg9w_po6fRIv1vqYPxQFXsay8LjarIwmtamkt4U8moGkk-oq5yLXOUbH8yzpt2JoXhqD9C_U', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-6442-0359-63641', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:12:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-6442-0359-63641', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:12:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641'}]}
                                    )
         change_plan_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065680270', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:39.032Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3361-4036-2635-52589', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:07:58.101Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-4036-2635-52589'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:39.032Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3361-4036-2635-52589', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:07:58.101Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3361-4036-2635-52589'}]}
         )
         grace = TestScenario(# 3. User enters grace period as they fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065966693', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'cmmdicdefdehlffhmchedffo.AO-J1OwdBoWT8t_cCjOY_aa1RcIG6QK31BNBXtXtrNIAqpDQg9w_po6fRIv1vqYPxQFXsay8LjarIwmtamkt4U8moGkk-oq5yLXOUbH8yzpt2JoXhqD9C_U', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3307-6442-0359-63641..0', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:17:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3307-6442-0359-63641..0', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:17:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641'}]}
                              )
         renew = TestScenario(# 4. User renews, exiting grace period
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760065984697', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'cmmdicdefdehlffhmchedffo.AO-J1OwdBoWT8t_cCjOY_aa1RcIG6QK31BNBXtXtrNIAqpDQg9w_po6fRIv1vqYPxQFXsay8LjarIwmtamkt4U8moGkk-oq5yLXOUbH8yzpt2JoXhqD9C_U', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-6442-0359-63641..0', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:22:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:07:58.213Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-6442-0359-63641..0', 'linkedPurchaseToken': 'cgebhhmdboacddnnibmcmdae.AO-J1Owku1Fiw2R78U5kCf3i0GjH5BtuPn3H6d3KPmbIkUiLFRMgHbxv2YLyFNshn90hQzIf2LGnXfHa_dd3YV7qIyIjrWrvwqeIwaEvtMJvV-WtYmVckSE', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:22:41.697Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-6442-0359-63641..0'}]}
                              )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         _ = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4348,33 +4515,57 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User enters account hold as they continue to fail to renew
         5. User renews, exiting account hold
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760066883333', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:03.223Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3360-4209-1350-91491', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:33:02.513Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3360-4209-1350-91491'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:03.223Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3360-4209-1350-91491', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:33:02.513Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3360-4209-1350-91491'}]}
                                 )
         change_plan_a = TestScenario(# 2. User changes to 3-month plan
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760066932029', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'dilmafpdglapmhabknlhjgje.AO-J1OxX-ApsyARxtSAGIzIXOlhvpK6OCxjuqC5DJzPrO51Os6gHNZq3gPgMaaZc-dsJ-QwYj3oa4PP49HT-ZXoptya257BXC7ggHtIbdB7fnLXatIkETws', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-9037-2688-17153', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:33:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-9037-2688-17153', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:33:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
                                      )
         change_plan_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760066934397', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:03.223Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3360-4209-1350-91491', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:28:51.636Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3360-4209-1350-91491'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:03.223Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3360-4209-1350-91491', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:28:51.636Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3360-4209-1350-91491'}]}
         )
         grace = TestScenario(# 3. User enters grace period as they fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760067219187', 'subscriptionNotification': {'version': '1.0', 'notificationType': 6, 'purchaseToken': 'dilmafpdglapmhabknlhjgje.AO-J1OxX-ApsyARxtSAGIzIXOlhvpK6OCxjuqC5DJzPrO51Os6gHNZq3gPgMaaZc-dsJ-QwYj3oa4PP49HT-ZXoptya257BXC7ggHtIbdB7fnLXatIkETws', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:38:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:38:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
                              )
         hold = TestScenario(# 4. User enters account hold as they continue to fail to renew
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760067515427', 'subscriptionNotification': {'version': '1.0', 'notificationType': 5, 'purchaseToken': 'dilmafpdglapmhabknlhjgje.AO-J1OxX-ApsyARxtSAGIzIXOlhvpK6OCxjuqC5DJzPrO51Os6gHNZq3gPgMaaZc-dsJ-QwYj3oa4PP49HT-ZXoptya257BXC7ggHtIbdB7fnLXatIkETws', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:38:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ON_HOLD', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:38:04.239Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153'}]}
                             )
         renew = TestScenario(# 5. User renews, exiting account hold
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760067523842', 'subscriptionNotification': {'version': '1.0', 'notificationType': 1, 'purchaseToken': 'dilmafpdglapmhabknlhjgje.AO-J1OxX-ApsyARxtSAGIzIXOlhvpK6OCxjuqC5DJzPrO51Os6gHNZq3gPgMaaZc-dsJ-QwYj3oa4PP49HT-ZXoptya257BXC7ggHtIbdB7fnLXatIkETws', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:48:43.405Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:28:51.780Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3385-9037-2688-17153..0', 'linkedPurchaseToken': 'fmendicbhbajfhkpimcddflh.AO-J1Ow-7gobZJ1nV4R0ou7ItWlVGHJ_6LKU98IeiVYWlgYwF5t7e0Fw8B5MfLjHes7GzqCIUF8xjYw8q7A7vxz7JSKfso_ZlBF9EiX1XW6wRqeOt1lxFIg', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:48:43.405Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3385-9037-2688-17153..0'}]}
                              )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         _ = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4442,33 +4633,57 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User renews
         """
 
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068190568', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:49:50.459Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3380-4949-2236-27006', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:50.029Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3380-4949-2236-27006'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:49:50.459Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3380-4949-2236-27006', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:50.029Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3380-4949-2236-27006'}]}
                                 )
         change_plan_a = TestScenario(# 2. User changes to 3-month plan
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068218921', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:50:18.696Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-0514-1298-32110', 'linkedPurchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:54.238Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-0514-1298-32110'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:50:18.696Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3307-0514-1298-32110', 'linkedPurchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:54.238Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-0514-1298-32110'}]}
                                      )
         change_plan_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068221351', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:49:50.459Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3380-4949-2236-27006', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:50:18.593Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3380-4949-2236-27006'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:49:50.459Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3380-4949-2236-27006', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:50:18.593Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3380-4949-2236-27006'}]}
         )
         change_plan_back_a = TestScenario(# 3. User changes to 1-month plan
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068282443', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'ndpndadhkkmikonjoplconhp.AO-J1OzO9SK-_SBR9g-TCmf6CodhY-D57xpbXWFbGSp90W49E04JmmJNkjTAYfJXj1C7p6nfo7iHtBTU9SPoG2ov0CCU5b9URNQZfkuozZzdsYWnCe5GFps', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:51:22.253Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3306-9365-6055-58193', 'linkedPurchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:59.698Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3306-9365-6055-58193'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:51:22.253Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3306-9365-6055-58193', 'linkedPurchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:54:59.698Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3306-9365-6055-58193'}]}
                                           )
         change_plan_back_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068283977', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:50:18.696Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3307-0514-1298-32110', 'linkedPurchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:51:22.124Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-0514-1298-32110'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:50:18.696Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3307-0514-1298-32110', 'linkedPurchaseToken': 'akknlgeihdpojligdpliahkd.AO-J1OylF_FKqn-mgcFGEP0uPJ3m81pAyz65LNRR2FA7zTmxDLqhzyqAFVlWI_kZ9UKJ6WVTSgCOL8VuyRYw3zjBD_WicdU00dywAxNEvA8RxOEBgt8_A4c', 'canceledStateContext': {'replacementCancellation': {}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:51:22.124Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '84', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-3-months', 'offerTags': ['three-months']}, 'latestSuccessfulOrderId': 'GPA.3307-0514-1298-32110'}]}
         )
         renew = TestScenario(# 4. User renews
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760068505712', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'ndpndadhkkmikonjoplconhp.AO-J1OzO9SK-_SBR9g-TCmf6CodhY-D57xpbXWFbGSp90W49E04JmmJNkjTAYfJXj1C7p6nfo7iHtBTU9SPoG2ov0CCU5b9URNQZfkuozZzdsYWnCe5GFps', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:51:22.253Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3306-9365-6055-58193..0', 'linkedPurchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:59:59.698Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3306-9365-6055-58193..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T03:51:22.253Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3306-9365-6055-58193..0', 'linkedPurchaseToken': 'ghmgjhcnkdnbhloomlbkdnkn.AO-J1OwyF695Pxv_uwqpulIkOeL5B21_Q1qKNGqVrD7-_Sm4_dkN9pcpRQC1WSlyT32YweRIbuoLIJzJ2VhfbY9VUGyD801SZSiUmRUf62WF1MKu4PzSj-Q', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T03:59:59.698Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3306-9365-6055-58193..0'}]}
                              )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         _ = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4538,21 +4753,33 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(# 1. User purchases 1-month subscription
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760069459190', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'aciongiofnlcagplnndcfhnf.AO-J1OyRJ1NXBfFEzDi14GkTdi6d1iJ5XudWH7CY5pMziU2IExCSZHIkc0LXnsqvFr6qxdlSOjuwm2UpaJ4_ev47EPJS3ndl2v_uiHhnztkzLNhE1LUMArA', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:15:58.601Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:15:58.601Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
                                 )
         refund_a = TestScenario(# 2. Developer refunds subscription (removing entitlement)
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760069492722', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'aciongiofnlcagplnndcfhnf.AO-J1OyRJ1NXBfFEzDi14GkTdi6d1iJ5XudWH7CY5pMziU2IExCSZHIkc0LXnsqvFr6qxdlSOjuwm2UpaJ4_ev47EPJS3ndl2v_uiHhnztkzLNhE1LUMArA', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T04:11:32.330Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:11:32.330Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T04:11:32.330Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:11:32.330Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
                                 )
         refund_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760069494987', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'aciongiofnlcagplnndcfhnf.AO-J1OyRJ1NXBfFEzDi14GkTdi6d1iJ5XudWH7CY5pMziU2IExCSZHIkc0LXnsqvFr6qxdlSOjuwm2UpaJ4_ev47EPJS3ndl2v_uiHhnztkzLNhE1LUMArA', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T04:11:32.330Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:11:32.330Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-10T04:10:59.084Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3340-2850-4674-78454', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-10T04:11:32.330Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-10T04:11:32.330Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3340-2850-4674-78454'}]}
         )
 
         assert_clean_state(ctx)
-        user_ctx = TestUserCtx()
         """1. User purchases 1-month subscription"""
         tx_subscribe, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded = test_make_purchase_and_claim_payment(purchase=purchase, plan=base.ProPlan.OneMonth, user_ctx=user_ctx, ctx=ctx)
 
@@ -4596,21 +4823,38 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         1. User purchases 1-month subscription, but does not redeem it.
         2. Developer refunds subscription (removing entitlement)
         """
+        user_ctx = TestUserCtx()
         purchase = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580587012', 'subscriptionNotification': {'version': '1.0', 'notificationType': 4, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:14:46.394Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_PENDING',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:14:46.394Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923'}]}
         )
         renew = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580615882', 'subscriptionNotification': {'version': '1.0', 'notificationType': 2, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:15:09.687Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_ACTIVE', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:15:09.687Z', 'autoRenewingPlan': {'autoRenewEnabled': True, 'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
         )
         refund_a = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580644292', 'subscriptionNotification': {'version': '1.0', 'notificationType': 12, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
         )
         refund_b = TestScenario(
 rtdn_event={'version': '1.0', 'packageName': 'network.loki.messenger', 'eventTimeMillis': '1760580647465', 'subscriptionNotification': {'version': '1.0', 'notificationType': 13, 'purchaseToken': 'pnogbppobfdciojgdfgnmeal.AO-J1OxovjqCbzOzNldcpyo1pj4Equw02PLT12L4S1YoQjj6jzPOuYO7AoLrIBAIPS3tAUqHuST716b0a80dlpRriOeMpr6eOxk9aiXpokO2CYOZ7bSOPgs', 'subscriptionId': 'session_pro'}},
-current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', 'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
+current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '2025-10-16T02:09:46.878Z', 'regionCode': 'AU', 'subscriptionState': 'SUBSCRIPTION_STATE_EXPIRED', 'latestOrderId': 'GPA.3396-6433-5991-21923..0', 'canceledStateContext': {'userInitiatedCancellation': {'cancelTime': '2025-10-16T02:10:44.089Z'}}, 'testPurchase': {}, 'acknowledgementState': 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+  'externalAccountIdentifiers': {
+    'obfuscatedExternalAccountId': f'{user_ctx.google_obfuscated_account_id.hex()}'
+  },
+  'lineItems': [{'productId': 'session_pro', 'expiryTime': '2025-10-16T02:10:44.089Z', 'autoRenewingPlan': {'recurringPrice': {'currencyCode': 'AUD', 'units': '16', 'nanos': 990000000}}, 'offerDetails': {'basePlanId': 'session-pro-1-month', 'offerTags': ['one-month']}, 'latestSuccessfulOrderId': 'GPA.3396-6433-5991-21923..0'}]}
         )
         assert_clean_state(ctx)
         """1. User purchases 1-month subscription, but does not redeem it."""
