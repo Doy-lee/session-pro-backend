@@ -384,6 +384,25 @@ def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sql
     if result:
         err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 
+def require_obfuscated_external_account_id(tx_event: SubscriptionPlanEventTransaction, err: base.ErrorSink) -> bytes:
+    # NOTE: Parse the obfuscated_external_account_id into bytes
+    result: bytes = b''
+    if tx_event.obfuscated_external_account_id == None:
+        err.msg_list.append(f'Google user submitted a payment and did not set a setObfuscatedAccountId, payment will not be attributed to the user')
+    else:
+        obfuscated_external_account_id_hex = tx_event.obfuscated_external_account_id
+        if obfuscated_external_account_id_hex.startswith('0x'):
+            obfuscated_external_account_id_hex = obfuscated_external_account_id_hex[2:]
+
+        if len(obfuscated_external_account_id_hex) != 64:
+            err.msg_list.append(f'Google user submitted a payment that was not a 32 byte hash, received: {len(result)/2}b')
+
+        try:
+            result = bytes.fromhex(obfuscated_external_account_id_hex)
+        except Exception:
+            err.msg_list.append(f'Google user submitted a payment with a obfuscated ID that could not be parsed from hex into bytes')
+    return result
+
 def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, tx: base.SQLTransaction, err: base.ErrorSink):
     match tx_event.notification:
         case SubscriptionNotificationType.PURCHASED:
@@ -399,45 +418,48 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                 if tx_event.purchase_acknowledged == SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
                     err.msg_list.append(f'Latest subscription state is already acknowledged')
                 else:
-                    # NOTE: Acknowledge the payment
                     assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
                     assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
 
-                    if log.getEffectiveLevel() <= logging.INFO:
-                        expiry:        str = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
-                        unredeemed:    str = base.readable_unix_ts_ms(tx_event.event_ts_ms)
-                        payment_label: str = backend.payment_provider_tx_log_label(tx_payment)
-                        log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={tx_event.linked_purchase_token}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
-
-                    # NOTE: If a linked token is in the payload, it means that the old token
-                    # needs to be voided first before continuing as the link token is the new
-                    # token allocated to the user.
-
-                    # NOTE: Revoke the old token
-                    if tx_event.linked_purchase_token is not None:
-                        # NOTE: For google, the only information we have about the previous order
-                        # is the purchase token. So we have to go and find the latest payment
-                        # valid for a purchase token and void that.
-                        _ = backend.add_google_revocation_tx(tx                   = tx,
-                                                             google_payment_token = tx_event.linked_purchase_token,
-                                                             revoke_unix_ts_ms    = tx_event.event_ts_ms,
-                                                             err                  = err)
-                    # NOTE: Register the payment
-                    backend.add_unredeemed_payment_tx(
-                        tx                                = tx,
-                        payment_tx                        = tx_payment,
-                        plan                              = tx_event.pro_plan,
-                        expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
-                        unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
-                        platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
-                        err                               = err,
-                    )
-
+                    obfuscated_external_account_id: bytes = require_obfuscated_external_account_id(tx_event, err)
                     if not err.has():
-                        set_purchase_grace_period_duration(tx_payment               = tx_payment,
-                                                           tx                       = tx,
-                                                           grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
-                                                           err                      = err)
+                        # NOTE: Acknowledge the payment
+                        if log.getEffectiveLevel() <= logging.INFO:
+                            expiry:        str = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
+                            unredeemed:    str = base.readable_unix_ts_ms(tx_event.event_ts_ms)
+                            payment_label: str = backend.payment_provider_tx_log_label(tx_payment)
+                            log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={tx_event.linked_purchase_token}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
+
+                        # NOTE: If a linked token is in the payload, it means that the old token
+                        # needs to be voided first before continuing as the link token is the new
+                        # token allocated to the user.
+
+                        # NOTE: Revoke the old token
+                        if tx_event.linked_purchase_token is not None:
+                            # NOTE: For google, the only information we have about the previous order
+                            # is the purchase token. So we have to go and find the latest payment
+                            # valid for a purchase token and void that.
+                            _ = backend.add_google_revocation_tx(tx                   = tx,
+                                                                 google_payment_token = tx_event.linked_purchase_token,
+                                                                 revoke_unix_ts_ms    = tx_event.event_ts_ms,
+                                                                 err                  = err)
+                        # NOTE: Register the payment
+                        backend.add_unredeemed_payment_tx(
+                            tx                                = tx,
+                            payment_tx                        = tx_payment,
+                            plan                              = tx_event.pro_plan,
+                            expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
+                            unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
+                            platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
+                            platform_obfuscated_account_id    = obfuscated_external_account_id,
+                            err                               = err,
+                        )
+
+                        if not err.has():
+                            set_purchase_grace_period_duration(tx_payment               = tx_payment,
+                                                               tx                       = tx,
+                                                               grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
+                                                               err                      = err)
 
         case SubscriptionNotificationType.IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2State.IN_GRACE_PERIOD:
@@ -464,22 +486,25 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     payment_label = backend.payment_provider_tx_log_label(tx_payment)
                     log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, plan={tx_event.pro_plan.name}, unredeemed={unredeemed}, expiry={expiry})')
 
-                assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
-                assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
-                backend.add_unredeemed_payment_tx(
-                    tx                                = tx,
-                    payment_tx                        = tx_payment,
-                    plan                              = tx_event.pro_plan,
-                    expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
-                    unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
-                    platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
-                    err                               = err)
-
+                obfuscated_external_account_id = require_obfuscated_external_account_id(tx_event, err)
                 if not err.has():
-                    set_purchase_grace_period_duration(tx_payment               = tx_payment,
-                                                       tx                       = tx,
-                                                       grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
-                                                       err                      = err)
+                    assert tx_event.pro_plan != ProPlan.Nil, "Plan was parsed into a valid enum when extracting data from the notification, should not be nil here"
+                    assert len(tx_payment.google_order_id) > 0 and len(tx_payment.google_payment_token) > 0
+                    backend.add_unredeemed_payment_tx(
+                        tx                                = tx,
+                        payment_tx                        = tx_payment,
+                        plan                              = tx_event.pro_plan,
+                        expiry_unix_ts_ms                 = tx_event.expiry_time.unix_milliseconds,
+                        unredeemed_unix_ts_ms             = tx_event.event_ts_ms,
+                        platform_refund_expiry_unix_ts_ms = tx_event.event_ts_ms + platform_google_api.refund_deadline_duration_ms,
+                        platform_obfuscated_account_id    = obfuscated_external_account_id,
+                        err                               = err)
+
+                    if not err.has():
+                        set_purchase_grace_period_duration(tx_payment               = tx_payment,
+                                                           tx                       = tx,
+                                                           grace_period_duration_ms = base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS,
+                                                           err                      = err)
 
         case SubscriptionNotificationType.CANCELED:
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""

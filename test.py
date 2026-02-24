@@ -200,13 +200,14 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
-        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                       payment_tx=payment_tx,
-                                       plan=it.plan,
-                                       unredeemed_unix_ts_ms=unix_ts_ms,
-                                       expiry_unix_ts_ms=it.expiry_unix_ts_ms,
-                                       platform_refund_expiry_unix_ts_ms=0,
-                                       err=err)
+        backend.add_unredeemed_payment(sql_conn                          = db.sql_conn,
+                                       payment_tx                        = payment_tx,
+                                       plan                              = it.plan,
+                                       unredeemed_unix_ts_ms             = unix_ts_ms,
+                                       expiry_unix_ts_ms                 = it.expiry_unix_ts_ms,
+                                       platform_refund_expiry_unix_ts_ms = 0,
+                                       platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
+                                       err                               = err)
         assert len(err.msg_list) == 0
 
         unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(db.sql_conn)
@@ -408,6 +409,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
                                        expiry_unix_ts_ms                 = it.expiry_unix_ts_ms,
                                        platform_refund_expiry_unix_ts_ms = 0,
+                                       platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(auto_redeem_user_master_key.verify_key),
                                        err                               = err)
         assert len(err.msg_list) == 0
 
@@ -519,13 +521,14 @@ def test_server_add_payment_flow(monkeypatch):
     payment_tx.provider             = base.PaymentProvider.GooglePlayStore
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                   payment_tx=payment_tx,
-                                   plan=base.ProPlan.OneMonth,
-                                   unredeemed_unix_ts_ms=unix_ts_ms,
-                                   expiry_unix_ts_ms=next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 90) * 1000),
-                                   platform_refund_expiry_unix_ts_ms=0,
-                                   err=err)
+    backend.add_unredeemed_payment(sql_conn                          = db.sql_conn,
+                                   payment_tx                        = payment_tx,
+                                   plan                              = base.ProPlan.OneMonth,
+                                   unredeemed_unix_ts_ms             = unix_ts_ms,
+                                   expiry_unix_ts_ms                 = next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 90) * 1000),
+                                   platform_refund_expiry_unix_ts_ms = 0,
+                                   platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
+                                   err                               = err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
 
     if 1: # Grab the pro status before anything has happened
@@ -719,13 +722,14 @@ def test_server_add_payment_flow(monkeypatch):
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
         new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
-        backend.add_unredeemed_payment(sql_conn=db.sql_conn,
-                                       payment_tx=new_payment_tx,
-                                       plan=base.ProPlan.OneMonth,
-                                       unredeemed_unix_ts_ms=unix_ts_ms,
-                                       expiry_unix_ts_ms=unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
-                                       platform_refund_expiry_unix_ts_ms=0,
-                                       err=err)
+        backend.add_unredeemed_payment(sql_conn                          = db.sql_conn,
+                                       payment_tx                        = new_payment_tx,
+                                       plan                              = base.ProPlan.OneMonth,
+                                       unredeemed_unix_ts_ms             = unix_ts_ms,
+                                       expiry_unix_ts_ms                 = unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                       platform_refund_expiry_unix_ts_ms = 0,
+                                       platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
+                                       err                               = err)
 
         new_add_pro_payment_tx.provider             = new_payment_tx.provider
         new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
@@ -798,10 +802,10 @@ def test_server_add_payment_flow(monkeypatch):
     curr_revocation_ticket: int = 0
     if 1: # Get the revocation list
         request_body={'version': 0, 'ticket':  curr_revocation_ticket}
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
-                                                  request_body=request_body)
+        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                  shared_key      = shared_key,
+                                                  endpoint        = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                  request_body    = request_body)
 
         # POST and get response
         response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)

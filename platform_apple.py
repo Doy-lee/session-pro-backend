@@ -318,6 +318,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                                                       unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                       platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
                                                       expiry_unix_ts_ms                 = expiry_unix_ts_ms,
+                                                      platform_obfuscated_account_id    = '', # TODO grab from payload
                                                       err                               = err)
 
                 if not err.has():
@@ -446,6 +447,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                                                               expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                                               unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                               platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
+                                                              platform_obfuscated_account_id    = '', # TODO grab from payload
                                                               err                               = err)
 
                         # NOTE: Update grace period, note we do not update the auto-renewing flag
@@ -533,6 +535,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                                                       expiry_unix_ts_ms                 = tx.expiresDate,
                                                       unredeemed_unix_ts_ms             = tx.purchaseDate,
                                                       platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
+                                                      platform_obfuscated_account_id    = '', # TODO grab from payload
                                                       err                               = err)
 
                 elif decoded_notification.body.subtype == AppleSubtype.DOWNGRADE:
@@ -577,6 +580,7 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
                                                           expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                                           unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
                                                           platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
+                                                          platform_obfuscated_account_id    = '', # TODO grab from payload
                                                           err                               = err)
 
                     if not err.has():

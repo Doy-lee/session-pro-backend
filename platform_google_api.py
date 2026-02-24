@@ -458,14 +458,15 @@ def parse_valid_order_id(details: SubscriptionV2Data, err: ErrorSink) -> str:
 
 @dataclasses.dataclass
 class SubscriptionPlanEventTransaction:
-    base_plan_id:          str             # ID of the Google subscription's base plan. Not the product_id.
-    pro_plan:              ProPlan         # Session Pro plan parsed from the `base_plan_id`
-    expiry_time:           GoogleTimestamp # Time at which the subscription expires
-    event_ts_ms:           int             # Timestamp in ms when the event occured
-    linked_purchase_token: str | None
-    notification:          SubscriptionNotificationType
-    subscription_state:    SubscriptionsV2State
-    purchase_acknowledged: SubscriptionsV2AcknowledgementState
+    base_plan_id:                   str             # ID of the Google subscription's base plan. Not the product_id.
+    pro_plan:                       ProPlan         # Session Pro plan parsed from the `base_plan_id`
+    expiry_time:                    GoogleTimestamp # Time at which the subscription expires
+    event_ts_ms:                    int             # Timestamp in ms when the event occured
+    linked_purchase_token:          str | None
+    notification:                   SubscriptionNotificationType
+    subscription_state:             SubscriptionsV2State
+    purchase_acknowledged:          SubscriptionsV2AcknowledgementState
+    obfuscated_external_account_id: str | None
 
 def parse_subscription_purchase_tx(purchase_token: str, details: SubscriptionV2Data, err: ErrorSink):
     order_id = parse_valid_order_id(details, err)
@@ -493,14 +494,15 @@ def pro_plan_from_base_plan_id(base_plan_id: str, err: ErrorSink) -> ProPlan:
 def parse_subscription_plan_event_tx(details: SubscriptionV2Data, event_ts_ms: int, notification: SubscriptionNotificationType, err: ErrorSink) -> SubscriptionPlanEventTransaction:
     line_item: SubscriptionV2DataLineItem = parse_line_item(details)
     result = SubscriptionPlanEventTransaction(
-        base_plan_id          = line_item.offer_details.base_plan_id,
-        expiry_time           = line_item.expiry_time,
-        pro_plan              = pro_plan_from_base_plan_id(line_item.offer_details.base_plan_id, err),
-        event_ts_ms           = event_ts_ms,
-        notification          = notification,
-        subscription_state    = details.subscription_state,
-        linked_purchase_token = details.linked_purchase_token,
-        purchase_acknowledged = details.acknowledgement_state,
+        base_plan_id                   = line_item.offer_details.base_plan_id,
+        expiry_time                    = line_item.expiry_time,
+        pro_plan                       = pro_plan_from_base_plan_id(line_item.offer_details.base_plan_id, err),
+        event_ts_ms                    = event_ts_ms,
+        notification                   = notification,
+        subscription_state             = details.subscription_state,
+        linked_purchase_token          = details.linked_purchase_token,
+        purchase_acknowledged          = details.acknowledgement_state,
+        obfuscated_external_account_id = details.obfuscated_external_account_id
     )
     return result
 

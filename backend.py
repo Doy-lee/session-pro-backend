@@ -177,7 +177,13 @@ SQL_TABLE_PAYMENTS_FIELD: list[SQLField] = [
   # Our convention is if the request has not been set, this value should be set to 0. If a refund is
   # declined on iOS we _do_ get notified of this and the backend will try to set this value back to
   # 0
-  SQLField('refund_requested_unix_ts_ms',         'INTEGER NOT NULL'),
+  SQLField('refund_requested_unix_ts_ms',       'INTEGER NOT NULL'),
+
+  # Obfuscated account ID for Google Play subscriptions. Calculated as sha256(master_pkey)
+  SQLField('google_obfuscated_account_id',      'BLOB NOT NULL'),
+
+  # App account token for Apple subscriptions
+  SQLField('apple_app_account_token',           'STRING NOT NULL'),
 ]
 
 SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # master_pkey
@@ -197,6 +203,8 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
                                                             str | None,   # google_payment_token
                                                             str | None,   # google_order_id
                                                             int,          # refund_requested_unix_ts_ms
+                                                            bytes,        # google_obfuscated_account_id
+                                                            str,          # apple_app_account_token
                                                             ]
 
 AddRevocationIterator:               typing.TypeAlias = tuple[int,          # (row) id
@@ -254,6 +262,8 @@ class PaymentRow:
     google_payment_token:               str                  = ''
     google_order_id:                    str                  = ''
     refund_requested_unix_ts_ms:        int                  = 0
+    google_obfuscated_account_id:       bytes                = b''
+    apple_app_account_token:            str                  = ''
 
 @dataclasses.dataclass
 class UserRow:
@@ -376,6 +386,10 @@ class OpenDBAtPath:
         self.sql_conn.close()
         return False
 
+def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey):
+    result = hashlib.sha256(bytes(pkey)).digest()
+    return result
+
 def payment_provider_tx_log_label(tx: base.PaymentProviderTransaction):
     result = f'{tx.provider.name}, apple (orig/tx/web)=({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google=({tx.google_payment_token}/{tx.google_order_id})'
     return result
@@ -453,6 +467,8 @@ def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> Payment
     result.google_payment_token               = row[15] if row[15] else ''
     result.google_order_id                    = row[16] if row[16] else ''
     result.refund_requested_unix_ts_ms        = row[17]
+    result.google_obfuscated_account_id       = row[18] if row[18] else b''
+    result.apple_app_account_token            = row[19] if row[19] else ''
     return result
 
 def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
@@ -823,7 +839,7 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
             _ = tx.cursor.execute('''PRAGMA journal_mode=WAL''')
 
             # NOTE: Version migration
-            target_db_version = 6
+            target_db_version = 7
             if 1:
                 db_version: int = tx.cursor.execute('PRAGMA user_version').fetchone()[0]  # pyright: ignore[reportAny]
 
@@ -891,12 +907,21 @@ def setup_db(path: str, uri: bool, err: base.ErrorSink, backend_key: nacl.signin
                     ''')
                     _ = tx.cursor.execute('SELECT master_pkey FROM users')
                     for row in tx.cursor.fetchall():
-                        master_pkey: bytes = row[0]
-                        google_obfuscated_account_id: bytes = hashlib.sha256(master_pkey).digest()
+                        master_pkey: bytes                  = row[0]
+                        google_obfuscated_account_id: bytes = google_obfuscated_account_id_from_master_pkey(nacl.signing.VerifyKey(master_pkey))
                         _ = tx.cursor.execute(
                             'UPDATE users SET google_obfuscated_account_id = ? WHERE master_pkey = ?',
                             (google_obfuscated_account_id, master_pkey)
                         )
+                    db_version += 1 # NOTE: Bump the version
+                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+
+                if db_version == 6:
+                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                    _ = tx.cursor.executescript('''
+                        ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X'';
+                        ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT '';
+                    ''')
                     db_version += 1 # NOTE: Bump the version
                     _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
 
@@ -1557,6 +1582,7 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                               expiry_unix_ts_ms:                 int,
                               unredeemed_unix_ts_ms:             int,
                               platform_refund_expiry_unix_ts_ms: int,
+                              platform_obfuscated_account_id:    bytes | str,
                               err:                               base.ErrorSink):
 
     if log.getEffectiveLevel() <= logging.INFO:
@@ -1569,6 +1595,9 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
 
     assert tx.cursor is not None
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        assert isinstance(platform_obfuscated_account_id, bytes)
+        assert len(platform_obfuscated_account_id) == 32
+
         # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
         # payments table
         _ = tx.cursor.execute(f'''
@@ -1589,7 +1618,9 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                            'grace_period_duration_ms',
                            'unredeemed_unix_ts_ms',
                            'auto_renewing',
-                           'refund_requested_unix_ts_ms']
+                           'refund_requested_unix_ts_ms',
+                           'google_obfuscated_account_id',
+                           'apple_app_account_token']
             stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
             stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
@@ -1603,13 +1634,16 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   int(base.PaymentStatus.Unredeemed.value),
                   expiry_unix_ts_ms,
                   platform_refund_expiry_unix_ts_ms,
-                  0, # non-null grace period
+                  0,                              # non-null grace period
                   unredeemed_unix_ts_ms,
-                  1, # auto_renewing is enabled by default until notified otherwise by Google
-                  0, # refund request unix ts ms
+                  1,                              # auto_renewing is enabled by default until notified otherwise by Google
+                  0,                              # refund request unix ts ms
+                  platform_obfuscated_account_id, # google_obfuscated_account_id
+                  '',                             # apple_app_account_token - empty for google
                   ))
 
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+        assert isinstance(platform_obfuscated_account_id, str)
         # NOTE: Insert into the table, IFF, the apple payment doesn't already exist somewhere else.
         #
         # For Apple each apple_tx_id is always unique.
@@ -1638,7 +1672,9 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                                       'grace_period_duration_ms',
                                       'unredeemed_unix_ts_ms',
                                       'auto_renewing',
-                                      'refund_requested_unix_ts_ms']
+                                      'refund_requested_unix_ts_ms',
+                                      'google_obfuscated_account_id',
+                                      'apple_app_account_token']
             stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
             stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
 
@@ -1653,10 +1689,12 @@ def add_unredeemed_payment_tx(tx:                                base.SQLTransac
                   int(base.PaymentStatus.Unredeemed.value),
                   expiry_unix_ts_ms,
                   platform_refund_expiry_unix_ts_ms,
-                  0, # non-null grace period
+                  0,                              # non-null grace period
                   unredeemed_unix_ts_ms,
-                  1, # auto_renewing is enabled by default until notified otherwise by Apple
-                  0, # refund request unix ts ms
+                  1,                              # auto_renewing is enabled by default until notified otherwise by Apple
+                  0,                              # refund request unix ts ms
+                  b'',                            # google_obfuscated_account_id - empty for apple
+                  platform_obfuscated_account_id, # apple_app_account_token
                   ))
 
     # NOTE: Find the latest master pkey associated with the common payment identifier (google payment
@@ -1759,16 +1797,18 @@ def add_unredeemed_payment(sql_conn:                          sqlite3.Connection
                            expiry_unix_ts_ms:                 int,
                            unredeemed_unix_ts_ms:             int,
                            platform_refund_expiry_unix_ts_ms: int,
+                           platform_obfuscated_account_id:    bytes | str,
                            err:                               base.ErrorSink):
     with base.SQLTransaction(sql_conn) as tx:
         assert tx.cursor is not None
-        add_unredeemed_payment_tx(tx=tx,
-                                  payment_tx=payment_tx,
-                                  plan=plan,
-                                  expiry_unix_ts_ms=expiry_unix_ts_ms,
-                                  unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
-                                  platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_ts_ms,
-                                  err=err)
+        add_unredeemed_payment_tx(tx                                = tx,
+                                  payment_tx                        = payment_tx,
+                                  plan                              = plan,
+                                  expiry_unix_ts_ms                 = expiry_unix_ts_ms,
+                                  unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
+                                  platform_refund_expiry_unix_ts_ms = platform_refund_expiry_unix_ts_ms,
+                                  platform_obfuscated_account_id    = platform_obfuscated_account_id,
+                                  err                               = err)
 
 def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     result:            AllocatedGenID = AllocatedGenID()
@@ -1812,8 +1852,9 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: base.SQLTransaction, ma
               lookup.best_grace_duration_ms,
               lookup.best_auto_renewing,
               lookup.best_refund_requested_unix_ts_ms,
-              hashlib.sha256(master_pkey_bytes).digest(),
-              ''))
+              google_obfuscated_account_id_from_master_pkey(master_pkey),
+              '' # TODO Calc the apple obfuscated account ID when we agree on how it's derived
+              ))
 
     return result
 
@@ -2000,11 +2041,21 @@ def add_pro_payment(sql_conn:            sqlite3.Connection,
         if not already_exists:
             THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION = True
             expiry_unix_ts_ms = redeemed_unix_ts_ms + (30 * 60 * 1000)
+
+            platform_obfuscated_account_id: bytes | str = b''
+            if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+                platform_obfuscated_account_id = google_obfuscated_account_id_from_master_pkey(master_pkey)
+            elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+                platform_obfuscated_account_id = '' # TODO: We have yet to determine how we are deriving this from the master pkey for apple as they use UUIDs
+            else:
+                assert False, "Invalid code path"
+
             add_unredeemed_payment(sql_conn                          = sql_conn,
                                    payment_tx                        = internal_payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
                                    unredeemed_unix_ts_ms             = redeemed_unix_ts_ms,
                                    platform_refund_expiry_unix_ts_ms = 0,
+                                   platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                    expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                    err                               = err)
 
