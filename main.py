@@ -630,15 +630,15 @@ def entry_point() -> flask.Flask:
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
     # NOTE: Open the DB (create tables if necessary)
-    db: backend.SetupDBResult = backend.setup_db(path=parsed_args.db_path, uri=parsed_args.db_path_is_uri, err=err, backend_key=backend_key)
+    db: backend.SetupDBResult = backend.setup_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
     if len(err.msg_list) > 0:
         log.error(f"{err.msg_list}")
         sys.exit(1)
 
     # NOTE: Sanity check dev mode
     if base.DEV_BACKEND_MODE:
-        assert db.sql_conn
-        runtime_row: backend.RuntimeRow = backend.get_runtime(db.sql_conn)
+        assert db.conn
+        runtime_row: backend.RuntimeRow = backend.get_runtime(db.conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
