@@ -89,3 +89,11 @@ CREATE TRIGGER increment_revocation_ticket_after_delete
     AFTER DELETE ON revocations
     FOR EACH ROW
     EXECUTE FUNCTION increment_revocation_ticket();
+
+-- Schema version tracking (used instead of SQLite PRAGMA user_version)
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL DEFAULT 0
+);
+
+-- Initialize version if not exists
+INSERT INTO schema_version (version) VALUES (0) ON CONFLICT DO NOTHING;

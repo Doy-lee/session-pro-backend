@@ -94,3 +94,17 @@ def is_postgres(engine: sqlalchemy.engine.Engine) -> bool:
 
 def is_sqlite(engine: sqlalchemy.engine.Engine) -> bool:
     return engine.dialect.name == 'sqlite'
+
+def get_db_version(conn: sqlalchemy.engine.Connection, engine: sqlalchemy.engine.Engine) -> int:
+    if is_postgres(engine):
+        row = conn.execute(sqlalchemy.text('SELECT version FROM schema_version LIMIT 1')).fetchone()
+        return row[0] if row else 0
+    else:
+        row = conn.execute(sqlalchemy.text('PRAGMA user_version')).fetchone()
+        return row[0] if row else 0
+
+def set_db_version(conn: sqlalchemy.engine.Connection, engine: sqlalchemy.engine.Engine, version: int) -> None:
+    if is_postgres(engine):
+        _ = conn.execute(sqlalchemy.text('UPDATE schema_version SET version = :v'), {'v': version})
+    else:
+        _ = conn.execute(sqlalchemy.text(f'PRAGMA user_version = {version}'))

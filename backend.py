@@ -583,137 +583,93 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
     result: SetupDBResult = SetupDBResult()
     result.path           = database_url
     try:
-        engine = db.create_engine(database_url)
+        engine      = db.create_engine(database_url)
         result.conn = engine.connect()
     except Exception as e:
-        err.msg_list.append(f'Failed to open/connect to DB at {path}: {e}')
+        err.msg_list.append(f'Failed to open/connect to DB at {database_url}: {e}')
         return result
 
     with db.transaction(result.conn) as tx:
-        schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.sql')
-        with open(schema_path, 'r') as f:
-            _ = tx.cursor.executescript(f.read())
-
-        assert tx.cursor is not None
-
         try:
-            _ = tx.cursor.execute('''PRAGMA journal_mode=WAL''')
+            # Determine schema file based on database type
+            if db.is_postgres(engine):
+                schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.pgsql')
+            else:
+                schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.sql')
+
+            # Execute schema file - split by semicolons for SQLAlchemy
+            with open(schema_path, 'r') as f:
+                schema_sql = f.read()
+
+            # Split and execute each statement
+            for statement in schema_sql.split(';'):
+                statement = statement.strip()
+                if statement:
+                    _ = tx.conn.execute(sqlalchemy.text(statement))
+            tx.conn.commit()
 
             # NOTE: Version migration
             target_db_version = 7
-            if 1:
-                db_version: int = tx.cursor.execute('PRAGMA user_version').fetchone()[0]  # pyright: ignore[reportAny]
+            db_version = db.get_db_version(tx.conn, engine)
 
-                # NOTE: v0 is the nil state, it means the DB has never been bootstrapped. All the
-                # tables will have been created with the latest schema so we teleport to the target
-                # version
-                if db_version == 0:
-                    db_version = target_db_version
-                    _          = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+            # NOTE: v0 is the nil state - DB never bootstrapped, teleport to target
+            if db_version == 0:
+                db_version = target_db_version
+                db.set_db_version(tx.conn, engine, db_version)
+                tx.conn.commit()
 
-                if db_version == 1:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        DROP TABLE user_errors;
-                        CREATE TABLE IF NOT EXISTS user_errors (
-                            payment_id       STRING  NOT NULL,
-                            payment_provider INTEGER NOT NULL,
-                            unix_ts_ms       INTEGER NOT NULL,
-                            UNIQUE(payment_id, payment_provider)
-                        );
-                    ''')
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
-
-                if db_version == 2:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        DROP TABLE google_notification_history;
-                        CREATE TABLE IF NOT EXISTS google_notification_history (
-                            message_id        INTEGER NOT NULL,
-                            handled           INTEGER NOT NULL,
-                            payload           TEXT,
-                            expiry_unix_ts_ms INTEGER NOT NULL
-                        );
-                    ''')
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
-
-                if db_version == 3:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        ALTER TABLE payments
-                        ADD COLUMN refund_request_unix_ts_ms INTEGER NOT NULL DEFAULT 0;
-
-                        ALTER TABLE users
-                        ADD COLUMN refund_request_unix_ts_ms INTEGER NOT NULL DEFAULT 0
-                    ''')
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
-
-                if db_version == 4:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        ALTER TABLE payments RENAME COLUMN refund_request_unix_ts_ms TO refund_requested_unix_ts_ms;
-                        ALTER TABLE users    RENAME COLUMN refund_request_unix_ts_ms TO refund_requested_unix_ts_ms;
-                    ''')
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
-
-                if db_version == 5:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X'';
-                        ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT '';
-                    ''')
-                    _ = tx.cursor.execute('SELECT master_pkey FROM users')
-                    for row in tx.cursor.fetchall():
-                        master_pkey: bytes                  = row[0]
+            if db_version == 5:
+                log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                if not db.is_postgres(engine):
+                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
+                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
+                    for row in tx.conn.execute(sqlalchemy.text('SELECT master_pkey FROM users')).fetchall():
+                        master_pkey: bytes = row[0]
                         google_obfuscated_account_id: bytes = google_obfuscated_account_id_from_master_pkey(nacl.signing.VerifyKey(master_pkey))
-                        _ = tx.cursor.execute(
-                            'UPDATE users SET google_obfuscated_account_id = ? WHERE master_pkey = ?',
-                            (google_obfuscated_account_id, master_pkey)
+                        _ = tx.conn.execute(
+                            sqlalchemy.text('UPDATE users SET google_obfuscated_account_id = :g WHERE master_pkey = :m'),
+                            {'g': google_obfuscated_account_id, 'm': master_pkey}
                         )
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+                db_version += 1
+                db.set_db_version(tx.conn, engine, db_version)
+                tx.conn.commit()
 
-                if db_version == 6:
-                    log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                    _ = tx.cursor.executescript('''
-                        ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X'';
-                        ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT '';
-                    ''')
-                    db_version += 1 # NOTE: Bump the version
-                    _           = tx.cursor.execute(f'PRAGMA user_version = {db_version}')
+            if db_version == 6:
+                log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                if not db.is_postgres(engine):
+                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
+                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
+                db_version += 1
+                db.set_db_version(tx.conn, engine, db_version)
+                tx.conn.commit()
 
+            # NOTE: Verify that the DB was migrated to the target version
+            assert db_version == target_db_version
 
-                # NOTE: Verify that the DB was migrated to the target version
-                assert db_version == target_db_version
+            # NOTE: Initialize the runtime row (app global settings) with the default values
+            row = tx.conn.execute(sqlalchemy.text('SELECT EXISTS (SELECT 1 FROM runtime)')).fetchone()
+            runtime_row_exists = bool(row[0]) if row else False
+            if not runtime_row_exists:
+                if backend_key is None:
+                    backend_key = nacl.signing.SigningKey.generate()
 
-            # NOTE: Initialise the runtime row (app global settings) with the default values
-            if 1:
-                _                  = tx.cursor.execute('SELECT EXISTS (SELECT 1 FROM runtime) as row_exists')
-                runtime_row_exists = bool(typing.cast(tuple[int], tx.cursor.fetchone())[0])
-                if not runtime_row_exists:
-                    if backend_key == None:
-                        backend_key = nacl.signing.SigningKey.generate()
-
-                    _ = tx.cursor.execute('''
-                        INSERT INTO runtime
-                        SELECT 0, ?, ?, 0, 0, 0
-                    ''', (os.urandom(hashlib.blake2b.SALT_SIZE), bytes(backend_key)))
+                tx.conn.execute(sqlalchemy.text('''
+                    INSERT INTO runtime (gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket)
+                    VALUES (0, :salt, :backend_key, 0, 0, 0)
+                '''), {'salt': os.urandom(hashlib.blake2b.SALT_SIZE), 'backend_key': bytes(backend_key)})
+                tx.conn.commit()
 
             result.success = True
         except Exception:
             err.msg_list.append(f"Failed to bootstrap DB tables: {traceback.format_exc()}")
 
     if not result.success:
-        result.sql_conn.close()
+        result.conn.close()
 
     return result
 
 def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
-    unredeemed_payments: list[PaymentRow] = get_unredeemed_payments_list(sql_conn)
+    unredeemed_payments: list[PaymentRow] = get_unredeemed_payments_list(conn)
     for index, it in enumerate(unredeemed_payments):
         base.verify_payment_provider(it.payment_provider, err)
         if len(it.google_payment_token) != BLAKE2B_DIGEST_SIZE:
@@ -725,7 +681,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
     # possibly be before. We should update this to to the PRO release date.
     PRO_ENABLED_UNIX_TS: int = 1756252800
 
-    payments: list[PaymentRow] = get_payments_list(sql_conn)
+    payments: list[PaymentRow] = get_payments_list(conn)
     for index, it in enumerate(payments):
         # NOTE: Check mandatory fields
         if it.plan == base.ProPlan.Nil: 
@@ -794,7 +750,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
             err.msg_list.append(f'Payment #{index} speceified a google payment token: {it.google_payment_token} for a non-google platform')
 
     # NOTE: Verify the users
-    users: list[UserRow] = get_users_list(sql_conn)
+    users: list[UserRow] = get_users_list(conn)
     for index, it in enumerate(users):
         if it.master_pkey == ZERO_BYTES32:
             err.msg_list.append(f'User #{index} has a master public key set to the zero key')
@@ -1320,14 +1276,14 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
         err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
     return result
 
-def update_payment_renewal_info(sql_conn: sqlalchemy.engine.Connection,
+def update_payment_renewal_info(conn: sqlalchemy.engine.Connection,
                                 payment_tx:               base.PaymentProviderTransaction,
                                 grace_period_duration_ms: int  | None,
                                 auto_renewing:            bool | None,
                                 err:                      base.ErrorSink) -> bool:
 
     result = False
-    with db.SQLTransaction(sql_conn) as sql_tx:
+    with db.transaction(conn) as sql_tx:
         result = update_payment_renewal_info_tx(sql_tx, payment_tx, grace_period_duration_ms, auto_renewing, err)
     return result
 
@@ -1546,7 +1502,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                     err_str = '\n'.join(tmp_err.msg_list)
                     log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
 
-def add_unredeemed_payment(sql_conn: sqlalchemy.engine.Connection,
+def add_unredeemed_payment(conn: sqlalchemy.engine.Connection,
                            payment_tx:                        base.PaymentProviderTransaction,
                            plan:                              base.ProPlan,
                            expiry_unix_ts_ms:                 int,
@@ -1554,8 +1510,7 @@ def add_unredeemed_payment(sql_conn: sqlalchemy.engine.Connection,
                            platform_refund_expiry_unix_ts_ms: int,
                            platform_obfuscated_account_id:    bytes | str,
                            err:                               base.ErrorSink):
-    with db.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
+    with db.transaction(conn) as tx:
         add_unredeemed_payment_tx(tx                                = tx,
                                   payment_tx                        = payment_tx,
                                   plan                              = plan,
@@ -1716,7 +1671,7 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     result = len(err.msg_list) == 0
     return result
 
-def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
+def add_pro_payment(conn: sqlalchemy.engine.Connection,
                     version:             int,
                     signing_key:         nacl.signing.SigningKey,
                     unix_ts_ms:          int,
@@ -1761,7 +1716,7 @@ def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
     # without a valid payment.
     THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool = False
     if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV.') or payment_tx.apple_tx_id.startswith('DEV.')):
-        runtime_row: RuntimeRow = get_runtime(sql_conn)
+        runtime_row: RuntimeRow = get_runtime(conn)
         assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
@@ -1782,7 +1737,7 @@ def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
             internal_payment_tx.apple_original_tx_id        = payment_tx.apple_tx_id
 
         already_exists = False
-        for it in get_unredeemed_payments_list(sql_conn):
+        for it in get_unredeemed_payments_list(conn):
             if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
                 if it.google_payment_token == payment_tx.google_payment_token and it.google_order_id == payment_tx.google_order_id:
                     already_exists = True
@@ -1805,7 +1760,7 @@ def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
             else:
                 assert False, "Invalid code path"
 
-            add_unredeemed_payment(sql_conn                          = sql_conn,
+            add_unredeemed_payment(conn                          = conn,
                                    payment_tx                        = internal_payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
                                    unredeemed_unix_ts_ms             = redeemed_unix_ts_ms,
@@ -1816,7 +1771,7 @@ def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
 
             # Randomly toggle auto-renewal
             is_fake_auto_renewing = bool(random.getrandbits(1))
-            _ = update_payment_renewal_info(sql_conn=sql_conn,
+            _ = update_payment_renewal_info(conn=sql_conn,
                                             payment_tx=internal_payment_tx,
                                             grace_period_duration_ms=(60 * 1000) if is_fake_auto_renewing else 0,
                                             auto_renewing=is_fake_auto_renewing,
@@ -1852,7 +1807,7 @@ def add_pro_payment(sql_conn: sqlalchemy.engine.Connection,
                 "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = redeem_payment_tx(tx                  = tx,
                                    master_pkey         = master_pkey,
                                    rotating_pkey       = rotating_pkey,
@@ -1965,7 +1920,7 @@ def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider:
         result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
     return result_unix_ts_ms
 
-def generate_pro_proof(sql_conn: sqlalchemy.engine.Connection,
+def generate_pro_proof(conn: sqlalchemy.engine.Connection,
                        version:        int,
                        signing_key:    nacl.signing.SigningKey,
                        gen_index_salt: bytes,
@@ -2002,12 +1957,12 @@ def generate_pro_proof(sql_conn: sqlalchemy.engine.Connection,
 
     # All verified, now generate proof
     get_user = GetUserAndPayments()
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         get_user = get_user_and_payments(tx, master_pkey)
 
     if get_user.user.master_pkey == bytes(master_pkey):
         # Check that the gen index hash is not revoked
-        if is_gen_index_revoked(sql_conn, get_user.user.gen_index):
+        if is_gen_index_revoked(conn, get_user.user.gen_index):
             err.msg_list.append(f'User {bytes(master_pkey).hex()} payment has been revoked')
         else:
             proof_expiry_unix_ts_ms: int = _build_proof_clamped_expiry_time(unix_ts_ms=unix_ts_ms, proposed_expiry_unix_ts_ms=get_user.user.expiry_unix_ts_ms)
@@ -2025,9 +1980,9 @@ def generate_pro_proof(sql_conn: sqlalchemy.engine.Connection,
 
     return result
 
-def expire_payments_revocations_and_users(sql_conn: sqlalchemy.engine.Connection, unix_ts_ms: int) -> ExpireResult:
+def expire_payments_revocations_and_users(conn: sqlalchemy.engine.Connection, unix_ts_ms: int) -> ExpireResult:
     result = ExpireResult()
-    with db.SQLTransaction(sql_conn, mode=db.SQLTransactionMode.Exclusive) as tx:
+    with db.transaction(conn) as tx:
         assert tx.cursor is not None
         # Retrieve the last expiry time that was executed
         _ = tx.cursor.execute('''SELECT last_expire_unix_ts_ms FROM runtime''')
@@ -2080,9 +2035,9 @@ def add_user_error_tx(tx: db.SQLTransaction, error: UserError, unix_ts_ms: int):
                   unix_ts_ms))
 
 
-def add_user_error(sql_conn: sqlalchemy.engine.Connection, error: UserError, unix_ts_ms: int):
+def add_user_error(conn: sqlalchemy.engine.Connection, error: UserError, unix_ts_ms: int):
     assert error.provider != base.PaymentProvider.Nil
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         add_user_error_tx(tx, error, unix_ts_ms)
 
 def has_user_error_tx(tx: db.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
@@ -2108,9 +2063,9 @@ SELECT EXISTS (
     result = bool(tx.cursor.fetchone()[0] == 1)
     return result;
 
-def has_user_error(sql_conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+def has_user_error(conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     result = False
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = has_user_error_tx(tx, payment_provider, payment_id)
     return result;
 
@@ -2121,9 +2076,9 @@ def delete_user_errors_tx(tx: db.SQLTransaction, payment_provider: base.PaymentP
     return result
 
 
-def delete_user_errors(sql_conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
+def delete_user_errors(conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     result = False
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = delete_user_errors_tx(tx, payment_provider, payment_id)
     return result
 
@@ -2167,10 +2122,10 @@ def get_payment_tx(tx:          db.SQLTransaction,
  
     return result
 
-def get_payment(sql_conn: sqlalchemy.engine.Connection,
+def get_payment(conn: sqlalchemy.engine.Connection,
                 payment_tx: base.PaymentProviderTransaction,
                 err:        base.ErrorSink) -> PaymentRow | None:
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         assert tx.cursor is not None
         return get_payment_tx(tx=tx,
                               payment_tx=payment_tx,
@@ -2221,11 +2176,11 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
 
     return result
 
-def set_refund_requested_unix_ts_ms(sql_conn: sqlalchemy.engine.Connection,
+def set_refund_requested_unix_ts_ms(conn: sqlalchemy.engine.Connection,
                                     payment_tx: UserPaymentTransaction,
                                     unix_ts_ms: int) -> bool:
     result = False
-    with db.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = set_refund_requested_unix_ts_ms_tx(tx, payment_tx, unix_ts_ms)
     return result
 
@@ -2379,10 +2334,10 @@ def generate_report_rows(db_path: str, period: ReportPeriod, limit: int | None) 
 
 
     result:   list[ReportRow]           = []
-    sql_conn: sqlalchemy.engine.Connection | None = None
+    conn: sqlalchemy.engine.Connection | None = None
     try:
         sql_conn = sqlite3.connect(db_path)
-        with db.SQLTransaction(sql_conn) as tx:
+        with db.transaction(conn) as tx:
             assert tx.cursor
             unredeemed: dict[str, int] = fetch_counts( # Payments witnessed but not redeemed by user yet
                 cursor            = tx.cursor,
