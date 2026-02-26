@@ -32,6 +32,7 @@ import sqlite3
 
 import base
 import backend
+import db
 import server
 import platform_apple
 import platform_google
@@ -169,8 +170,8 @@ def backend_maintenance_thread_entry_point(db_path: str):
             # NOTE: Expire rows from the database
             if 1:
                 expire_result = backend.ExpireResult()
-                with backend.OpenDBAtPath(db_path=db_path) as db:
-                    expire_result = backend.expire_payments_revocations_and_users(sql_conn=db.sql_conn,
+                with backend.OpenDBAtPath(db_path) as db:
+                    expire_result = backend.expire_payments_revocations_and_users(conn=db.conn,
                                                                                   unix_ts_ms=int(next_day_unix_ts_s * 1000))
 
                 yesterday_str: str = datetime.datetime.fromtimestamp(next_day_unix_ts_s - base.SECONDS_IN_DAY).strftime('%Y-%m-%d')
@@ -208,17 +209,17 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     for it in webhook_loggers:
                         it.emit_text(msg)
 
-            # NOTE: Do a backup of the DB
-            if 1:
-                backup_db_path: str = base.backup_file_path(pathlib.Path(db_path), next_day_date)
-                with backend.OpenDBAtPath(db_path=db_path) as src:
+            # NOTE: Do a backup of the DB (SQLite only)
+            if db_path.startswith('sqlite://') and not db_path.startswith('sqlite://:'):
+                backup_db_path: str = base.backup_file_path(pathlib.Path(db_path.replace('sqlite:///', '')), next_day_date)
+                with backend.OpenDBAtPath(db_path) as src:
                     def progress(status: int, remaining: int, total: int):
                         log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
 
                     dest_sql_conn = sqlite3.connect(backup_db_path)
                     try:
                         log.info(f"Backing up: {db_path} → {backup_db_path}")
-                        src.sql_conn.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
+                        src.conn.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
                         log.info("Backup completed successfully!")
                         for it in webhook_loggers:
                             it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
@@ -643,8 +644,8 @@ def entry_point() -> flask.Flask:
                 "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
     # NOTE: Dump some startup diagnostics
-    assert db.sql_conn is not None
-    info_string: str = backend.db_info_string(sql_conn=db.sql_conn, db_path=db.path, err=err)
+    assert db.conn is not None
+    info_string: str = backend.db_info_string(conn=db.conn, db_path=db.path, err=err)
     if len(err.msg_list) > 0:
         log.error(f"{err.msg_list}")
         sys.exit(1)
@@ -666,7 +667,7 @@ def entry_point() -> flask.Flask:
                 label += f'\n'
             label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
 
-            with base.SQLTransaction(db.sql_conn) as tx:
+            with db.transaction(db.conn) as tx:
                 match it.command:
                     case RevokeCommand.Nil: pass
                     case RevokeCommand.List:
@@ -726,16 +727,16 @@ def entry_point() -> flask.Flask:
                         assert it.payment_provider == base.PaymentProvider.iOSAppStore
                         error.apple_original_tx_id = it.payment_id
 
-                    if backend.has_user_error(sql_conn=db.sql_conn,
+                    if backend.has_user_error(conn=db.conn,
                                               payment_provider=it.payment_provider,
                                               payment_id=it.payment_id):
                         label += f' (skipped)'
                     else:
-                        backend.add_user_error(sql_conn = db.sql_conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                        backend.add_user_error(conn=db.conn, error=error, unix_ts_ms=int(time.time() * 1000))
                         count +=1
                         label += f' (added)'
                 else:
-                    if backend.delete_user_errors(sql_conn         = db.sql_conn,
+                    if backend.delete_user_errors(conn=db.conn,
                                                   payment_provider = it.payment_provider,
                                                   payment_id       = it.payment_id):
                         count +=1
@@ -753,7 +754,7 @@ def entry_point() -> flask.Flask:
                     label += f'\n'
                 label += f'  {index:02d} {it.message_id} = {it.command.name}'
 
-                with base.SQLTransaction(db.sql_conn) as tx:
+            with db.transaction(db.conn) as tx:
                     delete:  bool = it.command == SetGoogleNotificationCommand.Delete
                     updated: bool = backend.google_set_notification_handled(tx         = tx,
                                                                             message_id = it.message_id,
@@ -768,7 +769,7 @@ def entry_point() -> flask.Flask:
 
     # NOTE: Handle printing of the DB to standard out if requested
     if parsed_args.print_tables:
-        base.print_db_to_stdout(db.sql_conn)
+        base.print_db_to_stdout(db.conn)
         sys.exit(1)
 
     startup_log = '\n'
@@ -868,7 +869,7 @@ def entry_point() -> flask.Flask:
     thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
     thread.start()
 
-    runtime = backend.get_runtime(db.sql_conn)
+    runtime = backend.get_runtime(db.conn)
     result: flask.Flask = server.init(testing_mode=False,
                                       db_path=db.path,
                                       db_path_is_uri=parsed_args.db_path_is_uri,
@@ -897,7 +898,7 @@ def entry_point() -> flask.Flask:
         # NOTE: Offset by 10s to account for clock drift between backend and the Apple servers
         end_unix_ts_ms = int((time.time() - 10) * 1000)
         platform_apple.catchup_on_missed_notifications(core           = core,
-                                                       sql_conn       = db.sql_conn,
+                                                       sql_conn       = db.conn,
                                                        end_unix_ts_ms = end_unix_ts_ms)
 
     # NOTE: Enable Google Play Store notification handling, this is a blocking call so it's delegated
@@ -918,7 +919,7 @@ def entry_point() -> flask.Flask:
     # The flask runner/UWSGI takes over from here and runs the application for
     # us across multiple processes if necessary. We'll close our db connection
     # here. Each request we receive will open their own connection the DB.
-    db.sql_conn.close()
+    db.conn.close()
 
     return result
 
