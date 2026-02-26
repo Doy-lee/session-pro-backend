@@ -1,0 +1,103 @@
+"""
+Database abstraction supporting SQLite and PostgreSQL backends using SQLAlchemy.
+
+Usage Examples:
+    # Create engine
+    engine = db.create_engine('sqlite:///backend.db')
+
+    # PostgreSQL example
+    # engine = create_engine( "postgresql://user:pass@localhost/db", pool_size=10, max_overflow=20, pool_pre_ping=True) # PostgreSQL with connection pooling
+
+    # Simple query (auto-commit)
+    for row in db.query_autocommit(engine, 'SELECT * FROM users'):
+        print(row.master_pkey)
+
+    # Transaction (outer scope pattern)
+    with engine.connect() as conn:
+        with db.transaction(conn) as tx:
+            row = db.query_one(conn, 'SELECT * FROM users WHERE id = :id', id=1)
+            db.query(conn, 'UPDATE users SET status = :s WHERE id = :id', s=2, id=1)
+            if should_rollback:
+                tx.cancel = True
+        # Auto-committed here (unless tx.cancel was set)
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import sqlite3
+from typing import Any
+
+import sqlalchemy
+import sqlalchemy.event
+
+
+@dataclasses.dataclass
+class SQLTransaction:
+    """Transaction context with cancel support."""
+    cancel: bool = False
+
+
+@contextlib.contextmanager
+def transaction(conn: sqlalchemy.engine.Connection):
+    """Context manager for database transactions with cancel support."""
+    trans = conn.begin()
+    tx = SQLTransaction()
+    try:
+        yield tx
+        if tx.cancel:
+            trans.rollback()
+        else:
+            trans.commit()
+    except:
+        trans.rollback()
+        raise
+
+
+def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
+    parsed:    str  = database_url.split('://', 1)[0]
+    is_sqlite: bool = parsed == 'sqlite'
+
+    if is_sqlite:
+        connect_args: dict[str, Any] = kwargs.get('connect_args', {})
+        connect_args.setdefault('check_same_thread', False)
+        kwargs['connect_args'] = connect_args
+
+    engine: sqlalchemy.engine.Engine = sqlalchemy.create_engine(database_url, **kwargs)
+    if is_sqlite:
+        @sqlalchemy.event.listens_for(engine, 'connect')
+        def set_sqlite_pragmas(dbapi_conn: sqlite3.Connection, connection_record: Any) -> None:
+            cursor = dbapi_conn.cursor()
+            _ = cursor.execute('PRAGMA journal_mode=WAL')
+            _ = cursor.execute('PRAGMA foreign_keys=ON')
+            cursor.close()
+
+    return engine
+
+
+def query(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
+    stmt = sqlalchemy.text(sql)
+    if bind_expanding:
+        stmt = stmt.bindparams(*[sqlalchemy.bindparam(name, expanding=True) for name in bind_expanding])
+    return conn.execute(stmt, params)
+
+
+def query_one(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Row | None:
+    result = query(conn, sql, bind_expanding=bind_expanding, **params)
+    return result.fetchone()
+
+
+def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
+    with engine.connect() as conn:
+        result = query(conn, sql, bind_expanding=bind_expanding, **params)
+        conn.commit()
+        return result
+
+
+def is_postgres(engine: sqlalchemy.engine.Engine) -> bool:
+    return engine.dialect.name == 'postgresql'
+
+
+def is_sqlite(engine: sqlalchemy.engine.Engine) -> bool:
+    return engine.dialect.name == 'sqlite'

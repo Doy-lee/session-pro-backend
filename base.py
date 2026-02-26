@@ -12,7 +12,6 @@ import logging
 import math
 import os
 import pathlib
-import sqlite3
 import sys
 import threading
 import time
@@ -20,6 +19,9 @@ import traceback
 import typing
 import typing_extensions
 import urllib.request
+
+import db
+import sqlalchemy
 
 # NOTE: Constants
 SECONDS_IN_DAY:        int     = 60 * 60 * 24
@@ -135,75 +137,6 @@ class ErrorSink:
     def build(self) -> str:
         result = '\n  '.join(self.msg_list)
         return result
-
-class SQLTransactionMode(enum.IntEnum):
-    Default   = 0 # Acquires requisite r/w DB lock on first query
-    Immediate = 1 # Acquires write lock and allows concurrent reads
-    Exclusive = 2 # Acquires lock and blocks concurrent reads (and by definition, writes)
-
-@dataclasses.dataclass
-class SQLTransaction:
-    conn:   sqlite3.Connection
-    cursor: sqlite3.Cursor | None = None
-    cancel: bool                  = False
-    mode:   SQLTransactionMode    = SQLTransactionMode.Default
-    def __init__(self, conn: sqlite3.Connection, mode: SQLTransactionMode = SQLTransactionMode.Default):
-        self.conn = conn
-        self.mode = mode
-
-    def __enter__(self):
-        mode_label = ''
-        match self.mode:
-            case SQLTransactionMode.Default:
-                mode_label = 'DEFERRED '
-            case SQLTransactionMode.Immediate:
-                mode_label = 'IMMEDIATE '
-            case SQLTransactionMode.Exclusive:
-                mode_label = 'EXCLUSIVE '
-        self.cursor = self.conn.execute(f'BEGIN {mode_label} TRANSACTION')
-        return self
-
-    def __exit__(self,
-                 exc_type: object | None,
-                 exc_value: object | None,
-                 traceback: traceback.TracebackException | None):
-        if self.cursor:
-            self.cursor.close()
-        if exc_type is not None or self.cancel:
-            self.conn.rollback()
-        else:
-            self.conn.commit()
-        return False
-
-def is_sql_database_locked_error(e: sqlite3.OperationalError) -> bool:
-    result = "database is locked" in str(e)
-    return result
-
-def retry_function_on_database_locked_error(callback: typing.Callable[[], typing.Any], log: logging.Logger, error_prefix: str, err: ErrorSink):
-    """
-    Execute a user-provided callable with retries on SQLite 'database is locked' errors. Pass a
-    lambda as the operation callable to be the function that should be retried on failure
-    """
-
-    sleep_time_s: int = 1
-    max_attempts: int = 8
-    for exc_attempt in range(max_attempts):
-        reattempt = False
-        try:
-            callback()
-        except sqlite3.OperationalError as e:
-            if is_sql_database_locked_error(e):
-                log.warning(f'{error_prefix} attempt #{exc_attempt}/{max_attempts}, database was locked. Re-attempting in {sleep_time_s}s. Error was: {traceback.format_exc()}')
-                time.sleep(sleep_time_s)
-                sleep_time_s *= 2
-                reattempt    = True
-            else:
-                err.msg_list.append(f'{error_prefix}. Error was: {traceback.format_exc()}')
-        except Exception as e:
-            err.msg_list.append(f'{error_prefix}. Error was: {traceback.format_exc()}')
-
-        if not reattempt:
-            break
 
 @dataclasses.dataclass
 class TableStrings:
@@ -363,16 +296,15 @@ def print_unicode_table(rows: list[list[str]]) -> None:
     bottom += '┘'
     print(bottom)
 
-def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
+def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
     table_strings: list[TableStrings] = []
-    assert tx.cursor is not None
-    _           = tx.cursor.execute('SELECT name FROM sqlite_master WHERE type="table";')
-    tables      = typing.cast(list[tuple[str]], tx.cursor.fetchall())
+    result = conn.execute(sqlalchemy.text('SELECT name FROM sqlite_master WHERE type="table";'))
+    tables = typing.cast(list[tuple[str]], result.fetchall())
     table_names = [table[0] for table in tables]
     for table_name in table_names:
-        _                       = tx.cursor.execute(f'SELECT * FROM {table_name}')
-        rows                    = tx.cursor.fetchall()
-        column_names: list[str] = [description[0] for description in tx.cursor.description]
+        result = conn.execute(sqlalchemy.text(f'SELECT * FROM {table_name}'))
+        rows = result.fetchall()
+        column_names: list[str] = list(result.keys())
 
         table_str: TableStrings = TableStrings()
         table_str.name          = table_name
@@ -446,9 +378,9 @@ def print_db_to_stdout_tx(tx: SQLTransaction) -> None:
         print(f'Table: {it.name}')
         print_unicode_table(it.contents)
 
-def print_db_to_stdout(sql_conn: sqlite3.Connection) -> None:
-    with SQLTransaction(sql_conn) as tx:
-        print_db_to_stdout_tx(tx)
+def print_db_to_stdout(conn: sqlalchemy.engine.Connection) -> None:
+    with db.transaction(conn):
+        print_db_to_stdout_tx(conn)
 
 def round_unix_ts_ms_to_next_day(unix_ts_ms: int) -> int:
     result: int = (unix_ts_ms + (MILLISECONDS_IN_DAY - 1)) // MILLISECONDS_IN_DAY * MILLISECONDS_IN_DAY

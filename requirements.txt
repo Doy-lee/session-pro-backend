@@ -5,3 +5,4 @@ app-store-server-library==1.9.0
 google-cloud-pubsub==2.31.1
 google-api-python-client==2.181.0
 pytest
+sqlalchemy==2.0.47
