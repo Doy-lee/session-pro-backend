@@ -32,12 +32,10 @@ from typing import Any
 import sqlalchemy
 import sqlalchemy.event
 
-
 @dataclasses.dataclass
 class SQLTransaction:
     """Transaction context with cancel support."""
     cancel: bool = False
-
 
 @contextlib.contextmanager
 def transaction(conn: sqlalchemy.engine.Connection):
@@ -53,7 +51,6 @@ def transaction(conn: sqlalchemy.engine.Connection):
     except:
         trans.rollback()
         raise
-
 
 def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
     parsed:    str  = database_url.split('://', 1)[0]
@@ -75,18 +72,15 @@ def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
 
     return engine
 
-
 def query(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
     stmt = sqlalchemy.text(sql)
     if bind_expanding:
         stmt = stmt.bindparams(*[sqlalchemy.bindparam(name, expanding=True) for name in bind_expanding])
     return conn.execute(stmt, params)
 
-
 def query_one(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Row | None:
     result = query(conn, sql, bind_expanding=bind_expanding, **params)
     return result.fetchone()
-
 
 def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
     with engine.connect() as conn:
@@ -94,10 +88,8 @@ def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expandi
         conn.commit()
         return result
 
-
 def is_postgres(engine: sqlalchemy.engine.Engine) -> bool:
     return engine.dialect.name == 'postgresql'
-
 
 def is_sqlite(engine: sqlalchemy.engine.Engine) -> bool:
     return engine.dialect.name == 'sqlite'
