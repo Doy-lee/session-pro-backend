@@ -35,13 +35,14 @@ import sqlalchemy.event
 @dataclasses.dataclass
 class SQLTransaction:
     """Transaction context with cancel support."""
+    conn: sqlalchemy.engine.Connection = dataclasses.field(default=None)  # type: ignore[assignment]
     cancel: bool = False
 
 @contextlib.contextmanager
 def transaction(conn: sqlalchemy.engine.Connection):
     """Context manager for database transactions with cancel support."""
     trans = conn.begin()
-    tx = SQLTransaction()
+    tx = SQLTransaction(conn=conn)
     try:
         yield tx
         if tx.cancel:
@@ -64,7 +65,7 @@ def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
     engine: sqlalchemy.engine.Engine = sqlalchemy.create_engine(database_url, **kwargs)
     if is_sqlite:
         @sqlalchemy.event.listens_for(engine, 'connect')
-        def set_sqlite_pragmas(dbapi_conn: sqlite3.Connection, connection_record: Any) -> None:
+        def set_sqlite_pragmas(dbapi_conn: sqlite3.Connection, connection_record: Any) -> None:  # pyright: ignore[reportUnusedParameter, reportUnusedFunction]
             cursor = dbapi_conn.cursor()
             _ = cursor.execute('PRAGMA journal_mode=WAL')
             _ = cursor.execute('PRAGMA foreign_keys=ON')

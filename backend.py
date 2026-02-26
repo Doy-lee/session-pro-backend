@@ -1,6 +1,5 @@
 import traceback
 import nacl.signing
-import sqlite3
 import hashlib
 import os
 import typing
@@ -16,6 +15,8 @@ import io
 import platform_google_api
 import platform_google_types
 import base
+import db
+import sqlalchemy
 
 ZERO_BYTES32               = bytes(32)
 BLAKE2B_DIGEST_SIZE        = 32
@@ -276,7 +277,7 @@ class AllocatedGenID:
 class SetupDBResult:
     """
     Class is returned by backend.setup_db() which opens the DB and maintains a connection to the DB
-    via `sql_conn`. Caller must close `sql_conn` if they wish to release the connection from the DB.
+    via `conn`. Caller must close `conn` if they wish to release the connection from the DB.
     The setup function creates the tables required to operate the Session Pro Backend.
 
     Normally you would not return the DB connection as it's easy to accidentally leak the DB
@@ -287,32 +288,25 @@ class SetupDBResult:
     For the most part the callers of this API (tests and main entry point) explicitly close the DB
     when they are done with it.
     """
-    path:     str                       = ''
-    success:  bool                      = False
-    sql_conn: sqlite3.Connection | None = None
+    path:    str                              = ''
+    success: bool                             = False
+    conn:    sqlalchemy.engine.Connection | None = None
 
 @dataclasses.dataclass
 class OpenDBAtPath:
-    """
-    Open a pre-existing DB at the specified path. This class can be used in a `with` context to
-    ensure that the connection established to the database is closed on scope exit, e.g.:
+    conn: sqlalchemy.engine.Connection
+    engine: sqlalchemy.engine.Engine
 
-    with OpenDBAtPath(...) as db:
-        # Use db.sql_conn =
-    """
-
-    sql_conn: sqlite3.Connection
-    def __init__(self, db_path: str, uri: bool = False):
-        self.sql_conn = sqlite3.connect(db_path, uri=uri)
+    def __init__(self, database_url: str):
+        self.engine = db.create_engine(database_url)
+        self.conn = self.engine.connect()
 
     def __enter__(self):
         return self
 
-    def __exit__(self,
-                 exc_type:  object | None,
-                 exc_value: object | None,
-                 traceback: traceback.TracebackException | None):
-        self.sql_conn.close()
+    def __exit__(self, exc_type: object | None, exc_value: object | None, traceback: object | None):
+        self.conn.close()
+        self.engine.dispose()
         return False
 
 def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) -> bytes:
@@ -396,31 +390,25 @@ def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> Payment
     result.apple_app_account_token            = row[19] if row[19] else ''
     return result
 
-def get_unredeemed_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
+def get_unredeemed_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _    = tx.cursor.execute('SELECT * FROM payments WHERE status = ?', (int(base.PaymentStatus.Unredeemed.value),))
-
-        rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
+    with db.transaction(conn):
+        rows = db.query(conn, 'SELECT * FROM payments WHERE status = :status', status=int(base.PaymentStatus.Unredeemed.value))
         for row in rows:
-            item = payment_row_from_tuple(row)
+            item = payment_row_from_tuple(tuple(row))
             result.append(item)
-    return result;
+    return result
 
-def get_payments_list(sql_conn: sqlite3.Connection) -> list[PaymentRow]:
+def get_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _    = tx.cursor.execute('SELECT * FROM payments')
-        rows = typing.cast(collections.abc.Iterator[tuple[int, *SQLTablePaymentRowTuple]], tx.cursor)
+    with db.transaction(conn):
+        rows = db.query(conn, 'SELECT * FROM payments')
         for row in rows:
-            item = payment_row_from_tuple(row)
+            item = payment_row_from_tuple(tuple(row))
             result.append(item)
-    return result;
+    return result
 
-def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
-    assert tx.cursor is not None
+def get_user_and_payments(conn: sqlalchemy.engine.Connection, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
     select_fields = ("master_pkey, status, plan, payment_provider, auto_renewing, "
                      "unredeemed_unix_ts_ms, redeemed_unix_ts_ms, expiry_unix_ts_ms, "
                      "grace_period_duration_ms, platform_refund_expiry_unix_ts_ms, "
@@ -430,24 +418,22 @@ def get_user_and_payments(tx: base.SQLTransaction, master_pkey: nacl.signing.Ver
                      "apple_app_account_token")
 
     result      = GetUserAndPayments()
-    result.user = get_user_from_sql_tx(tx, master_pkey)
+    result.user = get_user_from_sql_tx(conn, master_pkey)
 
-    _ = tx.cursor.execute(f'''
-        SELECT   COUNT(*)
-        FROM     payments
-        WHERE    master_pkey = ?
-    ''', (bytes(master_pkey),))
-    result.payments_count = tx.cursor.fetchone()[0]
+    row = db.query_one(conn, '''
+        SELECT COUNT(*)
+        FROM   payments
+        WHERE  master_pkey = :pkey
+    ''', pkey=bytes(master_pkey))
+    result.payments_count = row[0] if row else 0
 
-    _ = tx.cursor.execute(f'''
+    result.payments_it = iter(db.query(conn, f'''
         SELECT   {select_fields}
         FROM     payments
-        WHERE    master_pkey = ?
+        WHERE    master_pkey = :pkey
         ORDER BY unredeemed_unix_ts_ms DESC, id DESC
-    ''', (bytes(master_pkey),))
-
-    result.payments_it    = typing.cast(collections.abc.Iterator[SQLTablePaymentRowTuple], tx.cursor)
-    return result;
+    ''', pkey=bytes(master_pkey)))
+    return result
 
 def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
     result                             = UserRow()
@@ -462,95 +448,72 @@ def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
     result.apple_app_account_token      = row[7]
     return result
 
-def get_users_list(sql_conn: sqlite3.Connection) -> list[UserRow]:
+def get_users_list(conn: sqlalchemy.engine.Connection) -> list[UserRow]:
     result: list[UserRow] = []
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _ = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users')
-        rows = typing.cast(collections.abc.Iterator[UserRowIterator], tx.cursor)
-        for row in rows:
-            result.append(_user_from_row_iterator(row))
-    return result;
+    with db.transaction(conn):
+        for row in db.query(conn, 'SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users'):
+            result.append(_user_from_row_iterator(tuple(row)))
+    return result
 
-def get_user_from_sql_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> UserRow:
-    assert tx.cursor is not None
-    _               = tx.cursor.execute('SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users WHERE master_pkey = ?', (bytes(master_pkey),))
+def get_user_from_sql_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> UserRow:
     result: UserRow = UserRow()
-    row             = typing.cast(UserRowIterator | None, tx.cursor.fetchone())
+    row = db.query_one(tx.conn, 'SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users WHERE master_pkey = :pkey', pkey=bytes(master_pkey))
     if row:
-        result = _user_from_row_iterator(row)
-    return result;
+        result = _user_from_row_iterator(tuple(row))
+    return result
 
-def get_user(sql_conn: sqlite3.Connection, master_pkey: nacl.signing.VerifyKey) -> UserRow:
+def get_user(conn: sqlalchemy.engine.Connection, master_pkey: nacl.signing.VerifyKey) -> UserRow:
     result: UserRow = UserRow()
-    with base.SQLTransaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = get_user_from_sql_tx(tx, master_pkey)
-    return result;
+    return result
 
-def get_revocations_list(sql_conn: sqlite3.Connection) -> list[RevocationRow]:
+def get_revocations_list(conn: sqlalchemy.engine.Connection) -> list[RevocationRow]:
     result: list[RevocationRow] = []
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _    = tx.cursor.execute('SELECT * FROM revocations')
-        rows = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
-        for row in rows:
+    with db.transaction(conn) as tx:
+        for row in db.query(tx.conn, 'SELECT gen_index, expiry_unix_ts_ms FROM revocations'):
             item                   = RevocationRow()
             item.gen_index         = row[0]
             item.expiry_unix_ts_ms = row[1]
             result.append(item)
-    return result;
-
-def is_gen_index_revoked_tx(tx: base.SQLTransaction, gen_index : int) -> bool:
-    assert tx.cursor is not None
-    _  = tx.cursor.execute('SELECT 1 FROM revocations WHERE gen_index = ?', (gen_index,))
-    row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-    result                 = row is not None
     return result
 
-def is_gen_index_revoked(sql_conn: sqlite3.Connection, gen_index : int) -> bool:
-    result = False
-    with base.SQLTransaction(sql_conn) as tx:
-        result = is_gen_index_revoked_tx(tx, gen_index)
-    return result
+def is_gen_index_revoked(tx: db.SQLTransaction, gen_index: int) -> bool:
+    row = db.query_one(tx.conn, 'SELECT 1 FROM revocations WHERE gen_index = :idx', idx=gen_index)
+    return row is not None
 
-def get_revocation_ticket(sql_conn: sqlite3.Connection) -> int:
-    result: int = 0
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
-        _      = tx.cursor.execute('SELECT revocation_ticket FROM runtime')
-        result = typing.cast(tuple[int], tx.cursor.fetchone())[0]
-    return result;
+def is_gen_index_revoked_tx(tx: db.SQLTransaction, gen_index: int) -> bool:
+    return is_gen_index_revoked(tx, gen_index)
 
+def get_revocation_ticket_tx(tx: db.SQLTransaction) -> int:
+    row = db.query_one(tx.conn, 'SELECT revocation_ticket FROM runtime')
+    return row[0] if row else 0
 
-def get_pro_revocations_iterator(tx: base.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
-    assert tx.cursor is not None
-    _      = tx.cursor.execute('SELECT gen_index, expiry_unix_ts_ms FROM revocations')
-    result = typing.cast(collections.abc.Iterator[tuple[int, int]], tx.cursor)
-    return result;
+def get_pro_revocations_iterator_tx(tx: db.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
+    for row in db.query(tx.conn, 'SELECT gen_index, expiry_unix_ts_ms FROM revocations'):
+        yield (row[0], row[1])
 
-def get_runtime_tx(tx: base.SQLTransaction) -> RuntimeRow:
-    assert tx.cursor is not None
-    _                                                = tx.cursor.execute('SELECT gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket FROM runtime')
-    row                                              = typing.cast(tuple[int, bytes, bytes, int, int, int], tx.cursor.fetchone())
-    result: RuntimeRow                               = RuntimeRow()
-    result.gen_index                                 = row[0]
-    result.gen_index_salt                            = row[1]
-    backend_key: bytes                               = row[2]
-    assert len(backend_key)                         == len(ZERO_BYTES32)
-    result.backend_key                               = nacl.signing.SigningKey(backend_key)
-    result.apple_notification_checkpoint_unix_ts_ms  = row[3]
-    result.apple_notification_checkpoint_unix_ts_ms  = row[4]
-    result.revocation_ticket                         = row[5]
-    return result;
-
-
-def get_runtime(sql_conn: sqlite3.Connection) -> RuntimeRow:
+def get_runtime_tx(tx: db.SQLTransaction) -> RuntimeRow:
+    row = db.query_one(tx.conn, 'SELECT gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket FROM runtime')
     result: RuntimeRow = RuntimeRow()
-    with base.SQLTransaction(sql_conn) as tx:
-        result = get_runtime_tx(tx)
-    return result;
+    if row:
+        result.gen_index                                 = row[0]
+        result.gen_index_salt                            = row[1]
+        backend_key: bytes                               = row[2]
+        assert len(backend_key)                         == len(ZERO_BYTES32)
+        result.backend_key                               = nacl.signing.SigningKey(backend_key)
+        result.last_expire_unix_ts_ms                    = row[3]
+        result.apple_notification_checkpoint_unix_ts_ms  = row[4]
+        result.revocation_ticket                         = row[5]
+    return result
 
-def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSink) -> str:
+def get_runtime(conn: sqlalchemy.engine.Connection) -> RuntimeRow:
+    result: RuntimeRow = RuntimeRow()
+    with db.transaction(conn) as tx:
+        result = get_runtime_tx(tx)
+    return result
+
+def db_info_string(conn: sqlalchemy.engine.Connection, db_path: str, err: base.ErrorSink) -> str:
     unredeemed_payments             = 0
     payments                        = 0
     users                           = 0
@@ -559,29 +522,35 @@ def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSi
     user_errors                     = 0
     apple_notification_uuid_history = 0
     google_notification_history     = 0
-    with base.SQLTransaction(sql_conn) as tx:
-        assert tx.cursor is not None
+    with db.transaction(conn) as tx:
         try:
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM payments WHERE status = ?', (int(base.PaymentStatus.Unredeemed.value),))
-            unredeemed_payments             = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM payments WHERE status = :status', status=int(base.PaymentStatus.Unredeemed.value))
+            if row:
+                unredeemed_payments = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM payments')
-            payments                        = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM payments')
+            if row:
+                payments = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM users')
-            users                           = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM users')
+            if row:
+                users = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM revocations')
-            revocations                     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM revocations')
+            if row:
+                revocations = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM user_errors')
-            user_errors                     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM user_errors')
+            if row:
+                user_errors = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM apple_notification_uuid_history')
-            apple_notification_uuid_history = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM apple_notification_uuid_history')
+            if row:
+                apple_notification_uuid_history = row[0]
 
-            _                               = tx.cursor.execute('SELECT COUNT(*) FROM google_notification_history')
-            google_notification_history     = typing.cast(tuple[int], tx.cursor.fetchone())[0];
+            row = db.query_one(tx.conn, 'SELECT COUNT(*) FROM google_notification_history')
+            if row:
+                google_notification_history = row[0]
         except Exception as e:
             err.msg_list.append(f"Failed to retrieve DB metadata: {e}")
 
@@ -589,14 +558,15 @@ def db_info_string(sql_conn: sqlite3.Connection, db_path: str, err: base.ErrorSi
     if len(err.msg_list) == 0:
         if os.path.exists(db_path):
             db_size = os.stat(db_path).st_size
-        runtime: RuntimeRow = get_runtime(sql_conn)
-        result = (
-            '  DB:                               {} ({})\n'.format(db_path, base.format_bytes(db_size)) +
-            '  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}\n'.format(users, revocations, payments, unredeemed_payments) +
-            '  U.Errors/Google/Apple Notifs.:    {}/{}/{}\n'.format(user_errors, google_notification_history, apple_notification_uuid_history) +
-            '  Gen Index:                        {}\n'.format(runtime.gen_index) +
-            '  Backend Key:                      {}'.format(bytes(runtime.backend_key.verify_key).hex())
-        )
+        with db.transaction(conn) as tx:
+            runtime: RuntimeRow = get_runtime_tx(tx)
+        lines: list[str] = []
+        lines.append('  DB:                               {} ({})'.format(db_path, base.format_bytes(db_size)))
+        lines.append('  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}'.format(users, revocations, payments, unredeemed_payments))
+        lines.append('  U.Errors/Google/Apple Notifs.:    {}/{}/{}'.format(user_errors, google_notification_history, apple_notification_uuid_history))
+        lines.append('  Gen Index:                        {}'.format(runtime.gen_index))
+        lines.append('  Backend Key:                      {}'.format(bytes(runtime.backend_key.verify_key).hex()))
+        result = '\n'.join(lines)
 
     return result
 
@@ -825,26 +795,24 @@ def verify_db(sql_conn: sqlite3.Connection, err: base.ErrorSink) -> bool:
     result = len(err.msg_list) == 0
     return result
 
-def _update_user_expiry_grace_and_renew_flag_from_payment_list(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey):
+def _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey):
     """Update fields for the user that depend on their list of payments, like
     their latest known expiry time"""
-    assert tx.cursor
     master_pkey_bytes: bytes = bytes(master_pkey)
-    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx,
-                                                                                                     nacl.signing.VerifyKey(master_pkey_bytes))
+    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
     # NOTE: We have the latest expiry value, now update the user
-    _ = tx.cursor.execute('''
+    db.query(tx.conn, '''
         UPDATE users
-        SET    expiry_unix_ts_ms = ?, grace_period_duration_ms = ?, auto_renewing = ?, refund_requested_unix_ts_ms  = ?
-        WHERE  master_pkey = ?
-    ''', (lookup.best_expiry_unix_ts_ms,
-          lookup.best_grace_duration_ms,
-          lookup.best_auto_renewing,
-          lookup.best_refund_requested_unix_ts_ms,
-          master_pkey_bytes))
+        SET    expiry_unix_ts_ms = :expiry, grace_period_duration_ms = :grace, auto_renewing = :renewing, refund_requested_unix_ts_ms = :refund
+        WHERE  master_pkey = :pkey
+    ''', 
+        expiry=lookup.best_expiry_unix_ts_ms, 
+        grace=lookup.best_grace_duration_ms, 
+        renewing=lookup.best_auto_renewing, 
+        refund=lookup.best_refund_requested_unix_ts_ms, 
+        pkey=master_pkey_bytes)
 
-def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevocationIterator], revoke_unix_ts_ms: int) -> bool:
-    assert tx.cursor
+def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, revoke_unix_ts_ms: int) -> bool:
     result                             = False
     master_pkey_dict: dict[bytes, int] = {}
     for row in  rows:
@@ -861,17 +829,16 @@ def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevoca
             master_pkey_dict[master_pkey_bytes] = expiry_unix_ts_ms
 
         # NOTE: Mark all the payments as revoked
-        _ = tx.cursor.execute(f'''
+        db.query(tx.conn, '''
         UPDATE payments
-        SET    status = ?, revoked_unix_ts_ms = ?, auto_renewing = 0
-        WHERE  id = ? AND (status == ? OR status = ?)
-        ''', (# SET values
-              int(base.PaymentStatus.Revoked.value),
-              revoke_unix_ts_ms,
-              # WHERE values
-              id,
-              int(base.PaymentStatus.Unredeemed.value),
-              int(base.PaymentStatus.Redeemed.value)))
+        SET    status = :status, revoked_unix_ts_ms = :revoked_ts, auto_renewing = 0
+        WHERE  id = :id AND (status = :unredeemed OR status = :redeemed)
+        ''', 
+            status=int(base.PaymentStatus.Revoked.value), 
+            revoked_ts=revoke_unix_ts_ms, 
+            id=id, 
+            unredeemed=int(base.PaymentStatus.Unredeemed.value), 
+            redeemed=int(base.PaymentStatus.Redeemed.value))
 
     revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.iOSAppStore, revoke_unix_ts_ms)
     for it in master_pkey_dict:
@@ -879,7 +846,7 @@ def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevoca
         # on the payment, we need to go and update their user row to track the, new, next best
         # expiry time so that the backend knows the new time-frame in which the user is allowed to
         # generate a Session Pro proof (now that one or more of their payments get revoked)
-        _update_user_expiry_grace_and_renew_flag_from_payment_list(tx, nacl.signing.VerifyKey(it))
+        _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, nacl.signing.VerifyKey(it))
 
         # NOTE: expiry_unix_ts_ms in the db is not rounded, but the proof's themselves have an
         # expiry timestamp rounded to the end of the UTC day. So we only actually want to revoke
@@ -891,39 +858,37 @@ def revoke_payments_by_id_internal(tx: base.SQLTransaction, rows: list[AddRevoca
         expiry_unix_ts_ms = master_pkey_dict[it]
         if expiry_unix_ts_ms > revoke_unix_ts_ms_next_day:
             master_pkey = nacl.signing.VerifyKey(it)
-            _ = revoke_master_pkey_proofs_and_allocate_new_gen_id(tx, master_pkey)
+            _ = revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx, master_pkey)
 
     return result
 
-def set_revocation_tx(tx: base.SQLTransaction, master_pkey: nacl.signing.VerifyKey, expiry_unix_ts_ms: int, delete_item: bool) -> SetRevocationResult:
-    # We have a session pro master public key, lookup the generation index hash
+def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey, expiry_unix_ts_ms: int, delete_item: bool) -> SetRevocationResult:
     user:   UserRow = get_user_from_sql_tx(tx, master_pkey)
     result          = SetRevocationResult.UserDoesNotExist
     if user.found:
         assert user.master_pkey == bytes(master_pkey), f"{user.master_pkey.hex()} vs {bytes(master_pkey).hex()}"
-        assert tx.cursor
-        existed = tx.cursor.execute("SELECT EXISTS (SELECT 1 FROM revocations WHERE gen_index = ?)", (user.gen_index,)).fetchone()[0] == 1
+        row = db.query_one(tx.conn, "SELECT EXISTS (SELECT 1 FROM revocations WHERE gen_index = :idx)", idx=user.gen_index)
+        existed = row[0] if row else False
 
         if delete_item:
             if existed:
-                _ = tx.cursor.execute(f'''DELETE FROM revocations WHERE gen_index = ?''', (user.gen_index,))
+                db.query(conn, 'DELETE FROM revocations WHERE gen_index = :idx', idx=user.gen_index)
                 result = SetRevocationResult.Deleted
             else:
                 result = SetRevocationResult.Skipped
         else:
-            _ = tx.cursor.execute(f'''
+            db.query(conn, '''
                 INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
-                VALUES      (?, ?)
+                VALUES      (:idx, :expiry_ts)
                 ON CONFLICT (gen_index) DO UPDATE SET
                     expiry_unix_ts_ms = excluded.expiry_unix_ts_ms
-            ''', (user.gen_index, expiry_unix_ts_ms))
+            ''', idx=user.gen_index, expiry_ts=expiry_unix_ts_ms)
             result = SetRevocationResult.Updated if existed else SetRevocationResult.Created
     return result
 
-def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
+def add_apple_revocation_tx(conn: sqlalchemy.engine.Connection, apple_original_tx_id: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
     """Revoke all the payments that aren't revoked that share the same original TX ID. Returns true
     if there were any rows that had the ID"""
-    assert tx.cursor
     # TODO: Can be cleaned up more, a lot of repeated code between apple and google here, but it
     # works fine. Also, this code is very platform specific, potentially the grabbing of IDs should
     # happen in the platform layers and then the backend only deals with IDs. Potentially separating
@@ -941,33 +906,31 @@ def add_apple_revocation_tx(tx: base.SQLTransaction, apple_original_tx_id: str, 
     # what we're trying to communicate to the caller is that, the payment token they were trying to
     # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
     # that entitlement has been revoked where necessary.
-    _ = tx.cursor.execute(f'''
+    rows_result = db.query(conn, f'''
     SELECT id, master_pkey, expiry_unix_ts_ms
     FROM   payments
-    WHERE  apple_original_tx_id  = ? AND
-           payment_provider      = ? AND
-           (status               = ? OR status = ? OR status = ? OR status = ?);
-    ''', (# WHERE values
-          apple_original_tx_id,
-          int(base.PaymentProvider.iOSAppStore.value),
-          # OR status == ?
-          int(base.PaymentStatus.Unredeemed.value),
-          int(base.PaymentStatus.Redeemed.value),
-          int(base.PaymentStatus.Expired.value),
-          int(base.PaymentStatus.Revoked.value),))
+    WHERE  apple_original_tx_id  = :orig_tx AND
+           payment_provider      = :provider AND
+           (status               = :unredeemed OR status = :redeemed OR status = :expired OR status = :revoked);
+    ''', 
+        orig_tx=apple_original_tx_id,
+        provider=int(base.PaymentProvider.iOSAppStore.value),
+        unredeemed=int(base.PaymentStatus.Unredeemed.value),
+        redeemed=int(base.PaymentStatus.Redeemed.value),
+        expired=int(base.PaymentStatus.Expired.value),
+        revoked=int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Apple payment (orig. TX ID={apple_original_tx_id}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
-    rows         = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
-    result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
+    rows = rows_result.fetchall()
+    result: bool = revoke_payments_by_id_internal(conn, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
-def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
+def add_google_revocation_tx(conn: sqlalchemy.engine.Connection, google_payment_token: str, revoke_unix_ts_ms: int, err: base.ErrorSink) -> bool:
     """Revoke all the payments that aren't revoked that share the same original TX ID. Returns true
     if there were any rows that had the ID"""
-    assert tx.cursor
 
     # NOTE: Select the newest google transaction that has been redeemed or not. Google only gives us
     # the purchase token in the scenarios that we call this function.
@@ -978,24 +941,23 @@ def add_google_revocation_tx(tx: base.SQLTransaction, google_payment_token: str,
     # what we're trying to communicate to the caller is that, the payment token they were trying to
     # modified, is indeed in a revoked/expired state (e.g. its idempotent to call this function) and
     # that entitlement has been revoked where necessary.
-    _ = tx.cursor.execute(f'''
+    rows_result = db.query(conn, f'''
     SELECT id, master_pkey, expiry_unix_ts_ms
     FROM   payments
-    WHERE  google_payment_token = ? AND
-           payment_provider     = ? AND
-           (status              = ? OR status = ? OR status = ? OR status = ?)
-    ''', (# WHERE values
-          google_payment_token,
-          int(base.PaymentProvider.GooglePlayStore.value),
-          # OR status == ?
-          int(base.PaymentStatus.Unredeemed.value),
-          int(base.PaymentStatus.Redeemed.value),
-          int(base.PaymentStatus.Expired.value),
-          int(base.PaymentStatus.Revoked.value),))
+    WHERE  google_payment_token = :token AND
+           payment_provider     = :provider AND
+           (status              = :unredeemed OR status = :redeemed OR status = :expired OR status = :revoked)
+    ''',
+        token=google_payment_token,
+        provider=int(base.PaymentProvider.GooglePlayStore.value),
+        unredeemed=int(base.PaymentStatus.Unredeemed.value),
+        redeemed=int(base.PaymentStatus.Redeemed.value),
+        expired=int(base.PaymentStatus.Expired.value),
+        revoked=int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Google payment (token={google_payment_token}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
-    rows = typing.cast(list[AddRevocationIterator], tx.cursor.fetchall())
-    result: bool = revoke_payments_by_id_internal(tx, rows, revoke_unix_ts_ms)
+    rows = rows_result.fetchall()
+    result: bool = revoke_payments_by_id_internal(conn, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Google payment {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
