@@ -87,7 +87,6 @@ class SessionWebhook:
 class ParsedArgs:
     ini_path:                            str                             = ''
     db_path:                             str                             = ''
-    db_path_is_uri:                      bool                            = False
     log_path:                            str                             = ''
     print_tables:                        bool                            = False
     dev:                                 bool                            = False
@@ -428,7 +427,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
 
         base_section: configparser.SectionProxy    = ini_parser['base']
         result.db_path                             = base_section.get(option='db_path',                     fallback='')
-        result.db_path_is_uri                      = base_section.getboolean(option='db_path_is_uri',       fallback=False)
         result.log_path                            = base_section.get(option='log_path',                    fallback='')
         result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
         result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
@@ -499,7 +497,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
 
     # NOTE: Get arguments from environment, they override .INI values if specified
     result.db_path                        = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
-    result.db_path_is_uri                 = base.os_get_boolean_env('SESH_PRO_BACKEND_DB_PATH_IS_URI',       result.db_path_is_uri)
     result.log_path                       = os.getenv('SESH_PRO_BACKEND_LOG_PATH',                           result.log_path)
     result.print_tables                   = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
     result.dev                            = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
@@ -587,7 +584,6 @@ def entry_point() -> flask.Flask:
     base.UNSAFE_LOGGING       = parsed_args.unsafe_logging
     base.DEV_BACKEND_MODE     = parsed_args.dev
     base.DB_PATH              = parsed_args.db_path
-    base.DB_PATH_IS_URI       = parsed_args.db_path_is_uri
     base.PLATFORM_TESTING_ENV = parsed_args.platform_testing_env
     if err.has():
         log.error(f'Failed to startup, invalid configuration options:\n  ' + '\n  '.join(err.msg_list))
@@ -784,9 +780,7 @@ def entry_point() -> flask.Flask:
     startup_log += f'  Features:\n'
     if len(parsed_args.ini_path) > 0:
         startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
-    if 1:
-        label = ' (URI)' if parsed_args.db_path_is_uri else ''
-        startup_log += f'    DB loaded from: {db.path}{label}\n'
+    startup_log += f'    DB loaded from: {db.path}\n'
     if len(parsed_args.log_path):
         startup_log += f'    Logging to: {parsed_args.log_path}\n'
     else:
@@ -872,7 +866,6 @@ def entry_point() -> flask.Flask:
     runtime = backend.get_runtime(db.conn)
     result: flask.Flask = server.init(testing_mode=False,
                                       db_path=db.path,
-                                      db_path_is_uri=parsed_args.db_path_is_uri,
                                       server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
 
     # NOTE: Add flask to our global logger

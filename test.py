@@ -362,7 +362,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     # NOTE: Get the user and payments and verify that the expiry and grace are correct
-    with base.SQLTransaction(db.conn) as tx:
+    with db.SQLTransaction(db.conn) as tx:
         get: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
         assert get.user.auto_renewing            == False
         assert get.user.grace_period_duration_ms == new_grace_duration_ms
@@ -641,7 +641,7 @@ def test_server_add_payment_flow(monkeypatch):
         runtime = backend.get_runtime(db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.gen_index == 0
 
@@ -839,7 +839,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         # Grab the generation index, and then calculate the expected generation index hash
         gen_index = 0
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.gen_index == 1
             gen_index = get_user.user.gen_index
@@ -848,7 +848,7 @@ def test_server_add_payment_flow(monkeypatch):
         post_revoke_gen_index_hash: bytes              = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
 
         # We will now manually revoke the user and check the revocation list again
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                        google_payment_token = new_add_pro_payment_tx.google_payment_token,
                                                        revoke_unix_ts_ms    = unix_ts_ms,
@@ -893,7 +893,7 @@ def test_server_add_payment_flow(monkeypatch):
             # Check user entitlement updated after revoke. We should prefer the unrevoked payment
             # as we have 2 payments for the user simultaneously where the latter was revoked but
             # the original was not.
-            with base.SQLTransaction(db.conn) as tx:
+            with db.SQLTransaction(db.conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
 
             for it in result_items:
@@ -1074,7 +1074,7 @@ def test_server_add_payment_flow(monkeypatch):
     # grace period
     if 1:
         # NOTE: Verify that there is no grace period set first
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.grace_period_duration_ms == 0
 
@@ -1101,7 +1101,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
         pro_proof_deadline_unix_ts_ms: int = 0
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.grace_period_duration_ms > 0
             pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
@@ -1168,7 +1168,7 @@ def test_server_add_payment_flow(monkeypatch):
         err.msg_list.clear()
 
     if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
-        with base.SQLTransaction(db.conn) as tx:
+        with db.SQLTransaction(db.conn) as tx:
             revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                        google_payment_token = payment_tx.google_payment_token,
                                                        revoke_unix_ts_ms    = start_unix_ts_ms,
@@ -3459,7 +3459,7 @@ def test_google_platform_handle_notification(monkeypatch):
         err_rtdn = base.ErrorSink()
         parse    = platform_google.parse_notification(scenario.rtdn_event, err_rtdn)
         handled  = False
-        with base.SQLTransaction(ctx.conn) as tx:
+        with db.SQLTransaction(ctx.conn) as tx:
             handled = platform_google.handle_parsed_notification(tx, parse, err_rtdn)
         assert not err_rtdn.has() and handled and len(parse.purchase_token) > 0
 

@@ -38,8 +38,9 @@ from appstoreserverlibrary.signed_data_verifier import (
 )
 
 import base
-import server
 import backend
+import db
+import server
 
 log = logging.Logger('APPLE')
 
@@ -138,7 +139,7 @@ def get_platform_refund_expiry_unix_ts_ms(tx: AppleJWSTransactionDecodedPayload)
     result: int = tx.expiresDate
     return result
 
-def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: base.SQLTransaction, notification_retry_duration_ms: int, err: base.ErrorSink) -> bool:
+def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: db.SQLTransaction, notification_retry_duration_ms: int, err: base.ErrorSink) -> bool:
     if err.has():
         return False
 
@@ -903,10 +904,10 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: ba
     return result
 
 def handle_notification(decoded_notification: DecodedNotification, sql_conn: sqlite3.Connection, notification_retry_duration_ms: int, err: base.ErrorSink) -> bool:
-  result = False
-  with base.SQLTransaction(sql_conn) as tx:
-    result = handle_notification_tx(decoded_notification, tx, notification_retry_duration_ms, err)
-  return result
+    result = False
+    with db.transaction(sql_conn) as tx:
+        result = handle_notification_tx(decoded_notification, tx, notification_retry_duration_ms, err)
+    return result
 
 @flask_blueprint.route(FLASK_ROUTE_NOTIFICATIONS_APPLE_APP_CONNECT_SANDBOX, methods=['POST'])
 def notifications_apple_app_connect_sandbox() -> flask.Response:
@@ -937,11 +938,10 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     # NOTE: Handle the notification
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
-    db                                        = server.open_db_from_flask_request_context(flask.current_app)
-    base.retry_function_on_database_locked_error(lambda: handle_notification(decoded_notification, db.sql_conn, core.notification_retry_duration_ms, err),
-                                                 log,
-                                                 "Apple notification handling failed",
-                                                 err)
+    db_result                                 = server.open_db_from_flask_request_context(flask.current_app)
+    db.retry_on_database_locked(lambda: handle_notification(decoded_notification, db_result.conn, core.notification_retry_duration_ms, err),
+                                log,
+                                "Apple notification handling failed")
 
     # NOTE: Handle errors
     if err.has():
@@ -953,7 +953,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
             )
 
             db = server.open_db_from_flask_request_context(flask.current_app)
-            backend.add_user_error(sql_conn=db.sql_conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
+            backend.add_user_error(conn=db.conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
 
         # NOTE: Log and abort request
         log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))
@@ -978,7 +978,7 @@ def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: Ap
 
 def catchup_on_missed_notifications(core: Core, sql_conn: sqlite3.Connection, end_unix_ts_ms: int):
     # NOTE: Lock the DB and catch on up missed notifications
-    with base.SQLTransaction(conn=sql_conn, mode=base.SQLTransactionMode.Exclusive) as tx:
+    with db.transaction(sql_conn) as tx:
         # NOTE: Do a catch-up check only if it's been 30mins since the last checkup. UWSGI spawns
         # multiple processes that call the main entry-point so this naturally dedupes all those
         # processes racing to try and execute this

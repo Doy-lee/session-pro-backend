@@ -576,7 +576,6 @@ class UserProStatus(enum.IntEnum):
 # a request to get the path to the SQLite DB to load and use for that request.
 
 FLASK_CONFIG_DB_PATH_KEY                            = 'session_pro_backend_db_path'
-FLASK_CONFIG_DB_PATH_IS_URI_KEY                     = 'session_pro_backend_db_path_is_uri'
 
 # Name of the endpoints exposed on the server
 FLASK_ROUTE_ADD_PRO_PAYMENT                         = '/add_pro_payment'
@@ -693,21 +692,17 @@ def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDB
 
     # Get current configuration from Flask
     db_path   = typing.cast(str, flask_app.config[FLASK_CONFIG_DB_PATH_KEY])
-    db_is_uri = typing.cast(bool, flask_app.config[FLASK_CONFIG_DB_PATH_IS_URI_KEY])
-
-    if (_worker_db_connection is not None and _worker_db_path == db_path and _worker_db_is_uri == db_is_uri):
+    if (_worker_db_connection is not None and _worker_db_path == db_path):
         return _worker_db_connection
 
     _worker_db_path       = db_path
-    _worker_db_is_uri     = db_is_uri
-    _worker_db_connection = backend.OpenDBAtPath(db_path, db_is_uri)
+    _worker_db_connection = backend.OpenDBAtPath(db_path)
     return _worker_db_connection
 
-def init(testing_mode: bool, db_path: str, db_path_is_uri: bool, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
+def init(testing_mode: bool, db_path: str, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
     result                                                      = flask.Flask(__name__)
     result.config['TESTING']                                    = testing_mode
     result.config[FLASK_CONFIG_DB_PATH_KEY]                     = db_path
-    result.config[FLASK_CONFIG_DB_PATH_IS_URI_KEY]              = db_path_is_uri
     result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
     result.register_blueprint(onion_req.flask_blueprint_v4)
@@ -873,7 +868,7 @@ def get_pro_revocations():
     db                = open_db_from_flask_request_context(flask.current_app)
     revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
     if ticket < revocation_ticket:
-        with base.SQLTransaction(db.sql_conn) as tx:
+        with db.SQLTransaction(db.sql_conn) as tx:
             runtime = backend.get_runtime_tx(tx)
             list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_pro_revocations_iterator(tx)
             for row in list_it:
@@ -954,7 +949,7 @@ def get_pro_details():
     error_report: int                                  = False
 
     db = open_db_from_flask_request_context(flask.current_app)
-    with base.SQLTransaction(db.sql_conn) as tx:
+    with db.SQLTransaction(db.sql_conn) as tx:
         error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
         get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
         grace_period_duration_ms             = get_user.user.grace_period_duration_ms

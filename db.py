@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import logging
 import sqlite3
+import traceback
+import typing
 from typing import Any
 
 import sqlalchemy
@@ -35,7 +38,7 @@ import sqlalchemy.event
 @dataclasses.dataclass
 class SQLTransaction:
     """Transaction context with cancel support."""
-    conn: sqlalchemy.engine.Connection = dataclasses.field(default=None)  # type: ignore[assignment]
+    conn: sqlalchemy.engine.Connection
     cancel: bool = False
 
 @contextlib.contextmanager
@@ -108,3 +111,11 @@ def set_db_version(conn: sqlalchemy.engine.Connection, engine: sqlalchemy.engine
         _ = conn.execute(sqlalchemy.text('UPDATE schema_version SET version = :v'), {'v': version})
     else:
         _ = conn.execute(sqlalchemy.text(f'PRAGMA user_version = {version}'))
+
+
+def retry_on_database_locked(callback: typing.Callable[[], typing.Any], log: logging.Logger, error_prefix: str) -> None:
+    # Execute a callback, retrying on SQLite database locked errors.
+    try:
+        callback()
+    except Exception as e:
+        log.error(f"{error_prefix}. Error was: {traceback.format_exc()}")

@@ -23,7 +23,8 @@ import google.api_core.exceptions
 
 import backend
 import base
-from backend import OpenDBAtPath, UserError
+import db
+from backend import OpenDBAtPath
 from base import (
     ProPlan,
     JSONObject,
@@ -107,7 +108,7 @@ def init(project_name:            str,
     result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
     return result
 
-def handle_parsed_notification(tx: base.SQLTransaction, parse: ParsedNotification, err: base.ErrorSink) -> bool:
+def handle_parsed_notification(tx: db.SQLTransaction, parse: ParsedNotification, err: base.ErrorSink) -> bool:
     result = False
     match parse.payload_type:
         case ParsedNotificationPayloadType.Nil:
@@ -151,8 +152,8 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     sorted_msg_list: list[SortedMessage] = []
 
     # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
-    with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-        with base.SQLTransaction(db.sql_conn) as tx:
+    with OpenDBAtPath(base.DB_PATH) as open_db:
+        with db.SQLTransaction(open_db.sql_conn) as tx:
             db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
             for row in db_it:
                 message_id          = row[0]
@@ -243,8 +244,8 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             # notification is handled or not is going to be bypassed and cause state
                             # inconsistencies.
                             def add_notification_id_to_db():
-                                with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
-                                    with base.SQLTransaction(db.sql_conn) as tx:
+                                with OpenDBAtPath(base.DB_PATH) as open_db:
+                                    with db.SQLTransaction(open_db.sql_conn) as tx:
                                         if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
                                             # NOTE: Our message retention policy for this subscription is 7 days
                                             # (default). We add a little buffer as we don't know exactly which
@@ -260,7 +261,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                                                                   expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
                                                                                   payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
 
-                            base.retry_function_on_database_locked_error(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
+                            db.retry_on_database_locked(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
                             if err.has():
                                 log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
                                 continue
@@ -290,7 +291,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         # file to mark a message as being done or handled so we check before proceeding.
                         if attempt:
                             try:
-                                with OpenDBAtPath(db_path=base.DB_PATH, uri=base.DB_PATH_IS_URI) as db:
+                                with OpenDBAtPath(base.DB_PATH) as open_db:
                                     # NOTE: If we try to mutate the database and it's locked, unlike
                                     # before we just set the handled flag to false. This causes the
                                     # message to be reattempted. In the add notification ID to DB phase
@@ -299,7 +300,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     # On any other error we raise the exception to the top-level handler
                                     # which will log it for us.
                                     lookup = backend.GoogleNotificationMessageIDInDB()
-                                    with base.SQLTransaction(db.sql_conn) as tx:
+                                    with db.SQLTransaction(open_db.sql_conn) as tx:
                                         # NOTE: By definition to be in the sorted list, the message must
                                         # have also been submitted into the DB. So if for some reason the
                                         # notification doesn't exist anymore (maybe someone deleted it
@@ -359,7 +360,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                 except Exception:
                     log.error(f'Google notification handling failed. Error was {traceback.format_exc()}')
 
-def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, tx: base.SQLTransaction, err: base.ErrorSink)-> bool:
+def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool | None, grace_period_duration_ms: int | None, tx: db.SQLTransaction, err: base.ErrorSink)-> bool:
     assert len(tx_payment.google_payment_token) > 0 and len(tx_payment.google_order_id) > 0 and not err.has()
     return backend.update_payment_renewal_info_tx(
         tx                       = tx,
@@ -369,12 +370,12 @@ def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, au
         err                      = err,
     )
 
-def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, tx: base.SQLTransaction, err: base.ErrorSink):
+def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, tx: db.SQLTransaction, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, auto_renewing, None, tx, err)
     if not success:
         err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
-def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, tx: base.SQLTransaction, err: base.ErrorSink):
+def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, tx: db.SQLTransaction, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, tx, err)
     if not success:
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
@@ -403,7 +404,7 @@ def require_obfuscated_external_account_id(tx_event: SubscriptionPlanEventTransa
             err.msg_list.append(f'Google user submitted a payment with a obfuscated ID that could not be parsed from hex into bytes')
     return result
 
-def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, tx: base.SQLTransaction, err: base.ErrorSink):
+def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction, tx_event: SubscriptionPlanEventTransaction, tx: db.SQLTransaction, err: base.ErrorSink):
     match tx_event.notification:
         case SubscriptionNotificationType.PURCHASED:
             """
