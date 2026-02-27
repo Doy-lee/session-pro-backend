@@ -17,6 +17,7 @@ import platform_google_types
 import base
 import db
 import sqlalchemy
+import sqlalchemy.engine
 
 ZERO_BYTES32               = bytes(32)
 BLAKE2B_DIGEST_SIZE        = 32
@@ -366,7 +367,7 @@ def make_add_pro_payment_hash(version:       int,
     result: bytes = hasher.digest()
     return result
 
-def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> PaymentRow:
+def payment_row_from_tuple(row: sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]]) -> PaymentRow:
     result                                    = PaymentRow()
     result.id                                 = row[0]
     result.master_pkey                        = row[1]
@@ -408,7 +409,7 @@ def get_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
             result.append(item)
     return result
 
-def get_user_and_payments(conn: sqlalchemy.engine.Connection, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
+def get_user_and_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
     select_fields = ("master_pkey, status, plan, payment_provider, auto_renewing, "
                      "unredeemed_unix_ts_ms, redeemed_unix_ts_ms, expiry_unix_ts_ms, "
                      "grace_period_duration_ms, platform_refund_expiry_unix_ts_ms, "
@@ -418,9 +419,9 @@ def get_user_and_payments(conn: sqlalchemy.engine.Connection, master_pkey: nacl.
                      "apple_app_account_token")
 
     result      = GetUserAndPayments()
-    result.user = get_user_from_sql_tx(conn, master_pkey)
+    result.user = get_user_from_sql_tx(tx, master_pkey)
 
-    row = db.query_one(conn, '''
+    row = db.query_one(tx.conn, '''
         SELECT COUNT(*)
         FROM   payments
         WHERE  master_pkey = :pkey
@@ -436,14 +437,14 @@ def get_user_and_payments(conn: sqlalchemy.engine.Connection, master_pkey: nacl.
     return result
 
 def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
-    result                             = UserRow()
-    result.found                       = True
-    result.master_pkey                 = row[0]
-    result.gen_index                   = row[1]
-    result.expiry_unix_ts_ms           = row[2]
-    result.grace_period_duration_ms    = row[3]
-    result.auto_renewing               = bool(row[4])
-    result.refund_requested_unix_ts_ms = row[5]
+    result                              = UserRow()
+    result.found                        = True
+    result.master_pkey                  = row[0]
+    result.gen_index                    = row[1]
+    result.expiry_unix_ts_ms            = row[2]
+    result.grace_period_duration_ms     = row[3]
+    result.auto_renewing                = bool(row[4])
+    result.refund_requested_unix_ts_ms  = row[5]
     result.google_obfuscated_account_id = row[6]
     result.apple_app_account_token      = row[7]
     return result
@@ -451,13 +452,29 @@ def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
 def get_users_list(conn: sqlalchemy.engine.Connection) -> list[UserRow]:
     result: list[UserRow] = []
     with db.transaction(conn):
-        for row in db.query(conn, 'SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users'):
+        for row in db.query(conn,
+                            ("SELECT master_pkey,"
+                             "gen_index,"
+                             "expiry_unix_ts_ms,"
+                             "grace_period_duration_ms,"
+                             "auto_renewing,"
+                             "refund_requested_unix_ts_ms,"
+                             "google_obfuscated_account_id,"
+                             "apple_app_account_token FROM users")):
             result.append(_user_from_row_iterator(tuple(row)))
     return result
 
 def get_user_from_sql_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> UserRow:
     result: UserRow = UserRow()
-    row = db.query_one(tx.conn, 'SELECT master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token FROM users WHERE master_pkey = :pkey', pkey=bytes(master_pkey))
+    row = db.query_one(tx.conn, ("SELECT master_pkey,"
+                                 "gen_index,"
+                                 "expiry_unix_ts_ms,"
+                                 "grace_period_duration_ms,"
+                                 "auto_renewing,"
+                                 "refund_requested_unix_ts_ms,"
+                                 "google_obfuscated_account_id,"
+                                 "apple_app_account_token FROM users WHERE master_pkey = :pkey"),
+                       pkey=bytes(master_pkey))
     if row:
         result = _user_from_row_iterator(tuple(row))
     return result
@@ -471,30 +488,38 @@ def get_user(conn: sqlalchemy.engine.Connection, master_pkey: nacl.signing.Verif
 def get_revocations_list(conn: sqlalchemy.engine.Connection) -> list[RevocationRow]:
     result: list[RevocationRow] = []
     with db.transaction(conn) as tx:
-        for row in db.query(tx.conn, 'SELECT gen_index, expiry_unix_ts_ms FROM revocations'):
+        for row in db.query(tx.conn, "SELECT gen_index, expiry_unix_ts_ms FROM revocations"):
             item                   = RevocationRow()
             item.gen_index         = row[0]
             item.expiry_unix_ts_ms = row[1]
             result.append(item)
     return result
 
-def is_gen_index_revoked(tx: db.SQLTransaction, gen_index: int) -> bool:
-    row = db.query_one(tx.conn, 'SELECT 1 FROM revocations WHERE gen_index = :idx', idx=gen_index)
+def is_gen_index_revoked_tx(tx: db.SQLTransaction, gen_index: int) -> bool:
+    row = db.query_one(tx.conn, "SELECT 1 FROM revocations WHERE gen_index = :index", index=gen_index)
     return row is not None
 
-def is_gen_index_revoked_tx(tx: db.SQLTransaction, gen_index: int) -> bool:
-    return is_gen_index_revoked(tx, gen_index)
+def is_gen_index_revoked(conn: sqlalchemy.engine.Connection, gen_index: int) -> bool:
+    result: bool = False
+    with db.transaction(conn) as tx:
+        result = is_gen_index_revoked_tx(tx, gen_index)
+    return result
 
 def get_revocation_ticket_tx(tx: db.SQLTransaction) -> int:
-    row = db.query_one(tx.conn, 'SELECT revocation_ticket FROM runtime')
+    row = db.query_one(tx.conn, "SELECT revocation_ticket FROM runtime")
     return row[0] if row else 0
 
 def get_pro_revocations_iterator_tx(tx: db.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
-    for row in db.query(tx.conn, 'SELECT gen_index, expiry_unix_ts_ms FROM revocations'):
+    for row in db.query(tx.conn, "SELECT gen_index, expiry_unix_ts_ms FROM revocations"):
         yield (row[0], row[1])
 
 def get_runtime_tx(tx: db.SQLTransaction) -> RuntimeRow:
-    row = db.query_one(tx.conn, 'SELECT gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket FROM runtime')
+    row = db.query_one(tx.conn, ("SELECT gen_index,"
+                                 "gen_index_salt,"
+                                 "backend_key,"
+                                 "last_expire_unix_ts_ms,"
+                                 "apple_notification_checkpoint_unix_ts_ms,"
+                                 "revocation_ticket FROM runtime"))
     result: RuntimeRow = RuntimeRow()
     if row:
         result.gen_index                                 = row[0]
@@ -605,7 +630,7 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
             for statement in schema_sql.split(';'):
                 statement = statement.strip()
                 if statement:
-                    _ = tx.conn.execute(sqlalchemy.text(statement))
+                    _ = db.query(tx.conn, (statement))
             tx.conn.commit()
 
             # NOTE: Version migration
@@ -621,15 +646,12 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
             if db_version == 5:
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
                 if not db.is_postgres(engine):
-                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
-                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
-                    for row in tx.conn.execute(sqlalchemy.text('SELECT master_pkey FROM users')).fetchall():
-                        master_pkey: bytes = row[0]
+                    _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
+                    _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
+                    for row in db.query(tx.conn, ('SELECT master_pkey FROM users')).fetchall():
+                        master_pkey: bytes                  = row[0]
                         google_obfuscated_account_id: bytes = google_obfuscated_account_id_from_master_pkey(nacl.signing.VerifyKey(master_pkey))
-                        _ = tx.conn.execute(
-                            sqlalchemy.text('UPDATE users SET google_obfuscated_account_id = :g WHERE master_pkey = :m'),
-                            {'g': google_obfuscated_account_id, 'm': master_pkey}
-                        )
+                        _                                   = db.query(tx.sql_conn, 'UPDATE users SET google_obfuscated_account_id = :g WHERE master_pkey = :m', g=google_obfuscated_account_id, m=master_pkey)
                 db_version += 1
                 db.set_db_version(tx.conn, engine, db_version)
                 tx.conn.commit()
@@ -637,8 +659,8 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
             if db_version == 6:
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
                 if not db.is_postgres(engine):
-                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
-                    _ = tx.conn.execute(sqlalchemy.text("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
+                    _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
+                    _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
                 db_version += 1
                 db.set_db_version(tx.conn, engine, db_version)
                 tx.conn.commit()
@@ -647,16 +669,16 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
             assert db_version == target_db_version
 
             # NOTE: Initialize the runtime row (app global settings) with the default values
-            row = tx.conn.execute(sqlalchemy.text('SELECT EXISTS (SELECT 1 FROM runtime)')).fetchone()
+            row = db.query(tx.conn, ('SELECT EXISTS (SELECT 1 FROM runtime)')).fetchone()
             runtime_row_exists = bool(row[0]) if row else False
             if not runtime_row_exists:
                 if backend_key is None:
                     backend_key = nacl.signing.SigningKey.generate()
 
-                tx.conn.execute(sqlalchemy.text('''
+                _ = db.query(tx.conn, ('''
                     INSERT INTO runtime (gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket)
                     VALUES (0, :salt, :backend_key, 0, 0, 0)
-                '''), {'salt': os.urandom(hashlib.blake2b.SALT_SIZE), 'backend_key': bytes(backend_key)})
+                '''), salt=os.urandom(hashlib.blake2b.SALT_SIZE), backend_key=bytes(backend_key))
                 tx.conn.commit()
 
             result.success = True
@@ -671,7 +693,7 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
 def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
     unredeemed_payments: list[PaymentRow] = get_unredeemed_payments_list(conn)
     for index, it in enumerate(unredeemed_payments):
-        base.verify_payment_provider(it.payment_provider, err)
+        _ = base.verify_payment_provider(it.payment_provider, err)
         if len(it.google_payment_token) != BLAKE2B_DIGEST_SIZE:
             err.msg_list.append(f'Unredeeemed payment #{index} token is not 32 bytes, was {len(it.google_payment_token)}')
         if it.plan == base.ProPlan.Nil:
@@ -764,19 +786,18 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
 def _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey):
     """Update fields for the user that depend on their list of payments, like
     their latest known expiry time"""
-    master_pkey_bytes: bytes = bytes(master_pkey)
-    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
+    master_pkey_bytes: bytes                    = bytes(master_pkey)
+    lookup:            LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
     # NOTE: We have the latest expiry value, now update the user
-    db.query(tx.conn, '''
+    _ = db.query(tx.conn, '''
         UPDATE users
         SET    expiry_unix_ts_ms = :expiry, grace_period_duration_ms = :grace, auto_renewing = :renewing, refund_requested_unix_ts_ms = :refund
         WHERE  master_pkey = :pkey
-    ''', 
-        expiry=lookup.best_expiry_unix_ts_ms, 
-        grace=lookup.best_grace_duration_ms, 
-        renewing=lookup.best_auto_renewing, 
-        refund=lookup.best_refund_requested_unix_ts_ms, 
-        pkey=master_pkey_bytes)
+    ''', expiry   = lookup.best_expiry_unix_ts_ms,
+         grace    = lookup.best_grace_duration_ms,
+         renewing = lookup.best_auto_renewing,
+         refund   = lookup.best_refund_requested_unix_ts_ms,
+         pkey     = master_pkey_bytes)
 
 def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, revoke_unix_ts_ms: int) -> bool:
     result                             = False
@@ -838,17 +859,17 @@ def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey
 
         if delete_item:
             if existed:
-                db.query(tx.conn, 'DELETE FROM revocations WHERE gen_index = :idx', idx=user.gen_index)
+                _      = db.query(tx.conn, 'DELETE FROM revocations WHERE gen_index = :idx', idx=user.gen_index)
                 result = SetRevocationResult.Deleted
             else:
                 result = SetRevocationResult.Skipped
         else:
-            db.query(tx.conn, '''
+            _ = db.query(tx.conn, '''
                 INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
-                VALUES      (:idx, :expiry_ts)
+                VALUES      (:index, :expiry_ts)
                 ON CONFLICT (gen_index) DO UPDATE SET
                     expiry_unix_ts_ms = excluded.expiry_unix_ts_ms
-            ''', idx=user.gen_index, expiry_ts=expiry_unix_ts_ms)
+            ''', index=user.gen_index, expiry_ts=expiry_unix_ts_ms)
             result = SetRevocationResult.Updated if existed else SetRevocationResult.Created
     return result
 
@@ -887,7 +908,7 @@ def add_apple_revocation_tx(tx: db.SQLTransaction, apple_original_tx_id: str, re
         revoked=int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Apple payment (orig. TX ID={apple_original_tx_id}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
-    rows = rows_result.fetchall()
+    rows         = rows_result.fetchall()
     result: bool = revoke_payments_by_id_internal_tx(tx, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
@@ -922,8 +943,8 @@ def add_google_revocation_tx(tx: db.SQLTransaction, google_payment_token: str, r
         revoked=int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Google payment (token={google_payment_token}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
-    rows = rows_result.fetchall()
-    result: bool = revoke_payments_by_id_internal(conn, rows, revoke_unix_ts_ms)
+    rows         = rows_result.fetchall()
+    result: bool = revoke_payments_by_id_internal_tx(tx, rows, revoke_unix_ts_ms)
     if result == False:
         err.msg_list.append(f'Failed to revoke Google payment {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
@@ -947,7 +968,6 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     #mask metadata about the time the user redeemed the payment.
     """
 
-    assert tx.cursor is not None
     result                   = RedeemPayment()
     result.status            = RedeemPaymentStatus.Error
 
@@ -976,44 +996,45 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     # for that to happen. Maybe more realistically a payment could get revoked before it was
     # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
     # account.
+
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        _ = tx.cursor.execute(f'''
+        row_result = db.query(tx.conn, f'''
             UPDATE payments
             SET    {set_expr}
-            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status = ? AND google_obfuscated_account_id = ?
-        ''', (# SET values
-              master_pkey_bytes,
-              int(base.PaymentStatus.Redeemed.value),
-              redeemed_unix_ts_ms,
+            WHERE  payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id AND status = :status_where AND google_obfuscated_account_id = :account_id
+        ''', # SET values
+              master_pkey         = master_pkey_bytes,
+              status              = int(base.PaymentStatus.Redeemed.value),
+              redeemed_unix_ts_ms = redeemed_unix_ts_ms,
               # WHERE values
-              int(payment_tx.provider.value),
-              payment_tx.google_payment_token,
-              payment_tx.google_order_id,
-              int(base.PaymentStatus.Unredeemed.value),
-              google_obfuscated_account_id_from_master_pkey(master_pkey),))
+              provider            = int(payment_tx.provider.value),
+              token               = payment_tx.google_payment_token,
+              order_id            = payment_tx.google_order_id,
+              status_where        = int(base.PaymentStatus.Unredeemed.value),
+              account_id          = google_obfuscated_account_id_from_master_pkey(master_pkey))
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-        _ = tx.cursor.execute(f'''
+        row_result = db.query(tx.conn, f'''
             UPDATE payments
             SET    {set_expr}
-            WHERE  payment_provider = ? AND apple_tx_id = ? AND status = ? AND apple_app_account_token = ?
-        ''', (# SET fields
-              master_pkey_bytes,
-              int(base.PaymentStatus.Redeemed.value),
-              redeemed_unix_ts_ms,
+            WHERE  payment_provider = :provider AND apple_tx_id = :tx_id AND status = :status_where AND apple_app_account_token = :account_token
+        ''', # SET fields
+              master_pkey         = master_pkey_bytes,
+              status              = int(base.PaymentStatus.Redeemed.value),
+              redeemed_unix_ts_ms = redeemed_unix_ts_ms,
               # WHERE fields
-              int(payment_tx.provider.value),
-              payment_tx.apple_tx_id,
-              int(base.PaymentStatus.Unredeemed.value),
-              apple_obfuscated_account_id_from_master_pkey(master_pkey),))
+              provider            = int(payment_tx.provider.value),
+              tx_id               = payment_tx.apple_tx_id,
+              status_where        = int(base.PaymentStatus.Unredeemed.value),
+              account_token       = apple_obfuscated_account_id_from_master_pkey(master_pkey))
     else:
         err.msg_list.append('Payment to register specifies an unknown payment provider')
+        return result
 
-    if tx.cursor.rowcount >= 1:
-        assert tx.cursor.rowcount == 1
-        if tx.cursor.rowcount > 1:
-            err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {tx.cursor.rowcount}')
-
-        # NOTE: Payment has been registered, give the user a new generation index. Subsequent
+    rowcount = row_result.rowcount
+    if rowcount >= 1:
+        assert rowcount == 1
+        if rowcount > 1:
+            err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {rowcount}')
         # proofs will be given a new gen index hash. We used to revoke the old gen index hash
         # but there's no need for that and creates churn in the revoke list. The user will hold
         # onto their proof until it expires and simply request a new one.
@@ -1052,15 +1073,22 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
         # any information because this is all data populated by the user who
         # is sending the redeeming request.
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            _ = tx.cursor.execute(f'''
-                SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ? AND status > ? AND master_pkey = ?
-            ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
+            row_result = db.query(tx.conn, '''
+                SELECT COUNT(*) FROM payments WHERE payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id AND status > :status AND master_pkey = :master_pkey
+            ''', provider    = int(payment_tx.provider.value),
+                 token       = payment_tx.google_payment_token,
+                 order_id    = payment_tx.google_order_id,
+                 status      = int(base.PaymentStatus.Unredeemed.value),
+                 master_pkey = master_pkey_bytes)
         elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-            _ = tx.cursor.execute(f'''
-                SELECT COUNT(*) FROM payments WHERE payment_provider = ? AND apple_tx_id = ? AND status > ? AND master_pkey = ?
-            ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id, int(base.PaymentStatus.Unredeemed.value), master_pkey_bytes))
-
-        if tx.cursor.fetchone()[0] > 0:
+            row_result = db.query(tx.conn, '''
+                SELECT COUNT(*) FROM payments WHERE payment_provider = :provider AND apple_tx_id = :tx_id AND status > :status AND master_pkey = :master_pkey
+            ''', provider    = int(payment_tx.provider.value),
+                 tx_id       = payment_tx.apple_tx_id,
+                 status      = int(base.PaymentStatus.Unredeemed.value),
+                 master_pkey = master_pkey_bytes)
+        first_row = row_result.fetchone()
+        if first_row and first_row[0] > 0:
             err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
             result.status = RedeemPaymentStatus.AlreadyRedeemed
         else:
@@ -1074,7 +1102,7 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     return result
 
 def verify_payment_provider_tx(payment_tx: base.PaymentProviderTransaction, err: base.ErrorSink):
-    base.verify_payment_provider(payment_tx.provider, err)
+    _ = base.verify_payment_provider(payment_tx.provider, err)
     match payment_tx.provider:
         case base.PaymentProvider.GooglePlayStore:
             if len(payment_tx.google_order_id) == 0:
@@ -1089,25 +1117,23 @@ def verify_payment_provider_tx(payment_tx: base.PaymentProviderTransaction, err:
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
-def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> LookupUserExpiryUnixTsMs:
-    assert tx.cursor
-
+def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> LookupUserExpiryUnixTsMs:
     # NOTE: We grab the expired ones as well because if they have grace that payment's deadline
     # is later than the expiry period which may actually be the latest known expiry period
     #
     # By definition we can't lookup unredeemed payments because they don't have a master public key
     # registered for it yet (e.g. the user has not associated a master public key with the payment
     # yet by redeeming it).
-    _ = tx.cursor.execute(f'''
+    result_set = db.query(tx.conn, ('''
         SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id, revoked_unix_ts_ms
         FROM      payments
-        WHERE     master_pkey = ? AND (status = ? OR status = ? OR status = ?)
+        WHERE     master_pkey = :master_pkey AND (status = :status1 OR status = :status2 OR status = :status3)
         ORDER BY  id DESC
         LIMIT     20
-    ''', (bytes(master_pkey),
-          int(base.PaymentStatus.Redeemed.value),
-          int(base.PaymentStatus.Revoked.value),
-          int(base.PaymentStatus.Expired.value),))
+    '''), master_pkey = bytes(master_pkey),
+          status1     = int(base.PaymentStatus.Redeemed.value),
+          tatus2     = int(base.PaymentStatus.Revoked.value),
+          status3     = int(base.PaymentStatus.Expired.value),)
 
     used_google_order_ids:  list[str] = []
     used_apple_orig_tx_ids: set[int]  = set()
@@ -1115,7 +1141,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx: db.SQLTran
     # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
     # the expiry time (inclusive of the grace period if applicable)
     result      = LookupUserExpiryUnixTsMs()
-    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str, int]], tx.cursor.fetchall())
+    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str, int]], result_set.fetchall())
     for row in rows:
         expiry_unix_ts_ms:           int = row[0]
         grace_period_duration_ms:    int = row[1]
@@ -1225,58 +1251,64 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
         return result
 
     # NOTE: Generate the fields to write to matching payment in the DB
-    sql_execute_args: list[typing.Any] = []
-    sql_set_fields:   str              = ''
+    sql_set_fields: str = ''
+    kwparams: dict[str, typing.Any] = {}
     if auto_renewing is not None:
         if len(sql_set_fields):
             sql_set_fields += ', '
-        sql_set_fields += 'auto_renewing = ?'
-        sql_execute_args.append(int(auto_renewing))
+        sql_set_fields += 'auto_renewing = :auto_renewing'
+        kwparams['auto_renewing'] = int(auto_renewing)
 
     if grace_period_duration_ms is not None:
         if len(sql_set_fields):
             sql_set_fields += ', '
-        sql_set_fields += 'grace_period_duration_ms = ?'
-        sql_execute_args.append(grace_period_duration_ms)
+        sql_set_fields += 'grace_period_duration_ms = :grace_period_duration_ms'
+        kwparams['grace_period_duration_ms'] = grace_period_duration_ms
 
     # NOTE: Execute the statement
-    assert tx.cursor is not None
+    result_set: sqlalchemy.engine.Result[typing.Any] | None = None
     match payment_tx.provider:
         case base.PaymentProvider.Nil:
             pass
 
         case base.PaymentProvider.GooglePlayStore:
-            _ = tx.cursor.execute(f'''
+            result_set = db.query(tx.conn, f'''
                 UPDATE    payments
                 SET       {sql_set_fields}
-                WHERE     google_payment_token = ? AND google_order_id = ?
+                WHERE     google_payment_token = :token AND google_order_id = :order_id
                 RETURNING master_pkey
-            ''', (*tuple(sql_execute_args), payment_tx.google_payment_token, payment_tx.google_order_id))
+            ''', token=payment_tx.google_payment_token,
+                 order_id=payment_tx.google_order_id,
+                 **kwparams)
 
         case base.PaymentProvider.iOSAppStore:
-            _ = tx.cursor.execute(f'''
+            result_set = db.query(tx.conn, f'''
                 UPDATE    payments
                 SET       {sql_set_fields}
-                WHERE     apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
+                WHERE     apple_original_tx_id = :orig_tx_id AND apple_tx_id = :tx_id AND apple_web_line_order_tx_id = :line_order_tx_id
                 RETURNING master_pkey
-            ''', (*tuple(sql_execute_args), payment_tx.apple_original_tx_id, payment_tx.apple_tx_id, payment_tx.apple_web_line_order_tx_id))
+            ''', orig_tx_id=payment_tx.apple_original_tx_id,
+                 tx_id=payment_tx.apple_tx_id,
+                 line_order_tx_id=payment_tx.apple_web_line_order_tx_id,
+                 **kwparams)
 
-    # NOTE: Having `RETURNING master_pkey` seems to break tx.cursor.rowcount and returns 0 even on
+    # NOTE: Having `RETURNING master_pkey` seems to break rowcount and returns 0 even on
     # row modification. We use fetchone instead
-    row    = typing.cast(tuple[bytes] | None, tx.cursor.fetchone())
+    assert result_set
+    row    = typing.cast(sqlalchemy.Row[bytes] | None, result_set.fetchone())
     result = row is not None
 
     # NOTE: Update the user's expiry to the latest known expiry
     if row and row[0]:
         master_pkey_bytes: bytes = row[0]
-        _update_user_expiry_grace_and_renew_flag_from_payment_list(tx, nacl.signing.VerifyKey(master_pkey_bytes))
+        _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
 
     if result == False:
         payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
         err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
     return result
 
-def update_payment_renewal_info(conn: sqlalchemy.engine.Connection,
+def update_payment_renewal_info(conn:                     sqlalchemy.engine.Connection,
                                 payment_tx:               base.PaymentProviderTransaction,
                                 grace_period_duration_ms: int  | None,
                                 auto_renewing:            bool | None,
@@ -1304,20 +1336,19 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
     if len(err.msg_list) > 0:
         return
 
-    assert tx.cursor is not None
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         assert isinstance(platform_obfuscated_account_id, bytes)
         assert len(platform_obfuscated_account_id) == 32
 
         # NOTE: Insert into the table, IFF, the payment token hash doesn't already exist in the
         # payments table
-        _ = tx.cursor.execute(f'''
+        result_set = db.query(tx.conn, '''
             SELECT 1
             FROM payments
-            WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-        ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
+            WHERE payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id
+        ''', provider=int(payment_tx.provider.value), token=payment_tx.google_payment_token, order_id=payment_tx.google_order_id)
 
-        record = tx.cursor.fetchone()
+        record = result_set.fetchone()
         if not record:
             fields      = ['plan',
                            'payment_provider',
@@ -1332,13 +1363,14 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                            'refund_requested_unix_ts_ms',
                            'google_obfuscated_account_id',
                            'apple_app_account_token']
-            stmt_fields = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
-            stmt_values = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
+            stmt_fields = ', '.join(fields)
+            stmt_values = ', '.join([':' + f for f in fields])
 
-            _ = tx.cursor.execute(f'''
+            _ = db.query(tx.conn, f'''
                 INSERT INTO payments ({stmt_fields})
                 VALUES ({stmt_values})
-            ''', (int(plan.value),
+            ''', {f: v for f, v in zip(fields, [
+                  int(plan.value),
                   payment_tx.provider.value,
                   payment_tx.google_payment_token,
                   payment_tx.google_order_id,
@@ -1351,7 +1383,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   0,                              # refund request unix ts ms
                   platform_obfuscated_account_id, # google_obfuscated_account_id
                   '',                             # apple_app_account_token - empty for google
-                  ))
+            ])})
 
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         assert isinstance(platform_obfuscated_account_id, str)
@@ -1361,16 +1393,16 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
         # apple_web_line_order_tx_id is unique for the payment of the billing
         # cycle for that subscription and the apple_original_tx_id is reused
         # across all subscriptions of the same type.
-        _ = tx.cursor.execute(f'''
+        result_set = db.query(tx.conn, '''
                 SELECT 1
                 FROM payments
-                WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-        ''', (int(payment_tx.provider.value),
-              payment_tx.apple_original_tx_id,
-              payment_tx.apple_tx_id,
-              payment_tx.apple_web_line_order_tx_id))
+                WHERE payment_provider = :provider AND apple_original_tx_id = :orig_tx_id AND apple_tx_id = :tx_id AND apple_web_line_order_tx_id = :line_order_tx_id
+        ''', provider=int(payment_tx.provider.value),
+              orig_tx_id=payment_tx.apple_original_tx_id,
+              tx_id=payment_tx.apple_tx_id,
+              line_order_tx_id=payment_tx.apple_web_line_order_tx_id)
 
-        record = tx.cursor.fetchone()
+        record = result_set.fetchone()
         if not record:
             fields:      list[str] = ['plan',
                                       'payment_provider',
@@ -1386,13 +1418,14 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                                       'refund_requested_unix_ts_ms',
                                       'google_obfuscated_account_id',
                                       'apple_app_account_token']
-            stmt_fields: str       = ', '.join(fields)                 # Create '<field0>, <field1>, ...'
-            stmt_values: str       = ', '.join(['?' for _ in fields])  # Create '?,        ?,        ...'
+            stmt_fields: str       = ', '.join(fields)
+            stmt_values: str       = ', '.join([':' + f for f in fields])
 
-            _ = tx.cursor.execute(f'''
+            _ = db.query(tx.conn, f'''
                 INSERT INTO payments ({stmt_fields})
                 VALUES ({stmt_values})
-            ''', (int(plan.value),
+            ''', {f: v for f, v in zip(fields, [
+                  int(plan.value),
                   int(payment_tx.provider.value),
                   payment_tx.apple_original_tx_id,
                   payment_tx.apple_tx_id,
@@ -1406,7 +1439,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   0,                              # refund request unix ts ms
                   b'',                            # google_obfuscated_account_id - empty for apple
                   platform_obfuscated_account_id, # apple_app_account_token
-                  ))
+            ])})
 
     # NOTE: Find the latest master pkey associated with the common payment identifier (google payment
     # token or apple original tx id). Then find the user if it exists, if the user is still entitled
@@ -1425,24 +1458,26 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
     #
     # So the backend tries automatically redeem the payment on behalf of the user (if it seems
     # reasonable to do so according to that heuristic) for UX.
+    result_set: sqlalchemy.engine.Result[typing.Any] | None = None
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        _ = tx.cursor.execute(f'''
+        result_set = db.query(tx.conn, ('''
             SELECT   master_pkey
             FROM     payments
-            WHERE    payment_provider = ? AND google_payment_token = ? AND master_pkey IS NOT NULL
+            WHERE    payment_provider = :provider AND google_payment_token = :token AND master_pkey IS NOT NULL
             ORDER BY id DESC
             LIMIT    1
-        ''', (int(payment_tx.provider.value), payment_tx.google_payment_token))
-    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-        _ = tx.cursor.execute(f'''
+        '''), {'provider': int(payment_tx.provider.value), 'token': payment_tx.google_payment_token})
+    else:
+        assert payment_tx.provider == base.PaymentProvider.iOSAppStore
+        result_set = db.query(tx.conn, ('''
             SELECT   master_pkey
             FROM     payments
-            WHERE    payment_provider = ? AND apple_original_tx_id = ? AND master_pkey IS NOT NULL
+            WHERE    payment_provider = :provider AND apple_original_tx_id = :orig_tx_id AND master_pkey IS NOT NULL
             ORDER BY id DESC
             LIMIT    1
-        ''', (int(payment_tx.provider.value), payment_tx.apple_original_tx_id))
+        '''), {'provider': int(payment_tx.provider.value), 'orig_tx_id': payment_tx.apple_original_tx_id})
 
-    master_pkey_record = typing.cast(tuple[bytes] | None, tx.cursor.fetchone())
+    master_pkey_record = typing.cast(sqlalchemy.Row[bytes] | None, result_set.fetchone())
     if master_pkey_record and master_pkey_record[0]:
         master_pkey   = nacl.signing.VerifyKey(master_pkey_record[0])
         user: UserRow = get_user_from_sql_tx(tx, master_pkey)
@@ -1502,7 +1537,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                     err_str = '\n'.join(tmp_err.msg_list)
                     log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
 
-def add_unredeemed_payment(conn: sqlalchemy.engine.Connection,
+def add_unredeemed_payment(conn:                              sqlalchemy.engine.Connection,
                            payment_tx:                        base.PaymentProviderTransaction,
                            plan:                              base.ProPlan,
                            expiry_unix_ts_ms:                 int,
@@ -1523,19 +1558,18 @@ def add_unredeemed_payment(conn: sqlalchemy.engine.Connection,
 def _allocate_new_gen_id_if_master_pkey_has_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     result:            AllocatedGenID = AllocatedGenID()
     master_pkey_bytes: bytes          = bytes(master_pkey)
-    assert tx.cursor is not None
 
-    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table(tx, master_pkey)
+    lookup: LookupUserExpiryUnixTsMs = _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx, master_pkey)
     result.expiry_unix_ts_ms         = lookup.expiry_unix_ts_ms_from_redeemed
     if lookup.expiry_unix_ts_ms_from_redeemed > 0:
         # NOTE: Master pkey has a payment we can use. Allocate a new generation ID in the runtime table
         result.found = True
-        _ = tx.cursor.execute('''
+        runtime_result = db.query(tx.conn, '''
             UPDATE    runtime
             SET       gen_index = gen_index + 1
             RETURNING gen_index - 1, gen_index_salt
         ''')
-        runtime_row           = typing.cast(tuple[int, bytes], tx.cursor.fetchone())
+        runtime_row           = typing.cast(sqlalchemy.Row[tuple[int, bytes]], runtime_result.fetchone())
         result.gen_index      = runtime_row[0]
         result.gen_index_salt = runtime_row[1]
 
@@ -1545,9 +1579,9 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: db.SQLTransaction, mast
         #
         # This means that for the most part, consumers can just rely on the top level object to
         # determine the current state of the user subscription payment.
-        _ = tx.cursor.execute('''
+        _ = db.query(tx.conn, '''
             INSERT INTO users (master_pkey, gen_index, expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token)
-            VALUES            (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES            (:master_pkey, :gen_index, :expiry, :grace, :auto_renewing, :refund_ts, :google_id, :apple_id)
             ON CONFLICT (master_pkey) DO UPDATE SET
                 gen_index                    = excluded.gen_index,
                 expiry_unix_ts_ms            = excluded.expiry_unix_ts_ms,
@@ -1556,15 +1590,15 @@ def _allocate_new_gen_id_if_master_pkey_has_payments(tx: db.SQLTransaction, mast
                 refund_requested_unix_ts_ms  = excluded.refund_requested_unix_ts_ms,
                 google_obfuscated_account_id = excluded.google_obfuscated_account_id,
                 apple_app_account_token      = excluded.apple_app_account_token
-        ''', (master_pkey_bytes,
-              result.gen_index,
-              lookup.best_expiry_unix_ts_ms,
-              lookup.best_grace_duration_ms,
-              lookup.best_auto_renewing,
-              lookup.best_refund_requested_unix_ts_ms,
-              google_obfuscated_account_id_from_master_pkey(master_pkey),
-              apple_obfuscated_account_id_from_master_pkey(master_pkey),
-              ))
+        ''', master_pkey   = master_pkey_bytes,
+             gen_index     = result.gen_index,
+             expiry        = lookup.best_expiry_unix_ts_ms,
+             grace         = lookup.best_grace_duration_ms,
+             auto_renewing = lookup.best_auto_renewing,
+             refund_ts     = lookup.best_refund_requested_unix_ts_ms,
+             google_id     = google_obfuscated_account_id_from_master_pkey(master_pkey),
+             apple_id      = apple_obfuscated_account_id_from_master_pkey(master_pkey),
+             )
 
     return result
 
@@ -1671,7 +1705,7 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     result = len(err.msg_list) == 0
     return result
 
-def add_pro_payment(conn: sqlalchemy.engine.Connection,
+def add_pro_payment(conn:                sqlalchemy.engine.Connection,
                     version:             int,
                     signing_key:         nacl.signing.SigningKey,
                     unix_ts_ms:          int,
@@ -1760,7 +1794,7 @@ def add_pro_payment(conn: sqlalchemy.engine.Connection,
             else:
                 assert False, "Invalid code path"
 
-            add_unredeemed_payment(conn                          = conn,
+            add_unredeemed_payment(conn                              = conn,
                                    payment_tx                        = internal_payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
                                    unredeemed_unix_ts_ms             = redeemed_unix_ts_ms,
@@ -1771,11 +1805,11 @@ def add_pro_payment(conn: sqlalchemy.engine.Connection,
 
             # Randomly toggle auto-renewal
             is_fake_auto_renewing = bool(random.getrandbits(1))
-            _ = update_payment_renewal_info(conn=sql_conn,
-                                            payment_tx=internal_payment_tx,
-                                            grace_period_duration_ms=(60 * 1000) if is_fake_auto_renewing else 0,
-                                            auto_renewing=is_fake_auto_renewing,
-                                            err=err)
+            _ = update_payment_renewal_info(conn                     = conn,
+                                            payment_tx               = internal_payment_tx,
+                                            grace_period_duration_ms = (60 * 1000) if is_fake_auto_renewing else 0,
+                                            auto_renewing            = is_fake_auto_renewing,
+                                            err                      = err)
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_add_pro_payment_hash(version       = version,
@@ -1856,20 +1890,19 @@ def add_pro_payment(conn: sqlalchemy.engine.Connection,
 
     return result
 
-def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
+def revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
     # Revoke the generation index allocated to the master pkey. This blocks all of the proofs
     # generated by the client that were using that payment.
-    assert tx.cursor
-    _ = tx.cursor.execute('''
+    _ = db.query(tx.conn, ('''
         WITH prev_user AS (
             SELECT gen_index, expiry_unix_ts_ms
             FROM   users
-            WHERE  master_pkey = ?
+            WHERE  master_pkey = :master_pkey
         )
         INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
         SELECT      gen_index, expiry_unix_ts_ms
         FROM        prev_user
-    ''', (bytes(master_pkey),))
+    '''), master_pkey = bytes(master_pkey))
 
     # If the use had any left over payments that are valid to use, we can allocate them a new
     # generation ID for subsequent proofs to be generated under. Clients will notice that their
@@ -1881,23 +1914,20 @@ def revoke_master_pkey_proofs_and_allocate_new_gen_id(tx: db.SQLTransaction, mas
 def expire_by_unix_ts_ms(tx: db.SQLTransaction, unix_ts_ms: int) -> set[nacl.signing.VerifyKey]:
     log.info(f'Expire by ts (ts={base.readable_unix_ts_ms(unix_ts_ms)})')
 
-    assert tx.cursor
-    _ = tx.cursor.execute(f'''
+    result_set = db.query(tx.conn, ('''
         UPDATE    payments
-        SET       status = ?
-        WHERE     ? >= expiry_unix_ts_ms AND (status = ? OR status = ?)
+        SET       status = :status
+        WHERE     :unix_ts_ms >= expiry_unix_ts_ms AND (status = :status1 OR status = :status2)
         RETURNING master_pkey
-    ''', (# SET values
-          int(base.PaymentStatus.Expired.value),
+    '''), # SET values
+          status     = int(base.PaymentStatus.Expired.value),
           # WHERE values
-          unix_ts_ms,
-          int(base.PaymentStatus.Unredeemed.value),
-          int(base.PaymentStatus.Redeemed.value),
-          ))
+          unix_ts_ms = unix_ts_ms,
+          status1    = int(base.PaymentStatus.Unredeemed.value),
+          status2    = int(base.PaymentStatus.Redeemed.value),)
 
     result: set[nacl.signing.VerifyKey] = set()
-    rows = typing.cast(collections.abc.Iterator[tuple[bytes | None]], tx.cursor)
-    for row in rows:
+    for row in result_set:
         if row[0]:
             master_pkey = nacl.signing.VerifyKey(row[0])
             result.add(master_pkey)
@@ -1983,56 +2013,58 @@ def generate_pro_proof(conn: sqlalchemy.engine.Connection,
 def expire_payments_revocations_and_users(conn: sqlalchemy.engine.Connection, unix_ts_ms: int) -> ExpireResult:
     result = ExpireResult()
     with db.transaction(conn) as tx:
-        assert tx.cursor is not None
         # Retrieve the last expiry time that was executed
-        _ = tx.cursor.execute('''SELECT last_expire_unix_ts_ms FROM runtime''')
-        last_expire_unix_ts_ms:       int  = typing.cast(tuple[int], tx.cursor.fetchone())[0]
+        runtime_result                     = db.query_one(tx.conn, '''SELECT last_expire_unix_ts_ms FROM runtime''')
+        assert runtime_result
+
+        last_expire_unix_ts_ms:       int  = runtime_result[0]
         already_done_by_someone_else: bool = last_expire_unix_ts_ms >= unix_ts_ms
         log.info(f'Expire payments/revocs/users (pid={os.getpid()}, ts={base.readable_unix_ts_ms(unix_ts_ms)}, last_expire={last_expire_unix_ts_ms}, already_done_by_someone_else={already_done_by_someone_else})')
         if not already_done_by_someone_else:
             # Update the timestamp that we executed DB expiry
-            _ = tx.cursor.execute('''UPDATE runtime SET last_expire_unix_ts_ms = ?''', (unix_ts_ms,))
+            _ = db.query(tx.conn, '''UPDATE runtime SET last_expire_unix_ts_ms = :ts''', ts=unix_ts_ms)
 
             # Delete expired payments
             master_pkeys: set[nacl.signing.VerifyKey] = expire_by_unix_ts_ms(tx=tx, unix_ts_ms=unix_ts_ms)
-            result.payments = len(master_pkeys)
+            result.payments                           = len(master_pkeys)
 
             # Delete expired revocations
-            _ = tx.cursor.execute(''' DELETE FROM revocations WHERE ? >= expiry_unix_ts_ms; ''', (unix_ts_ms,))
-            result.revocations = tx.cursor.rowcount
+            rev_result                                = db.query(tx.conn, '''DELETE FROM revocations WHERE :ts >= expiry_unix_ts_ms''', ts=unix_ts_ms)
+            result.revocations                        = rev_result.rowcount
 
             # Delete expired users
-            _ = tx.cursor.execute('''DELETE FROM users WHERE master_pkey NOT IN (SELECT master_pkey FROM payments)''')
-            result.users = tx.cursor.rowcount
+            users_result                              = db.query(tx.conn, '''DELETE FROM users WHERE master_pkey NOT IN (SELECT master_pkey FROM payments)''')
+            result.users                              = users_result.rowcount
 
             # Delete expired apple notification UUIDs
-            _ = tx.cursor.execute('''DELETE FROM apple_notification_uuid_history WHERE ? >= expiry_unix_ts_ms''', (unix_ts_ms,))
-            result.apple_notification_uuid_history = tx.cursor.rowcount
+            apple_result                              = db.query(tx.conn, '''DELETE FROM apple_notification_uuid_history WHERE :ts >= expiry_unix_ts_ms''', ts=unix_ts_ms)
+            result.apple_notification_uuid_history    = apple_result.rowcount
 
             # Delete expired google notifications (but only if they have been handled)
-            _ = tx.cursor.execute('''DELETE FROM google_notification_history WHERE ? >= expiry_unix_ts_ms AND handled = 1''', (unix_ts_ms,))
-            result.google_notification_history = tx.cursor.rowcount
+            google_result                      = db.query(tx.conn, '''DELETE FROM google_notification_history WHERE :ts >= expiry_unix_ts_ms AND handled = 1''', ts=unix_ts_ms)
+            result.google_notification_history = google_result.rowcount
 
         result.already_done_by_someone_else = already_done_by_someone_else
         result.success                      = True
     return result
 
 def add_user_error_tx(tx: db.SQLTransaction, error: UserError, unix_ts_ms: int):
-    assert tx.cursor is not None
     match error.provider:
+        case base.PaymentProvider.Nil:
+            pass
         case base.PaymentProvider.GooglePlayStore:
             assert len(error.google_payment_token) > 0
-            _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
-                 (int(error.provider.value),
-                  error.google_payment_token,
-                  unix_ts_ms))
+            _ = db.query(tx.conn, '''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (:provider, :payment_id, :ts) ON CONFLICT DO NOTHING''',
+                 provider=int(error.provider.value),
+                 payment_id=error.google_payment_token,
+                 ts=unix_ts_ms)
 
         case base.PaymentProvider.iOSAppStore:
             assert len(error.apple_original_tx_id) > 0
-            _ = tx.cursor.execute('''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING''',
-                 (int(error.provider.value),
-                  error.apple_original_tx_id,
-                  unix_ts_ms))
+            _ = db.query(tx.conn, '''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (:provider, :payment_id, :ts) ON CONFLICT DO NOTHING''',
+                 provider=int(error.provider.value),
+                 payment_id=error.apple_original_tx_id,
+                 ts=unix_ts_ms)
 
 
 def add_user_error(conn: sqlalchemy.engine.Connection, error: UserError, unix_ts_ms: int):
@@ -2041,27 +2073,27 @@ def add_user_error(conn: sqlalchemy.engine.Connection, error: UserError, unix_ts
         add_user_error_tx(tx, error, unix_ts_ms)
 
 def has_user_error_tx(tx: db.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
-    assert tx.cursor is not None
-    _                      = tx.cursor.execute('SELECT 1 FROM user_errors WHERE payment_id = ? AND payment_provider = ?', (payment_id, int(payment_provider.value),))
-    row: tuple[int] | None = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-    result                 = row is not None
-    return result;
+    row = db.query_one(tx.conn,
+                       'SELECT 1 FROM user_errors WHERE payment_id = :pid AND payment_provider = :provider',
+                       pid=payment_id,
+                       provider=int(payment_provider.value))
+    result = row is not None
+    return result
 
 def has_user_error_from_master_pkey_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> bool:
-    assert tx.cursor is not None
-    _ = tx.cursor.execute(f'''
+    row = db.query_one(tx.conn, (f'''
 SELECT EXISTS (
     SELECT 1
     FROM payments p
     LEFT JOIN user_errors ue
         ON (p.payment_provider = {int(base.PaymentProvider.iOSAppStore.value)}     AND p.apple_original_tx_id = ue.payment_id)
         OR (p.payment_provider = {int(base.PaymentProvider.GooglePlayStore.value)} AND p.google_payment_token = ue.payment_id)
-    WHERE p.master_pkey = ?
+    WHERE p.master_pkey = :pkey
     AND ue.payment_id IS NOT NULL
 ) AS has_error;
-                          ''', (bytes(master_pkey),))
-    result = bool(tx.cursor.fetchone()[0] == 1)
-    return result;
+'''), pkey=bytes(master_pkey))
+    result = bool(row[0] == 1) if row else False
+    return result
 
 def has_user_error(conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     result = False
@@ -2070,11 +2102,9 @@ def has_user_error(conn: sqlalchemy.engine.Connection, payment_provider: base.Pa
     return result;
 
 def delete_user_errors_tx(tx: db.SQLTransaction, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
-    assert tx.cursor is not None
-    _ = tx.cursor.execute('''DELETE FROM user_errors WHERE payment_provider = ? AND payment_id = ?''', (int(payment_provider.value), payment_id))
-    result = tx.cursor.rowcount > 0
+    row    = db.query(tx.conn, 'DELETE FROM user_errors WHERE payment_provider = :provider AND payment_id = :pid', provider=int(payment_provider.value), pid=payment_id)
+    result = row.rowcount > 0
     return result
-
 
 def delete_user_errors(conn: sqlalchemy.engine.Connection, payment_provider: base.PaymentProvider, payment_id: str) -> bool:
     result = False
@@ -2090,34 +2120,33 @@ def get_payment_tx(tx:          db.SQLTransaction,
     if err.has():
         return result
 
-    assert tx.cursor is not None
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        _ = tx.cursor.execute(f'''
+        result_set = db.query(tx.conn, '''
             SELECT *
             FROM payments
-            WHERE payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-        ''', (int(payment_tx.provider.value),
-              payment_tx.google_payment_token,
-              payment_tx.google_order_id))
+            WHERE payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id
+        ''', provider  = int(payment_tx.provider.value),
+              token    = payment_tx.google_payment_token,
+              order_id = payment_tx.google_order_id)
 
-        record = tx.cursor.fetchone()
+        record = result_set.fetchone()
         if record:
-            row = typing.cast(tuple[int, *SQLTablePaymentRowTuple], record)
+            row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
             result = payment_row_from_tuple(row)
 
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-        _ = tx.cursor.execute(f'''
+        result_set = db.query(tx.conn, '''
                 SELECT *
                 FROM payments
-                WHERE payment_provider = ? AND apple_original_tx_id = ? AND apple_tx_id = ? AND apple_web_line_order_tx_id = ?
-        ''', (int(payment_tx.provider.value),
-              payment_tx.apple_original_tx_id,
-              payment_tx.apple_tx_id,
-              payment_tx.apple_web_line_order_tx_id))
+                WHERE payment_provider = :provider AND apple_original_tx_id = :orig_tx_id AND apple_tx_id = :tx_id AND apple_web_line_order_tx_id = :line_order_tx_id
+        ''', provider          = int(payment_tx.provider.value),
+              orig_tx_id       = payment_tx.apple_original_tx_id,
+              tx_id            = payment_tx.apple_tx_id,
+              line_order_tx_id = payment_tx.apple_web_line_order_tx_id)
 
-        record = tx.cursor.fetchone()
+        record = result_set.fetchone()
         if record:
-            row = typing.cast(tuple[int, *SQLTablePaymentRowTuple], record)
+            row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
             result = payment_row_from_tuple(row)
  
     return result
@@ -2126,29 +2155,32 @@ def get_payment(conn: sqlalchemy.engine.Connection,
                 payment_tx: base.PaymentProviderTransaction,
                 err:        base.ErrorSink) -> PaymentRow | None:
     with db.transaction(conn) as tx:
-        assert tx.cursor is not None
         return get_payment_tx(tx=tx,
                               payment_tx=payment_tx,
                               err=err)
 
 def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPaymentTransaction, unix_ts_ms: int) -> bool:
-    assert tx.cursor
+    rows: sqlalchemy.engine.Result[typing.Any] | None = None
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-        _ = tx.cursor.execute(f'''
+        rows = db.query(tx.conn, '''
             UPDATE payments
-            SET    refund_requested_unix_ts_ms = ?
-            WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-        ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
+            SET    refund_requested_unix_ts_ms = :ts
+            WHERE  payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id
+        ''', ts        = unix_ts_ms,
+            provider = int(payment_tx.provider.value),
+            token    = payment_tx.google_payment_token,
+            order_id = payment_tx.google_order_id)
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
-        _ = tx.cursor.execute(f'''
+        rows = db.query(tx.conn, '''
             UPDATE payments
-            SET    refund_requested_unix_ts_ms = ?
-            WHERE  payment_provider = ? AND apple_tx_id = ?
-        ''', (unix_ts_ms, int(payment_tx.provider.value), payment_tx.apple_tx_id))
+            SET    refund_requested_unix_ts_ms = :ts
+            WHERE  payment_provider = :provider AND apple_tx_id = :tx_id
+        ''', ts        = unix_ts_ms,
+              provider = int(payment_tx.provider.value),
+              tx_id    = payment_tx.apple_tx_id)
 
-
-    assert tx.cursor.rowcount == 0 or tx.cursor.rowcount == 1
-    result = tx.cursor.rowcount > 0
+    assert rows and (rows.rowcount == 0 or rows.rowcount == 1)
+    success = rows.rowcount > 0
 
     # If the refund timestamp has been set, immediately refresh the user's row.
     #
@@ -2156,25 +2188,28 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
     # "best" payment that should be used to entitle a user to pro. Hence if their refund
     # timestamp changes for that best payment, that metadata that is cached in the user details
     # must be updated.
-    if result:
+    if success:
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            _ = tx.cursor.execute(f'''
+            row = db.query_one(tx.conn, '''
                 SELECT master_pkey
                 FROM   payments
-                WHERE  payment_provider = ? AND google_payment_token = ? AND google_order_id = ?
-            ''', (int(payment_tx.provider.value), payment_tx.google_payment_token, payment_tx.google_order_id))
+                WHERE  payment_provider = :provider AND google_payment_token = :token AND google_order_id = :order_id
+            ''', provider = int(payment_tx.provider.value),
+                 token    = payment_tx.google_payment_token,
+                 order_id = payment_tx.google_order_id)
         else:
-            _ = tx.cursor.execute(f'''
+            row = db.query_one(tx.conn, '''
                 SELECT master_pkey
                 FROM   payments
-                WHERE  payment_provider = ? AND apple_tx_id = ?
-            ''', (int(payment_tx.provider.value), payment_tx.apple_tx_id))
+                WHERE  payment_provider = :provider AND apple_tx_id = :tx_id
+            ''', provider = int(payment_tx.provider.value),
+                 tx_id    = payment_tx.apple_tx_id)
 
-        row         = tx.cursor.fetchone()
-        master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, row[0]))
-        _update_user_expiry_grace_and_renew_flag_from_payment_list(tx, master_pkey)
+        if row:
+            master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, row[0]))
+            _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, master_pkey)
 
-    return result
+    return success
 
 def set_refund_requested_unix_ts_ms(conn: sqlalchemy.engine.Connection,
                                     payment_tx: UserPaymentTransaction,
@@ -2185,259 +2220,257 @@ def set_refund_requested_unix_ts_ms(conn: sqlalchemy.engine.Connection,
     return result
 
 def apple_add_notification_uuid_tx(tx: db.SQLTransaction, uuid: str, expiry_unix_ts_ms: int):
-    assert tx.cursor
-    _ = tx.cursor.execute(f'''
-            INSERT INTO apple_notification_uuid_history (uuid, expiry_unix_ts_ms)
-            VALUES      (?, ?)
-    ''', (uuid, expiry_unix_ts_ms))
+    _ = db.query(tx.conn, ('''
+        INSERT INTO apple_notification_uuid_history (uuid, expiry_unix_ts_ms)
+        VALUES      (:uuid, :expiry)
+    '''), uuid=uuid, expiry=expiry_unix_ts_ms)
 
 def apple_notification_uuid_is_in_db_tx(tx: db.SQLTransaction, uuid: str) -> bool:
-    assert tx.cursor
-    _ = tx.cursor.execute(f'''
-            SELECT 1
-            FROM   apple_notification_uuid_history
-            WHERE  uuid = ?
-    ''', (uuid,))
-    row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
+    row = db.query_one(tx.conn, ('''
+        SELECT 1
+        FROM   apple_notification_uuid_history
+        WHERE  uuid = :uuid
+    '''), uuid=uuid)
     result = row is not None
     return result
 
 def apple_set_notification_checkpoint_unix_ts_ms(tx: db.SQLTransaction, checkpoint_unix_ts_ms: int):
-    assert tx.cursor
-    _ = tx.cursor.execute(f'''
-            UPDATE runtime
-            SET    apple_notification_checkpoint_unix_ts_ms = ?
-    ''', (checkpoint_unix_ts_ms,))
+    _ = db.query(tx.conn, ('''
+        UPDATE runtime
+        SET    apple_notification_checkpoint_unix_ts_ms = :ts
+    '''), ts=checkpoint_unix_ts_ms)
 
 def google_add_notification_id_tx(tx: db.SQLTransaction, message_id: int, expiry_unix_ts_ms: int, payload: str):
-    assert tx.cursor
-
     maybe_payload: str | None = None
     if len(payload):
         maybe_payload = payload
 
-    _ = tx.cursor.execute(f'''
+    _ = db.query(tx.conn, ('''
             INSERT INTO google_notification_history (message_id, handled, payload, expiry_unix_ts_ms)
-            VALUES      (?, 0, ?, ?)
-    ''', (message_id, maybe_payload, expiry_unix_ts_ms))
+            VALUES      (:message_id, 0, :payload, :expiry)
+    '''), message_id = message_id,
+          payload    = maybe_payload,
+          expiry     = expiry_unix_ts_ms)
 
 def google_set_notification_handled(tx: db.SQLTransaction, message_id: int, delete: bool) -> bool:
-    assert tx.cursor
     if delete:
-        _ = tx.cursor.execute(f'''DELETE FROM google_notification_history WHERE message_id = ?''', (message_id,))
+        rows = db.query(tx.conn, ('''DELETE FROM google_notification_history WHERE message_id = :message_id'''), message_id=message_id)
     else:
-        _ = tx.cursor.execute(f'''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = ?''', (message_id,))
-    result = tx.cursor.rowcount >= 1
+        rows = db.query(tx.conn, ('''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = :message_id'''), message_id=message_id)
+    result: bool = rows.rowcount >= 1
     return result
 
 def google_get_unhandled_notification_iterator(tx: db.SQLTransaction) -> collections.abc.Iterator[GoogleUnhandledNotificationIterator]:
-    assert tx.cursor is not None
-    _    = tx.cursor.execute('SELECT message_id, payload, expiry_unix_ts_ms FROM google_notification_history WHERE handled = 0')
-    result = typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], tx.cursor)
-    return result
+    result_set = db.query(tx.conn, ('SELECT message_id, payload, expiry_unix_ts_ms FROM google_notification_history WHERE handled = 0'))
+    return typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], result_set)
 
 def google_notification_message_id_is_in_db_tx(tx: db.SQLTransaction, message_id: int) -> GoogleNotificationMessageIDInDB:
-    assert tx.cursor
-    _      = tx.cursor.execute(f'''SELECT handled FROM google_notification_history WHERE message_id = ?''', (message_id,))
-    row    = typing.cast(tuple[int] | None, tx.cursor.fetchone())
-    result = GoogleNotificationMessageIDInDB()
+    row: sqlalchemy.Row[int] | None = typing.cast(sqlalchemy.Row[int], db.query_one(tx.conn, '''SELECT handled FROM google_notification_history WHERE message_id = :message_id''', message_id=message_id))
+    result                          = GoogleNotificationMessageIDInDB()
     if row is not None:
         result.present = True
         result.handled = row[0] > 0 # NOTE: Should always be 0 or 1 but we'll be extra careful
     return result
 
-def generate_report_rows(db_path: str, period: ReportPeriod, limit: int | None) -> list[ReportRow]:
-    def fetch_counts(cursor: sqlite3.Cursor, period: ReportPeriod, unix_ts_ms_column: str, where_clause: str) -> dict[str, int]:
-        group_by_expr: str = ""
+def _get_date_group_expr_sql(column: str, period: ReportPeriod, is_postgres: bool) -> str:
+    """Generate dialect-specific date grouping SQL expression."""
+    if is_postgres:
         match period:
             case ReportPeriod.Daily:
-                group_by_expr = f"DATE({unix_ts_ms_column} / 1000, 'unixepoch')" # Floor timestamp to YYYY-MM-DD
+                return f"TO_CHAR(TO_TIMESTAMP({column}/1000), 'YYYY-MM-DD')"
             case ReportPeriod.Weekly:
-                group_by_expr = f"STRFTIME('%Y-%W', {unix_ts_ms_column} / 1000, 'unixepoch')" # YYYY-W
+                return f"TO_CHAR(TO_TIMESTAMP({column}/1000), 'IYYY-IW')"
             case ReportPeriod.Monthly:
-                group_by_expr = f"STRFTIME('%Y-%m', {unix_ts_ms_column} / 1000, 'unixepoch')" # YYYY-MM
+                return f"TO_CHAR(TO_TIMESTAMP({column}/1000), 'YYYY-MM')"
+    else:
+        match period:
+            case ReportPeriod.Daily:
+                return f"strftime('%Y-%m-%d', {column}/1000, 'unixepoch')"
+            case ReportPeriod.Weekly:
+                return f"strftime('%Y-%W', {column}/1000, 'unixepoch')"
+            case ReportPeriod.Monthly:
+                return f"strftime('%Y-%m', {column}/1000, 'unixepoch')"
 
-        query = f"""
+def _get_period_end_ts_sql(period_str: str, period: ReportPeriod, is_postgres: bool) -> str:
+    """Generate dialect-specific period end timestamp SQL expression."""
+    if is_postgres:
+        if period == ReportPeriod.Weekly:
+            year, week = period_str.split("-")
+            return f"(TO_TIMESTAMP('{year}-01-01', 'YYYY-MM-DD') + INTERVAL '{(int(week)+1)*7 - 3} days' - INTERVAL '1 day' + INTERVAL '1 day' - INTERVAL '1 second')::bigint * 1000 + 86399"
+        elif period == ReportPeriod.Monthly:
+            return f"(DATE_TRUNC('month', '{period_str}-01'::date) + INTERVAL '1 month' - INTERVAL '1 second')::bigint * 1000 + 86399"
+        else:
+            return f"(DATE_TRUNC('day', '{period_str}'::date) + INTERVAL '1 day' - INTERVAL '1 second')::bigint * 1000 + 86399"
+    else:
+        if period == ReportPeriod.Weekly:
+            year, week = period_str.split("-")
+            return f"(strftime('%s', '{year}-01-01', '+{(int(week)+1)*7-3} days', 'weekday 0') * 1000 + 86399999)"
+        elif period == ReportPeriod.Monthly:
+            return f"(strftime('%s', '{period_str}-01', '+1 month', '-1 day') * 1000 + 86399999)"
+        else:
+            return f"((julianday('{period_str}') + 0.99999) * 86400000)"
+
+def _format_period_label(period_str: str, period: ReportPeriod) -> str:
+    """Format period string for display."""
+    if period == ReportPeriod.Weekly:
+        year, week = period_str.split("-")
+        date = datetime.datetime.fromisocalendar(year=int(year), week=int(week), day=1)
+        return date.strftime('%F') + f' (W{week})'
+    return period_str
+
+def generate_report_rows(conn: sqlalchemy.engine.Connection, period: ReportPeriod, limit: int | None) -> list[ReportRow]:
+    def fetch_counts(tx_conn: sqlalchemy.engine.Connection, period: ReportPeriod, unix_ts_ms_column: str, where_clause: str) -> dict[str, int]:
+        is_postgres = db.is_postgres(tx_conn.engine)
+        group_by_expr = _get_date_group_expr_sql(unix_ts_ms_column, period, is_postgres)
+
+        result_set = db.query(tx_conn, f"""
             SELECT {group_by_expr} AS period, COUNT(*) AS count
             FROM payments
             WHERE {where_clause}
             GROUP BY period
-            ORDER BY rowid DESC
-        """
-        _ = cursor.execute(query)
+            ORDER BY period DESC
+        """)
 
         result: dict[str, int] = {}
-        for row in cursor.fetchall():  # pyright: ignore[reportAny]
-            row = typing.cast(tuple[str, int], row)
-            if period == ReportPeriod.Weekly:
-                year, week           = row[0].split('-') # YYYY-W
-                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week), day=1)
-                custom_label         = date.strftime('%F') + f' (W{week})'
-                result[custom_label] = row[1]
-            else:
-                result[row[0]] = row[1]
+        for row in result_set:
+            period_label = _format_period_label(row[0], period)
+            result[period_label] = row[1]
         return result
 
-    def fetch_active_users(cursor: sqlite3.Cursor, period: ReportPeriod) -> dict[str, int]:
-        date_expr: str = ""
-        match period:
-            case ReportPeriod.Daily:
-                date_expr = f"DATE(unredeemed_unix_ts_ms / 1000, 'unixepoch')" # Floor timestamp to YYYY-MM-DD
-            case ReportPeriod.Weekly:
-                date_expr = f"STRFTIME('%Y-%W', unredeemed_unix_ts_ms / 1000, 'unixepoch')" # YYYY-W
-            case ReportPeriod.Monthly:
-                date_expr = f"STRFTIME('%Y-%m', unredeemed_unix_ts_ms / 1000, 'unixepoch')" # YYYY-MM
+    def fetch_active_users(tx_conn: sqlalchemy.engine.Connection, period: ReportPeriod) -> dict[str, int]:
+        is_postgres = db.is_postgres(tx_conn.engine)
+        date_expr = _get_date_group_expr_sql("unredeemed_unix_ts_ms", period, is_postgres)
 
-        # Get all the periods available in the table (e.g. 2025-11, 2025-12, 2026-01... for monthly and so forth)
-        _                      = cursor.execute(f"SELECT DISTINCT {date_expr} AS period FROM payments")
-        periods_list           = [row[0] for row in cursor.fetchall()]
+        result_set = db.query(tx_conn, f"""
+            SELECT DISTINCT {date_expr} AS period
+            FROM payments
+        """)
+        periods_list = [row[0] for row in result_set]
         result: dict[str, int] = {}
 
         for it in periods_list:
-            # NOTE: Calculate each end-of-date unix timestamp given the list of periods we extracted
-            # from the table
             assert isinstance(it, str)
+            end_ts = _get_period_end_ts_sql(it, period, is_postgres)
 
-            # NOTE: There are 86_400 seconds in a day. We calculate the end of the day, e.g. the
-            # very last second before ticking over to the next day as 86_399 (note we multiply by
-            # 1000 to get milliseconds)
-            #
-            # NOTE: For weekly, the first week of an ISO year starts on a Thursday, so we minus 3
-            # days to get back to Monday. We add +1 week to find the end-date of the week.
-            if period == ReportPeriod.Weekly:
-                year, week = it.split("-")
-                end_ts     = f"strftime('%s', '{year}-01-01', '+{(int(week)+1)*7-3} days', 'weekday 0') * 1000 + 86399999"
-            elif period == ReportPeriod.Monthly:
-                end_ts = f"(strftime('%s', '{it}-01', '+1 month', '-1 day') * 1000 + 86399999)"
-            else:
-                end_ts = f"((julianday('{it}') + 0.99999) * 86400000)"
-
-            query = f"""
+            result_set = db.query(tx_conn, f"""
                 SELECT COUNT(DISTINCT master_pkey) AS active
                 FROM payments
                 WHERE {end_ts} >= unredeemed_unix_ts_ms
                   AND {end_ts} <= expiry_unix_ts_ms
                   AND status != {base.PaymentStatus.Revoked.value}
-            """
+            """)
 
-            _          = cursor.execute(query)
-            count      = cursor.fetchone()[0] or 0
-            if period == ReportPeriod.Weekly:
-                year, week           = it.split('-') # YYYY-W
-                date                 = datetime.datetime.fromisocalendar(year=int(year), week=int(week), day=1)
-                custom_label         = date.strftime('%F') + f' (W{week})'
-                result[custom_label] = count
-            else:
-                result[it] = count
+            count = result_set.fetchone()[0] or 0
+            period_label = _format_period_label(it, period)
+            result[period_label] = count
 
         return result
 
+    result: list[ReportRow] = []
+    with db.transaction(conn) as tx:
+        unredeemed: dict[str, int] = fetch_counts(
+            tx_conn        = tx.conn,
+            period         = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause   = f"status = {base.PaymentStatus.Unredeemed.value}",
+        )
 
-    result:   list[ReportRow]           = []
-    conn: sqlalchemy.engine.Connection | None = None
-    try:
-        sql_conn = sqlite3.connect(db_path)
-        with db.transaction(conn) as tx:
-            assert tx.cursor
-            unredeemed: dict[str, int] = fetch_counts( # Payments witnessed but not redeemed by user yet
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"status == {base.PaymentStatus.Unredeemed.value}",
-            )
+    result: list[ReportRow] = []
 
-            plan_1m: dict[str, int] = fetch_counts(
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"plan == {base.ProPlan.OneMonth.value}",
-            )
+    with db.transaction(conn) as tx:
+        unredeemed: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"status = {base.PaymentStatus.Unredeemed.value}",
+        )
 
-            plan_3m: dict[str, int] = fetch_counts(
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"plan == {base.ProPlan.ThreeMonth.value}",
-            )
+        plan_1m: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"plan = {base.ProPlan.OneMonth.value}",
+        )
 
-            plan_12m: dict[str, int] = fetch_counts(
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"plan == {base.ProPlan.TwelveMonth.value}",
-            )
+        plan_3m: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"plan = {base.ProPlan.ThreeMonth.value}",
+        )
 
-            google: dict[str, int] = fetch_counts( # Google payments
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"payment_provider == {base.PaymentProvider.GooglePlayStore.value}",
-            )
+        plan_12m: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"plan = {base.ProPlan.TwelveMonth.value}",
+        )
 
-            apple: dict[str, int] = fetch_counts( # Apple Payments
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = f"payment_provider == {base.PaymentProvider.iOSAppStore.value}",
-            )
+        google: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"payment_provider = {base.PaymentProvider.GooglePlayStore.value}",
+        )
 
-            new_subs: dict[str, int] = fetch_counts( # Payments witnessed
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "unredeemed_unix_ts_ms",
-                where_clause      = "unredeemed_unix_ts_ms IS NOT NULL AND unredeemed_unix_ts_ms > 0",
-            )
+        apple: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"payment_provider = {base.PaymentProvider.iOSAppStore.value}",
+        )
 
-            refunds_initiated: dict[str, int] = fetch_counts( # Refund requests
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "refund_requested_unix_ts_ms",
-                where_clause      = "refund_requested_unix_ts_ms > 0",
-            )
+        new_subs: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = "unredeemed_unix_ts_ms IS NOT NULL AND unredeemed_unix_ts_ms > 0",
+        )
 
-            revocations: dict[str, int] = fetch_counts( # Revoked payments
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "revoked_unix_ts_ms",
-                where_clause      = "revoked_unix_ts_ms IS NOT NULL AND revoked_unix_ts_ms > 0",
-            )
+        refunds_initiated: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "refund_requested_unix_ts_ms",
+            where_clause      = "refund_requested_unix_ts_ms > 0",
+        )
 
-            cancelled: dict[str, int] = fetch_counts( # Cancelled subscriptions (e.g. non-renewing subscriptions)
-                cursor            = tx.cursor,
-                period            = period,
-                unix_ts_ms_column = "expiry_unix_ts_ms",
-                where_clause      = f"auto_renewing = 0 AND status != {base.PaymentStatus.Revoked.value}",
-            )
+        revocations: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "revoked_unix_ts_ms",
+            where_clause      = "revoked_unix_ts_ms IS NOT NULL AND revoked_unix_ts_ms > 0",
+        )
 
-            active_users: dict[str, int] = fetch_active_users(tx.cursor, period)
+        cancelled: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "expiry_unix_ts_ms",
+            where_clause      = f"auto_renewing = 0 AND status != {base.PaymentStatus.Revoked.value}",
+        )
 
-            # Merge all periods
-            all_periods: set[str] = set()
-            for key_list in [new_subs.keys(), refunds_initiated.keys(), revocations.keys(), cancelled.keys(), active_users.keys()]:
-                for it in key_list:
-                    all_periods.add(it)
+        active_users: dict[str, int] = fetch_active_users(tx.conn, period)
 
-            sorted_periods: list[str] = sorted(all_periods, reverse=True)[:limit]
-            for it in sorted_periods:
-                result.append(ReportRow(
-                    period            = it,
-                    active_users      = active_users.get(it, 0),
-                    unredeemed        = unredeemed.get(it, 0),
-                    new_subs          = new_subs.get(it, 0),
-                    google            = google.get(it, 0),
-                    apple             = apple.get(it, 0),
-                    plan_1m           = plan_1m.get(it, 0),
-                    plan_3m           = plan_3m.get(it, 0),
-                    plan_12m          = plan_12m.get(it, 0),
-                    refunds_initiated = refunds_initiated.get(it, 0),
-                    revoked           = revocations.get(it, 0),
-                    cancelled         = cancelled.get(it, 0),
-                ))
-    except Exception:
-        log.error(f'Failed to generate report: {traceback.format_exc()}')
-    finally:
-        if sql_conn:
-            sql_conn.close()
+        all_periods: set[str] = set()
+        for key_list in [new_subs.keys(), refunds_initiated.keys(), revocations.keys(), cancelled.keys(), active_users.keys()]:
+            for it in key_list:
+                all_periods.add(it)
+
+        sorted_periods: list[str] = sorted(all_periods, reverse=True)[:limit]
+        for it in sorted_periods:
+            result.append(ReportRow(
+                period            = it,
+                active_users      = active_users.get(it, 0),
+                unredeemed        = unredeemed.get(it, 0),
+                new_subs          = new_subs.get(it, 0),
+                google            = google.get(it, 0),
+                apple             = apple.get(it, 0),
+                plan_1m           = plan_1m.get(it, 0),
+                plan_3m           = plan_3m.get(it, 0),
+                plan_12m          = plan_12m.get(it, 0),
+                refunds_initiated = refunds_initiated.get(it, 0),
+                revoked           = revocations.get(it, 0),
+                cancelled         = cancelled.get(it, 0),
+            ))
 
     return result
 

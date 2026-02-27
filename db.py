@@ -76,17 +76,18 @@ def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
 
     return engine
 
-def query(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
+def query(conn: sqlalchemy.engine.Connection, sql: str, params: dict[str, Any] | None = None, *, bind_expanding: list[str] | None = None, **kwparams: Any) -> sqlalchemy.engine.Result[typing.Any]:
     stmt = sqlalchemy.text(sql)
     if bind_expanding:
         stmt = stmt.bindparams(*[sqlalchemy.bindparam(name, expanding=True) for name in bind_expanding])
-    return conn.execute(stmt, params)
+    all_params = {**(params or {}), **kwparams}
+    return conn.execute(stmt, all_params)
 
-def query_one(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Row | None:
+def query_one(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Row[typing.Any] | None:
     result = query(conn, sql, bind_expanding=bind_expanding, **params)
     return result.fetchone()
 
-def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result:
+def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result[typing.Any]:
     with engine.connect() as conn:
         result = query(conn, sql, bind_expanding=bind_expanding, **params)
         conn.commit()
