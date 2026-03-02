@@ -545,6 +545,8 @@ API
       }
 '''
 
+import collections.abc
+import contextlib
 import dataclasses
 import enum
 import flask
@@ -677,27 +679,11 @@ def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signi
     result: bytes = hasher.digest()
     return result
 
-# Create a per-UWSGI worker SQL connection that is long-lived to eliminate -shm/-wal file churn
-# caused by opening/closing connections per request which can lead to extended waits and even
-# timeouts for the request patterns exhibited on this server which is that devices frequently
-# polling the server for status updates.
-#
-# This causes to rapid `-shm` creation and deletion. Different UWSGI workers race condition on the
-# presence of the SHM file or assume it doesn't exist and have to create the `-shm` from scratch.
-_worker_db_connection: backend.OpenDBAtPath | None = None
-_worker_db_path:       str | None                  = None
-_worker_db_is_uri:     bool                        = False
-def open_db_from_flask_request_context(flask_app: flask.Flask) -> backend.OpenDBAtPath:
-    global _worker_db_connection, _worker_db_path, _worker_db_is_uri
-
-    # Get current configuration from Flask
-    db_path   = typing.cast(str, flask_app.config[FLASK_CONFIG_DB_PATH_KEY])
-    if (_worker_db_connection is not None and _worker_db_path == db_path):
-        return _worker_db_connection
-
-    _worker_db_path       = db_path
-    _worker_db_connection = backend.OpenDBAtPath(db_path)
-    return _worker_db_connection
+@contextlib.contextmanager
+def get_db() -> collections.abc.Iterator[backend.OpenDBAtPath]:
+    db_path = typing.cast(str, flask.current_app.config[FLASK_CONFIG_DB_PATH_KEY])
+    with backend.OpenDBAtPath(db_path) as open_db:
+        yield open_db
 
 def init(testing_mode: bool, db_path: str, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
     result                                                      = flask.Flask(__name__)
@@ -754,33 +740,33 @@ def add_pro_payment():
 
     # Submit the payment to the DB
     redeemed_payment    = backend.RedeemPayment()
-    open_db             = open_db_from_flask_request_context(flask.current_app)
-    runtime             = backend.get_runtime(open_db.conn)
-    unix_ts_ms          = int(time_now() * 1000)
-    redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
-    redeemed_payment = backend.add_pro_payment(conn                = open_db.conn,
-                                               version             = version,
-                                               signing_key         = runtime.backend_key,
-                                               unix_ts_ms          = unix_ts_ms,
-                                               redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                               master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
-                                               rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                               payment_tx          = user_payment,
-                                               master_sig          = master_sig_bytes,
-                                               rotating_sig        = rotating_sig_bytes,
-                                               err                 = err)
+    with get_db() as open_db:
+        runtime             = backend.get_runtime(open_db.conn)
+        unix_ts_ms          = int(time_now() * 1000)
+        redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
+        redeemed_payment = backend.add_pro_payment(conn                = open_db.conn,
+                                                   version             = version,
+                                                   signing_key         = runtime.backend_key,
+                                                   unix_ts_ms          = unix_ts_ms,
+                                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                   master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                   rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                   payment_tx          = user_payment,
+                                                   master_sig          = master_sig_bytes,
+                                                   rotating_sig        = rotating_sig_bytes,
+                                                   err                 = err)
 
-    if redeemed_payment.status != backend.RedeemPaymentStatus.Success:
-        status = AddProPaymentStatus.Error
-        if redeemed_payment.status == backend.RedeemPaymentStatus.AlreadyRedeemed:
-            status = AddProPaymentStatus.AlreadyRedeemed
-        elif redeemed_payment.status == backend.RedeemPaymentStatus.UnknownPayment:
-            status = AddProPaymentStatus.UnknownPayment
+        if redeemed_payment.status != backend.RedeemPaymentStatus.Success:
+            status = AddProPaymentStatus.Error
+            if redeemed_payment.status == backend.RedeemPaymentStatus.AlreadyRedeemed:
+                status = AddProPaymentStatus.AlreadyRedeemed
+            elif redeemed_payment.status == backend.RedeemPaymentStatus.UnknownPayment:
+                status = AddProPaymentStatus.UnknownPayment
 
-        return make_error_response(status=status.value, errors=err.msg_list)
+            return make_error_response(status=status.value, errors=err.msg_list)
 
-    result = make_success_response(dict_result=redeemed_payment.proof.to_dict())
-    return result
+        result = make_success_response(dict_result=redeemed_payment.proof.to_dict())
+        return result
 
 @flask_blueprint.route(FLASK_ROUTE_GENERATE_PRO_PROOF, methods=['POST'])
 def generate_pro_proof() -> flask.Response:
@@ -823,24 +809,24 @@ def generate_pro_proof() -> flask.Response:
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Request proof from the backend
-    open_db = open_db_from_flask_request_context(flask.current_app)
-    runtime = backend.get_runtime(open_db.conn)
-    proof   = backend.generate_pro_proof(conn           = open_db.conn,
-                                         version        = version,
-                                         signing_key    = runtime.backend_key,
-                                         gen_index_salt = runtime.gen_index_salt,
-                                         master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
-                                         rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                         unix_ts_ms     = unix_ts_ms,
-                                         master_sig     = master_sig_bytes,
-                                         rotating_sig   = rotating_sig_bytes,
-                                         err            = err)
+    with get_db() as open_db:
+        runtime = backend.get_runtime(open_db.conn)
+        proof   = backend.generate_pro_proof(conn           = open_db.conn,
+                                             version        = version,
+                                             signing_key    = runtime.backend_key,
+                                             gen_index_salt = runtime.gen_index_salt,
+                                             master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
+                                             rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                             unix_ts_ms     = unix_ts_ms,
+                                             master_sig     = master_sig_bytes,
+                                             rotating_sig   = rotating_sig_bytes,
+                                             err            = err)
 
-    if len(err.msg_list):
-        return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
+        if len(err.msg_list):
+            return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
 
-    result = make_success_response(dict_result=proof.to_dict())
-    return result
+        result = make_success_response(dict_result=proof.to_dict())
+        return result
 
 @flask_blueprint.route(FLASK_ROUTE_GET_PRO_REVOCATIONS, methods=['POST'])
 def get_pro_revocations():
@@ -865,29 +851,29 @@ def get_pro_revocations():
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
     begin             = time.perf_counter()
-    open_db           = open_db_from_flask_request_context(flask.current_app)
-    revocation_ticket = backend.get_revocation_ticket(open_db.conn)
-    if ticket < revocation_ticket:
-        with db.transaction(open_db.conn) as tx:
-            runtime = backend.get_runtime_tx(tx)
-            for row in backend.get_pro_revocations_iterator_tx(tx):
-                gen_index:         int   = row[0]
-                expiry_unix_ts_ms: int   = row[1]
-                gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
-                assert gen_index < runtime.gen_index, f"lhs={gen_index}, rhs={runtime.gen_index}"
-                assert len(runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
-                revocation_items.append({
-                    'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
-                    'gen_index_hash':    gen_index_hash.hex(),
-                })
-    duration = time.perf_counter() - begin
-    flask.current_app.logger.debug(f'Get pro revocations DB operations completed in: {duration}')
+    with get_db() as open_db:
+        revocation_ticket = backend.get_revocation_ticket(open_db.conn)
+        if ticket < revocation_ticket:
+            with db.transaction(open_db.conn) as tx:
+                runtime = backend.get_runtime_tx(tx)
+                for row in backend.get_pro_revocations_iterator_tx(tx):
+                    gen_index:         int   = row[0]
+                    expiry_unix_ts_ms: int   = row[1]
+                    gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
+                    assert gen_index < runtime.gen_index, f"lhs={gen_index}, rhs={runtime.gen_index}"
+                    assert len(runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
+                    revocation_items.append({
+                        'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
+                        'gen_index_hash':    gen_index_hash.hex(),
+                    })
+        duration = time.perf_counter() - begin
+        flask.current_app.logger.debug(f'Get pro revocations DB operations completed in: {duration}')
 
-    if len(err.msg_list):
-        return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
+        if len(err.msg_list):
+            return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
 
-    result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
-    return result
+        result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
+        return result
 
 @flask_blueprint.route(FLASK_ROUTE_GET_PRO_DETAILS, methods=['POST'])
 def get_pro_details():
@@ -947,95 +933,95 @@ def get_pro_details():
     # descriptive messaging
     error_report: int                                  = False
 
-    open_db = open_db_from_flask_request_context(flask.current_app)
-    with db.transaction(open_db.conn) as tx:
-        error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
-        get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
-        grace_period_duration_ms             = get_user.user.grace_period_duration_ms
-        expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
-        auto_renewing                        = get_user.user.auto_renewing
-        payments_total                       = get_user.payments_count
-        refund_requested_unix_ts_ms          = get_user.user.refund_requested_unix_ts_ms
+    with get_db() as open_db:
+        with db.transaction(open_db.conn) as tx:
+            error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
+            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
+            grace_period_duration_ms             = get_user.user.grace_period_duration_ms
+            expiry_unix_ts_ms                    = get_user.user.expiry_unix_ts_ms
+            auto_renewing                        = get_user.user.auto_renewing
+            payments_total                       = get_user.payments_count
+            refund_requested_unix_ts_ms          = get_user.user.refund_requested_unix_ts_ms
 
-        # NOTE: Collect payment history
-        if count > 0:
-            for row in get_user.payments_it:
-                if len(items) >= count:
-                    break
+            # NOTE: Collect payment history
+            if count > 0:
+                for row in get_user.payments_it:
+                    if len(items) >= count:
+                        break
 
-                faux_row_id                                             = 0
-                row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
-                payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
+                    faux_row_id                                             = 0
+                    row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
+                    payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
 
-                # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
-                # confidential until the user actually registers the token themselves which they
-                # should witness from the payment provider independently from us so there should be
-                # no need to reveal this to the user until they've confirmed their own receipt of
-                # it.
-                if payment.status == base.PaymentStatus.Unredeemed:
-                    continue
+                    # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
+                    # confidential until the user actually registers the token themselves which they
+                    # should witness from the payment provider independently from us so there should be
+                    # no need to reveal this to the user until they've confirmed their own receipt of
+                    # it.
+                    if payment.status == base.PaymentStatus.Unredeemed:
+                        continue
 
-                if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
-                    items.append({
-                        'status':                               int(payment.status.value),
-                        'plan':                                 int(payment.plan.value),
-                        'payment_provider':                     int(payment.payment_provider.value),
-                        'auto_renewing':                        payment.auto_renewing,
-                        'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
-                        'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
-                        'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
-                        'grace_period_duration_ms':             payment.grace_period_duration_ms,
-                        'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
-                        'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
-                        'google_payment_token':                 payment.google_payment_token,
-                        'google_order_id':                      payment.google_order_id,
-                        'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
-                    })
-                elif payment.payment_provider == base.PaymentProvider.iOSAppStore:
-                    items.append({
-                        'status':                               int(payment.status.value),
-                        'plan':                                 int(payment.plan.value),
-                        'payment_provider':                     int(payment.payment_provider.value),
-                        'auto_renewing':                        payment.auto_renewing,
-                        'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
-                        'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
-                        'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
-                        'grace_period_duration_ms':             payment.grace_period_duration_ms,
-                        'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
-                        'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
-                        'apple_original_tx_id':                 payment.apple.original_tx_id,
-                        'apple_tx_id':                          payment.apple.tx_id,
-                        'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
-                        'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
-                    })
+                    if payment.payment_provider == base.PaymentProvider.GooglePlayStore:
+                        items.append({
+                            'status':                               int(payment.status.value),
+                            'plan':                                 int(payment.plan.value),
+                            'payment_provider':                     int(payment.payment_provider.value),
+                            'auto_renewing':                        payment.auto_renewing,
+                            'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                            'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                            'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                            'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
+                            'google_payment_token':                 payment.google_payment_token,
+                            'google_order_id':                      payment.google_order_id,
+                            'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
+                        })
+                    elif payment.payment_provider == base.PaymentProvider.iOSAppStore:
+                        items.append({
+                            'status':                               int(payment.status.value),
+                            'plan':                                 int(payment.plan.value),
+                            'payment_provider':                     int(payment.payment_provider.value),
+                            'auto_renewing':                        payment.auto_renewing,
+                            'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                            'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                            'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                            'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                            'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                            'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
+                            'apple_original_tx_id':                 payment.apple.original_tx_id,
+                            'apple_tx_id':                          payment.apple.tx_id,
+                            'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
+                            'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
+                        })
 
-        # NOTE: Determine pro status of user
-        if get_user.payments_count > 0:
-            if unix_ts_ms <= get_user.user.expiry_unix_ts_ms:
-                user_pro_status = UserProStatus.Active
-            else:
-                user_pro_status = UserProStatus.Expired
+            # NOTE: Determine pro status of user
+            if get_user.payments_count > 0:
+                if unix_ts_ms <= get_user.user.expiry_unix_ts_ms:
+                    user_pro_status = UserProStatus.Active
+                else:
+                    user_pro_status = UserProStatus.Expired
 
-            if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
-                user_pro_status = UserProStatus.Expired
+                if backend.is_gen_index_revoked_tx(tx, get_user.user.gen_index):
+                    user_pro_status = UserProStatus.Expired
 
-    dict_result = {
-        'version':                     0,
-        'status':                      int(user_pro_status.value),
-        'auto_renewing':               auto_renewing,
-        'expiry_unix_ts_ms':           expiry_unix_ts_ms,
-        'refund_requested_unix_ts_ms': refund_requested_unix_ts_ms,
-        'grace_period_duration_ms':    grace_period_duration_ms if auto_renewing else 0,
-        'payments_total':              payments_total,
-        'error_report':                error_report,
-        'items':                       items
-    }
+        dict_result = {
+            'version':                     0,
+            'status':                      int(user_pro_status.value),
+            'auto_renewing':               auto_renewing,
+            'expiry_unix_ts_ms':           expiry_unix_ts_ms,
+            'refund_requested_unix_ts_ms': refund_requested_unix_ts_ms,
+            'grace_period_duration_ms':    grace_period_duration_ms if auto_renewing else 0,
+            'payments_total':              payments_total,
+            'error_report':                error_report,
+            'items':                       items
+        }
 
-    result = make_success_response(dict_result)
-    if 1:
-        flask.current_app.logger.setLevel(logging.DEBUG)
-        flask.current_app.logger.debug(f"Request (their_clock={base.readable_unix_ts_ms(unix_ts_ms)}, master_pkey={master_pkey}) => ({json.dumps(dict_result)})")
-    return result
+        result = make_success_response(dict_result)
+        if 1:
+            flask.current_app.logger.setLevel(logging.DEBUG)
+            flask.current_app.logger.debug(f"Request (their_clock={base.readable_unix_ts_ms(unix_ts_ms)}, master_pkey={master_pkey}) => ({json.dumps(dict_result)})")
+        return result
 
 @flask_blueprint.route(FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED, methods=['POST'])
 def set_payment_refund_requested():
@@ -1096,10 +1082,10 @@ def set_payment_refund_requested():
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     updated: bool = False
-    open_db = open_db_from_flask_request_context(flask.current_app)
-    updated = backend.set_refund_requested_unix_ts_ms(conn       = open_db.conn,
-                                                      payment_tx = user_payment,
-                                                      unix_ts_ms = refund_requested_unix_ts_ms)
+    with get_db() as open_db:
+        updated = backend.set_refund_requested_unix_ts_ms(conn       = open_db.conn,
+                                                          payment_tx = user_payment,
+                                                          unix_ts_ms = refund_requested_unix_ts_ms)
 
-    result = make_success_response(dict_result={'version': 0, 'updated': updated})
-    return result
+        result = make_success_response(dict_result={'version': 0, 'updated': updated})
+        return result
