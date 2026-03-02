@@ -627,294 +627,287 @@ def entry_point() -> flask.Flask:
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
     # NOTE: Open the DB (create tables if necessary)
-    db: backend.SetupDBResult = backend.setup_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
+    engine: sqlalchemy.engine.Engine = backend.bootstrap_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
     if len(err.msg_list) > 0:
         log.error(f"{err.msg_list}")
         sys.exit(1)
 
     # NOTE: Sanity check dev mode
-    if base.DEV_BACKEND_MODE:
-        assert db.conn
-        runtime_row: backend.RuntimeRow = backend.get_runtime(db.conn)
-        assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
-                "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+    with backend.OpenDBAtPath(parsed_args.db_path) as open_db:
+        if base.DEV_BACKEND_MODE:
+            assert open_db.conn
+            runtime_row: backend.RuntimeRow = backend.get_runtime(open_db.conn)
+            assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
+                    "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
-    # NOTE: Dump some startup diagnostics
-    assert db.conn is not None
-    info_string: str = backend.db_info_string(conn=db.conn, db_path=db.path, err=err)
-    if len(err.msg_list) > 0:
-        log.error(f"{err.msg_list}")
-        sys.exit(1)
+        # NOTE: Dump some startup diagnostics
+        assert open_db.conn is not None
+        info_string: str = backend.db_info_string(conn=open_db.conn, db_path=parsed_args.db_path, err=err)
+        if len(err.msg_list) > 0:
+            log.error(f"{err.msg_list}")
+            sys.exit(1)
 
-    # NOTE: Generate a report if requested
-    if parsed_args.parsed_generate_report_args:
-        generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
-        with backend.OpenDBAtPath(parsed_args.db_path) as report_db:
-            report_rows: list[backend.ReportRow] = backend.generate_report_rows(report_db.conn, generate_report_args.period, limit=generate_report_args.count)
-        print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
-        sys.exit(1)
+        # NOTE: Generate a report if requested
+        if parsed_args.parsed_generate_report_args:
+            generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
+            with backend.OpenDBAtPath(parsed_args.db_path) as report_db:
+                report_rows: list[backend.ReportRow] = backend.generate_report_rows(report_open_db.conn, generate_report_args.period, limit=generate_report_args.count)
+            print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
+            sys.exit(1)
 
-    # NOTE: Do revocation commands if requested
-    if len(parsed_args.parsed_revoke_items):
-        label = ''
-        for index, it in enumerate(parsed_args.parsed_revoke_items):
-            master_pkey = nacl.signing.VerifyKey(it.parsed_bytes)
-
-            if index:
-                label += f'\n'
-            label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
-
-            with db.transaction(db.conn) as tx:
-                match it.command:
-                    case RevokeCommand.Nil: pass
-                    case RevokeCommand.List:
-                        user_and_payments: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey)
-                        eligible_count = 0
-
-                        list_label = ''
-                        for row in user_and_payments.payments_it:
-                            faux_row_id                 = 0
-                            payment: backend.PaymentRow = backend.payment_row_from_tuple((faux_row_id, *row))
-
-                            plan_label = ''
-                            match payment.plan:
-                                case base.ProPlan.Nil:         plan_label = '??'
-                                case base.ProPlan.OneMonth:    plan_label = '1M'
-                                case base.ProPlan.ThreeMonth:  plan_label = '3M'
-                                case base.ProPlan.TwelveMonth: plan_label = '12M'
-
-                            payment_id = ''
-                            match payment.payment_provider:
-                                case base.PaymentProvider.Nil:             pass
-                                case base.PaymentProvider.GooglePlayStore: payment_id = f'{payment.google_payment_token}-{payment.google_order_id}'
-                                case base.PaymentProvider.iOSAppStore:     payment_id = f'{payment.apple.original_tx_id}'
-
-                            if payment.status == base.PaymentStatus.Expired or int(time.time() * 1000) >= payment.expiry_unix_ts_ms:
-                                continue
-
-                            list_label += f'\n    {eligible_count:02d} RevokeID={payment.payment_provider.name}-{payment_id}; Status={payment.status.name}; Plan={plan_label}; Unredeemed={base.readable_unix_ts_ms(payment.unredeemed_unix_ts_ms)}; Expiry={base.readable_unix_ts_ms(payment.expiry_unix_ts_ms)};'
-                            eligible_count += 1
-
-                        label += f' ({eligible_count} revocable payments){list_label}'
-
-                    case RevokeCommand.Delete:
-                        set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=True)
-                        label += f' ({set_result.value.lower()})'
-                    case RevokeCommand.Timestamp:
-                        set_result = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=False)
-                        label += f' {base.readable_unix_ts_ms(it.unix_ts_s * 1000)} ({set_result.value.lower()})'
-
-        log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation command\n{label}")
-        sys.exit(1)
-
-    # NOTE: Delete user errors if there were some specified
-    if len(parsed_args.parsed_set_user_errors) > 0 or len(parsed_args.parsed_set_google_notification) > 0:
-        if len(parsed_args.parsed_set_user_errors) > 0:
-            count = 0
+        # NOTE: Do revocation commands if requested
+        if len(parsed_args.parsed_revoke_items):
             label = ''
-            for index, it in enumerate(parsed_args.parsed_set_user_errors):
+            for index, it in enumerate(parsed_args.parsed_revoke_items):
+                master_pkey = nacl.signing.VerifyKey(it.parsed_bytes)
+
                 if index:
                     label += f'\n'
-                label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
-                if it.set_flag:
-                    error = backend.UserError(provider=it.payment_provider)
-                    if it.payment_provider == base.PaymentProvider.GooglePlayStore:
-                        error.google_payment_token = it.payment_id
+                label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
+
+                with db.transaction(open_db.conn) as tx:
+                    match it.command:
+                        case RevokeCommand.Nil: pass
+                        case RevokeCommand.List:
+                            user_and_payments: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey)
+                            eligible_count = 0
+
+                            list_label = ''
+                            for row in user_and_payments.payments_it:
+                                faux_row_id                 = 0
+                                payment: backend.PaymentRow = backend.payment_row_from_tuple((faux_row_id, *row))
+
+                                plan_label = ''
+                                match payment.plan:
+                                    case base.ProPlan.Nil:         plan_label = '??'
+                                    case base.ProPlan.OneMonth:    plan_label = '1M'
+                                    case base.ProPlan.ThreeMonth:  plan_label = '3M'
+                                    case base.ProPlan.TwelveMonth: plan_label = '12M'
+
+                                payment_id = ''
+                                match payment.payment_provider:
+                                    case base.PaymentProvider.Nil:             pass
+                                    case base.PaymentProvider.GooglePlayStore: payment_id = f'{payment.google_payment_token}-{payment.google_order_id}'
+                                    case base.PaymentProvider.iOSAppStore:     payment_id = f'{payment.apple.original_tx_id}'
+
+                                if payment.status == base.PaymentStatus.Expired or int(time.time() * 1000) >= payment.expiry_unix_ts_ms:
+                                    continue
+
+                                list_label += f'\n    {eligible_count:02d} RevokeID={payment.payment_provider.name}-{payment_id}; Status={payment.status.name}; Plan={plan_label}; Unredeemed={base.readable_unix_ts_ms(payment.unredeemed_unix_ts_ms)}; Expiry={base.readable_unix_ts_ms(payment.expiry_unix_ts_ms)};'
+                                eligible_count += 1
+
+                            label += f' ({eligible_count} revocable payments){list_label}'
+
+                        case RevokeCommand.Delete:
+                            set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=True)
+                            label += f' ({set_result.value.lower()})'
+                        case RevokeCommand.Timestamp:
+                            set_result = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=False)
+                            label += f' {base.readable_unix_ts_ms(it.unix_ts_s * 1000)} ({set_result.value.lower()})'
+
+            log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation command\n{label}")
+            sys.exit(1)
+
+        # NOTE: Delete user errors if there were some specified
+        if len(parsed_args.parsed_set_user_errors) > 0 or len(parsed_args.parsed_set_google_notification) > 0:
+            if len(parsed_args.parsed_set_user_errors) > 0:
+                count = 0
+                label = ''
+                for index, it in enumerate(parsed_args.parsed_set_user_errors):
+                    if index:
+                        label += f'\n'
+                    label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
+                    if it.set_flag:
+                        error = backend.UserError(provider=it.payment_provider)
+                        if it.payment_provider == base.PaymentProvider.GooglePlayStore:
+                            error.google_payment_token = it.payment_id
+                        else:
+                            assert it.payment_provider == base.PaymentProvider.iOSAppStore
+                            error.apple_original_tx_id = it.payment_id
+
+                        if backend.has_user_error(conn=open_db.conn,
+                                                  payment_provider=it.payment_provider,
+                                                  payment_id=it.payment_id):
+                            label += f' (skipped)'
+                        else:
+                            backend.add_user_error(conn=open_db.conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                            count +=1
+                            label += f' (added)'
                     else:
-                        assert it.payment_provider == base.PaymentProvider.iOSAppStore
-                        error.apple_original_tx_id = it.payment_id
+                        if backend.delete_user_errors(conn=open_db.conn,
+                                                      payment_provider = it.payment_provider,
+                                                      payment_id       = it.payment_id):
+                            count +=1
+                            label += f' (deleted)'
+                        else:
+                            label += f' (skipped)'
 
-                    if backend.has_user_error(conn=db.conn,
-                                              payment_provider=it.payment_provider,
-                                              payment_id=it.payment_id):
-                        label += f' (skipped)'
-                    else:
-                        backend.add_user_error(conn=db.conn, error=error, unix_ts_ms=int(time.time() * 1000))
-                        count +=1
-                        label += f' (added)'
-                else:
-                    if backend.delete_user_errors(conn=db.conn,
-                                                  payment_provider = it.payment_provider,
-                                                  payment_id       = it.payment_id):
-                        count +=1
-                        label += f' (deleted)'
-                    else:
-                        label += f' (skipped)'
+                log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
 
-            log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
+            if len(parsed_args.parsed_set_google_notification) > 0:
+                count = 0
+                label = ''
+                for index, it in enumerate(parsed_args.parsed_set_google_notification):
+                    if index:
+                        label += f'\n'
+                    label += f'  {index:02d} {it.message_id} = {it.command.name}'
 
-        if len(parsed_args.parsed_set_google_notification) > 0:
-            count = 0
-            label = ''
-            for index, it in enumerate(parsed_args.parsed_set_google_notification):
-                if index:
-                    label += f'\n'
-                label += f'  {index:02d} {it.message_id} = {it.command.name}'
+                    with db.transaction(open_db.conn) as tx:
+                        delete:  bool = it.command == SetGoogleNotificationCommand.Delete
+                        updated: bool = backend.google_set_notification_handled(tx         = tx,
+                                                                                message_id = it.message_id,
+                                                                                delete     = delete)
+                        if updated:
+                            count += 1
+                        else:
+                            label += f' (skipped)'
 
-            with db.transaction(db.conn) as tx:
-                    delete:  bool = it.command == SetGoogleNotificationCommand.Delete
-                    updated: bool = backend.google_set_notification_handled(tx         = tx,
-                                                                            message_id = it.message_id,
-                                                                            delete     = delete)
-                    if updated:
-                        count += 1
-                    else:
-                        label += f' (skipped)'
+                log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
+            sys.exit(1)
 
-            log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
-        sys.exit(1)
+        # NOTE: Handle printing of the DB to standard out if requested
+        if parsed_args.print_tables:
+            base.print_db_to_stdout(open_db.conn)
+            sys.exit(1)
 
-    # NOTE: Handle printing of the DB to standard out if requested
-    if parsed_args.print_tables:
-        base.print_db_to_stdout(db.conn)
-        sys.exit(1)
+        startup_log = '\n'
+        if parsed_args.dev:
+            startup_log += "######################################\n"
+            startup_log += "###                                ###\n"
+            startup_log += "###        Dev Mode Enabled        ###\n"
+            startup_log += "###                                ###\n"
+            startup_log += "######################################\n"
 
-    startup_log = '\n'
-    if parsed_args.dev:
-        startup_log += "######################################\n"
-        startup_log += "###                                ###\n"
-        startup_log += "###        Dev Mode Enabled        ###\n"
-        startup_log += "###                                ###\n"
-        startup_log += "######################################\n"
+        startup_log += f'Session Pro Backend\n{info_string}\n'
+        startup_log += f'  Features:\n'
+        if len(parsed_args.ini_path) > 0:
+            startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
+        startup_log += f'    DB loaded from: {parsed_args.db_path}\n'
+        if len(parsed_args.log_path):
+            startup_log += f'    Logging to: {parsed_args.log_path}\n'
+        else:
+            startup_log += f'    Logging to disk disabled (no log_path specified in .INI file)\n'
+        if parsed_args.unsafe_logging:
+            startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
+        if parsed_args.platform_testing_env:
+            startup_log += f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)\n'
+        if parsed_args.with_platform_apple:
+            label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
+            startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
+        if parsed_args.with_platform_google:
+            startup_log += f'    Platform: Google Play Store notification handling enabled\n'
+        for it in parsed_args.session_webhooks:
+            if it.enabled:
+                startup_log += f'    Webhook Logger: Enabled (display name: {it.name})\n'
 
-    startup_log += f'Session Pro Backend\n{info_string}\n'
-    startup_log += f'  Features:\n'
-    if len(parsed_args.ini_path) > 0:
-        startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
-    startup_log += f'    DB loaded from: {db.path}\n'
-    if len(parsed_args.log_path):
-        startup_log += f'    Logging to: {parsed_args.log_path}\n'
-    else:
-        startup_log += f'    Logging to disk disabled (no log_path specified in .INI file)\n'
-    if parsed_args.unsafe_logging:
-        startup_log += f'    Unsafe logging enabled (this must NOT be used in production)\n'
-    if parsed_args.platform_testing_env:
-        startup_log += f'    Platform testing environment enabled (special behaviour for rounding timestamps to EOD)\n'
-    if parsed_args.with_platform_apple:
-        label = 'Sandbox' if parsed_args.apple_sandbox_env else 'Production'
-        startup_log += f'    Platform: {label} Apple iOS App Store notification handling enabled\n'
-    if parsed_args.with_platform_google:
-        startup_log += f'    Platform: Google Play Store notification handling enabled\n'
-    for it in parsed_args.session_webhooks:
-        if it.enabled:
-            startup_log += f'    Webhook Logger: Enabled (display name: {it.name})\n'
+        if parsed_args.dev:
+            startup_log += "######################################\n"
+            startup_log += "###                                ###\n"
+            startup_log += "###        Dev Mode Enabled        ###\n"
+            startup_log += "###                                ###\n"
+            startup_log += "######################################\n"
 
-    if parsed_args.dev:
-        startup_log += "######################################\n"
-        startup_log += "###                                ###\n"
-        startup_log += "###        Dev Mode Enabled        ###\n"
-        startup_log += "###                                ###\n"
-        startup_log += "######################################\n"
-
-    log.info(startup_log)
-    for it in webhook_loggers:
-        it.emit_text(f'Starting up instance: {startup_log}')
-
-    # NOTE: Running the application just in Flask (e.g. local development) we
-    # need a way to signal to the long-running payment expiry thread to
-    # terminate itself, we do this using a cv+mutex combo otherwise the
-    # application hangs on exit, forever as the thread is never terminated.
-    #
-    # In UWSGI we want to use the same code to catch the signal and terminate,
-    # but, by default UWSGI hijacks the signal handler and so our thread
-    # termination code doesn't run. However, you can override this on UWSGI by
-    # passing the flag `py-call-osafterfork` which makes the UWSGI process
-    # respect our custom signal handlers.
-    #
-    # This option however is not present on older UWSGI version like 2.0.21. For
-    # those versions setting these signal handlers do not solve the hang-on-exit
-    # issue and instead the user should set `--worker-reload-mercy` to a short
-    # value to get UWSGI to terminate the process for you.
-    #
-    # TODO: Find a better solution to this
-    _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
-    _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
-    _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit
-
-    # Dispatch a long-running "thread" that wakes up every 00:00 UTC to expire
-    # entries in the DB. This thread has program-lifetime and hence should exit
-    # when the Flask app exits.
-    #
-    # In UWSGI mode, we launch multiple processes, so we actually have multiple
-    # of these threads running. I considered separating this into a separate app
-    # that you have to run, or, some smart way to detect that only one process
-    # out of the set should be running this thread to clean the DB.
-    #
-    # But this complicates the architecture _alot_ trying to get UWSGI to
-    # intelligently handle this, either by defining a custom hook, or
-    # _multiple_ UWSGI instances, or running them under UWSGI emperor so that
-    # you can then run 2 apps (100% more setup than 1 app!) for the backend.
-    #
-    # The trade-off in choosing that is unacceptable for managing Session Pro
-    # subscriptions which on paper is a very simple CRUD application.
-    # Instead, I've embedded the periodic cleaning of the DB into the app
-    # itself so that the entire stack is self-contained and hence monolithic.
-    #
-    # By running the app, either in flask, UWSGI w/ multiple processes or
-    # whatever, that is in itself self-sufficient to maintain a valid Session
-    # Pro database without any additional configuration. Just launch the app and
-    # it "just works". This avoids the need for external frameworks like UWSGI
-    # needing to know about internal details (i.e. leaky abstractions) to run
-    # the application.
-    #
-    # The trade-off for this is that all processes running the app will attempt
-    # to clean the DB and race at UTC 00:00 to do so. We just make sure to do
-    # that operation over an atomic transaction and allow exactly one process
-    # out of the N available to actually clean the DB. The rest will no-op.
-    thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
-    thread.start()
-
-    runtime = backend.get_runtime(db.conn)
-    result: flask.Flask = server.init(testing_mode=False,
-                                      db_path=db.path,
-                                      server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
-
-    # NOTE: Add flask to our global logger
-    if 1:
-        result.logger.addHandler(console_logger)
-        if file_logger:
-            result.logger.addHandler(file_logger)
+        log.info(startup_log)
         for it in webhook_loggers:
-            result.logger.addHandler(it)
+            it.emit_text(f'Starting up instance: {startup_log}')
 
-    # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
-    # contact the endpoint when a notification is generated.
-    if parsed_args.with_platform_apple:
-        core: platform_apple.Core = platform_apple.init(key_id      = parsed_args.apple_key_id,
-                                                        issuer_id   = parsed_args.apple_issuer_id,
-                                                        bundle_id   = parsed_args.apple_bundle_id,
-                                                        app_id      = None if parsed_args.apple_sandbox_env else parsed_args.apple_production_app_id,
-                                                        key_bytes   = parsed_args.apple_key,
-                                                        root_certs  = parsed_args.apple_root_certs,
-                                                        sandbox_env = parsed_args.apple_sandbox_env)
-        platform_apple.equip_flask_routes(core, result)
+        # NOTE: Running the application just in Flask (e.g. local development) we
+        # need a way to signal to the long-running payment expiry thread to
+        # terminate itself, we do this using a cv+mutex combo otherwise the
+        # application hangs on exit, forever as the thread is never terminated.
+        #
+        # In UWSGI we want to use the same code to catch the signal and terminate,
+        # but, by default UWSGI hijacks the signal handler and so our thread
+        # termination code doesn't run. However, you can override this on UWSGI by
+        # passing the flag `py-call-osafterfork` which makes the UWSGI process
+        # respect our custom signal handlers.
+        #
+        # This option however is not present on older UWSGI version like 2.0.21. For
+        # those versions setting these signal handlers do not solve the hang-on-exit
+        # issue and instead the user should set `--worker-reload-mercy` to a short
+        # value to get UWSGI to terminate the process for you.
+        #
+        # TODO: Find a better solution to this
+        _ = signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+        _ = signal.signal(signal.SIGTERM, signal_handler) # Terminate
+        _ = signal.signal(signal.SIGQUIT, signal_handler) # Quit
 
-        # NOTE: Offset by 10s to account for clock drift between backend and the Apple servers
-        end_unix_ts_ms = int((time.time() - 10) * 1000)
-        platform_apple.catchup_on_missed_notifications(core           = core,
-                                                       sql_conn       = db.conn,
-                                                       end_unix_ts_ms = end_unix_ts_ms)
+        # Dispatch a long-running "thread" that wakes up every 00:00 UTC to expire
+        # entries in the DB. This thread has program-lifetime and hence should exit
+        # when the Flask app exits.
+        #
+        # In UWSGI mode, we launch multiple processes, so we actually have multiple
+        # of these threads running. I considered separating this into a separate app
+        # that you have to run, or, some smart way to detect that only one process
+        # out of the set should be running this thread to clean the DB.
+        #
+        # But this complicates the architecture _alot_ trying to get UWSGI to
+        # intelligently handle this, either by defining a custom hook, or
+        # _multiple_ UWSGI instances, or running them under UWSGI emperor so that
+        # you can then run 2 apps (100% more setup than 1 app!) for the backend.
+        #
+        # The trade-off in choosing that is unacceptable for managing Session Pro
+        # subscriptions which on paper is a very simple CRUD application.
+        # Instead, I've embedded the periodic cleaning of the DB into the app
+        # itself so that the entire stack is self-contained and hence monolithic.
+        #
+        # By running the app, either in flask, UWSGI w/ multiple processes or
+        # whatever, that is in itself self-sufficient to maintain a valid Session
+        # Pro database without any additional configuration. Just launch the app and
+        # it "just works". This avoids the need for external frameworks like UWSGI
+        # needing to know about internal details (i.e. leaky abstractions) to run
+        # the application.
+        #
+        # The trade-off for this is that all processes running the app will attempt
+        # to clean the DB and race at UTC 00:00 to do so. We just make sure to do
+        # that operation over an atomic transaction and allow exactly one process
+        # out of the N available to actually clean the DB. The rest will no-op.
+        thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
+        thread.start()
 
-    # NOTE: Enable Google Play Store notification handling, this is a blocking call so it's delegated
-    # to a thread. We use Google's asynchronous streaming pull client which spawns a thread pool
-    # (10 threads by default) to process messages.
-    if parsed_args.with_platform_google:
-        if base.PLATFORM_TESTING_ENV:
-            base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
-        global google_thread_context
-        google_thread_context = platform_google.init(project_name            = parsed_args.google_project_name,
-                                                     package_name            = parsed_args.google_package_name,
-                                                     subscription_name       = parsed_args.google_subscription_name,
-                                                     subscription_product_id = parsed_args.google_subscription_product_id,
-                                                     app_credentials_path    = parsed_args.google_application_credentials_path)
-        assert google_thread_context.thread
-        google_thread_context.thread.start()
+        runtime = backend.get_runtime(open_db.conn)
+        result: flask.Flask = server.init(testing_mode=False, db_path=parsed_args.db_path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
 
-    # The flask runner/UWSGI takes over from here and runs the application for
-    # us across multiple processes if necessary. We'll close our db connection
-    # here. Each request we receive will open their own connection the DB.
-    db.conn.close()
+        # NOTE: Add flask to our global logger
+        if 1:
+            result.logger.addHandler(console_logger)
+            if file_logger:
+                result.logger.addHandler(file_logger)
+            for it in webhook_loggers:
+                result.logger.addHandler(it)
 
+        # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
+        # contact the endpoint when a notification is generated.
+        if parsed_args.with_platform_apple:
+            core: platform_apple.Core = platform_apple.init(key_id      = parsed_args.apple_key_id,
+                                                            issuer_id   = parsed_args.apple_issuer_id,
+                                                            bundle_id   = parsed_args.apple_bundle_id,
+                                                            app_id      = None if parsed_args.apple_sandbox_env else parsed_args.apple_production_app_id,
+                                                            key_bytes   = parsed_args.apple_key,
+                                                            root_certs  = parsed_args.apple_root_certs,
+                                                            sandbox_env = parsed_args.apple_sandbox_env)
+            platform_apple.equip_flask_routes(core, result)
+
+            # NOTE: Offset by 10s to account for clock drift between backend and the Apple servers
+            end_unix_ts_ms = int((time.time() - 10) * 1000)
+            platform_apple.catchup_on_missed_notifications(core           = core,
+                                                           sql_conn       = open_db.conn,
+                                                           end_unix_ts_ms = end_unix_ts_ms)
+
+        # NOTE: Enable Google Play Store notification handling, this is a blocking call so it's delegated
+        # to a thread. We use Google's asynchronous streaming pull client which spawns a thread pool
+        # (10 threads by default) to process messages.
+        if parsed_args.with_platform_google:
+            if base.PLATFORM_TESTING_ENV:
+                base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
+            global google_thread_context
+            google_thread_context = platform_google.init(project_name            = parsed_args.google_project_name,
+                                                         package_name            = parsed_args.google_package_name,
+                                                         subscription_name       = parsed_args.google_subscription_name,
+                                                         subscription_product_id = parsed_args.google_subscription_product_id,
+                                                         app_credentials_path    = parsed_args.google_application_credentials_path)
+            assert google_thread_context.thread
+            google_thread_context.thread.start()
     return result
 
 # Flask entry point

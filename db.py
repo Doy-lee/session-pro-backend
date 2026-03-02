@@ -52,6 +52,19 @@ def transaction(conn: sqlalchemy.engine.Connection):
         if str(e) != "Cancel requested":
             raise
 
+@contextlib.contextmanager
+def transaction_from_engine(engine: sqlalchemy.engine.Engine):
+    conn   = engine.connect()
+    result = SQLTransaction(conn=conn)
+    try:
+        with conn.begin() as tx:
+            yield result
+            if result.cancel: # SQLAlchemy will automatically rollback on exception
+                raise Exception("Cancel requested")
+    except Exception as e:
+        if str(e) != "Cancel requested":
+            raise
+
 def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
     parsed:    str  = database_url.split('://', 1)[0]
     is_sqlite: bool = parsed == 'sqlite'
@@ -72,7 +85,7 @@ def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
 
     return engine
 
-def query(conn: sqlalchemy.engine.Connection, sql: str, params: dict[str, Any] | None = None, *, bind_expanding: list[str] | None = None, **kwparams: Any) -> sqlalchemy.engine.Result[typing.Any]:
+def query(conn: sqlalchemy.engine.Connection, sql: str, params: dict[str, Any] | None = None, *, bind_expanding: list[str] | None = None, **kwparams: Any) -> sqlalchemy.engine.cursor.CursorResult[typing.Any]:
     stmt = sqlalchemy.text(sql)
     if bind_expanding:
         stmt = stmt.bindparams(*[sqlalchemy.bindparam(name, expanding=True) for name in bind_expanding])
@@ -83,7 +96,7 @@ def query_one(conn: sqlalchemy.engine.Connection, sql: str, *, bind_expanding: l
     result = query(conn, sql, bind_expanding=bind_expanding, **params)
     return result.fetchone()
 
-def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.Result[typing.Any]:
+def query_autocommit(engine: sqlalchemy.engine.Engine, sql: str, *, bind_expanding: list[str] | None = None, **params: Any) -> sqlalchemy.engine.CursorResult[typing.Any]:
     with engine.connect() as conn:
         result = query(conn, sql, bind_expanding=bind_expanding, **params)
         conn.commit()

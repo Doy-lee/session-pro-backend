@@ -65,13 +65,10 @@ class TestingContext:
     context and each chunk of tests to execute.
     """
 
-    db:           backend.SetupDBResult
-    db_conn:      sqlalchemy.engine.Connection
-    flask_app:    flask.Flask
-    flask_client: werkzeug.Client
-
-    db_path:      str  = ''
-
+    db_engine:            sqlalchemy.engine.Engine
+    flask_app:            flask.Flask
+    flask_client:         werkzeug.Client
+    db_path:              str  = ''
     platform_testing_env: bool = False
 
     def __init__(self, db_path: str, platform_testing_env: bool = False):
@@ -82,24 +79,24 @@ class TestingContext:
         base.PLATFORM_TESTING_ENV = self.platform_testing_env
         if base.PLATFORM_TESTING_ENV:
             base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
-        err     = base.ErrorSink()
-        self.db = backend.setup_db(database_url=f'sqlite:///{self.db_path}', err=err)
-        assert len(err.msg_list) == 0
-        assert self.db.conn
 
-        runtime           = backend.get_runtime(self.db.conn)
-        self.flask_app    = server.init(testing_mode=True, db_path=self.db_path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
+        err                                     = base.ErrorSink()
+        engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url=f'sqlite:///{self.db_path}', err=err)
+        assert len(err.msg_list) == 0
+        assert engine
+
+        self.db_engine    = engine
+        with db.transaction_from_engine(self.db_engine) as tx:
+            runtime           = backend.get_runtime(tx.conn)
+        self.flask_app    = server.init(testing_mode=True, database_url=f"sqlite:///{self.db_path}", server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
         self.flask_client = self.flask_app.test_client()
-        self.db_conn      = self.db.conn
         return self
 
     def __exit__(self,
                  exc_type: object | None,
                  exc_value: object | None,
                  traceback: traceback.TracebackException | None):
-        assert self.db.conn
-        self.db.conn.close()
-        self.db_conn.close()
+        self.db_engine.dispose()
         base.PLATFORM_TESTING_ENV = False
         base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
         return False
@@ -151,10 +148,10 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     # payment tokens.
 
     # Setup DB
-    err                             = base.ErrorSink()
-    setup_db: backend.SetupDBResult = backend.setup_db(database_url="sqlite:///file:test_same_user?mode=memory&cache=shared&uri=true", err=err)
+    err                                        = base.ErrorSink()
+    db_engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url="sqlite:///file:test_same_user?mode=memory&cache=shared&uri=true", err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert setup_db.conn
+    assert db_engine
 
     # Setup scenarios, single user who stacks a subscription
     backend_key:         nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
@@ -189,6 +186,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                  payment_provider         = base.PaymentProvider.GooglePlayStore)
     ]
 
+    db_conn: sqlalchemy.engine.Connection = db_engine.connect()
     for index, it in enumerate(scenarios):
         # Add the "unredeemed" version of the payment, e.g. mock the notification from
         # IOS App Store/Google Play Store
@@ -197,7 +195,8 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
-        backend.add_unredeemed_payment(conn                              = setup_db.conn,
+
+        backend.add_unredeemed_payment(conn                              = db_conn,
                                        payment_tx                        = payment_tx,
                                        plan                              = it.plan,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -207,7 +206,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                        err                               = err)
         assert len(err.msg_list) == 0
 
-        unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(setup_db.conn)
+        unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(db_conn)
         assert len(unredeemed_payment_list)                       == 1
         assert unredeemed_payment_list[0].status                  == base.PaymentStatus.Unredeemed
         assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
@@ -220,38 +219,38 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         assert unredeemed_payment_list[0].plan                    == it.plan
 
         # Register the payment
-        version: int = 0
+        version                                 = 0
         add_pro_payment_tx                      = backend.UserPaymentTransaction()
         add_pro_payment_tx.provider             = payment_tx.provider
         add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
         add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
 
-        add_payment_hash: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                    master_pkey=master_key.verify_key,
-                                                                    rotating_pkey=rotating_key.verify_key,
-                                                                    payment_tx=add_pro_payment_tx)
+        add_payment_hash = backend.make_add_pro_payment_hash(version=version,
+                                                             master_pkey=master_key.verify_key,
+                                                             rotating_pkey=rotating_key.verify_key,
+                                                             payment_tx=add_pro_payment_tx)
 
-        redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
-                                                                          conn                = setup_db.conn,
-                                                                          signing_key         = backend_key,
-                                                                          unix_ts_ms          = unix_ts_ms,
-                                                                          redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                                                          master_pkey         = master_key.verify_key,
-                                                                          rotating_pkey       = rotating_key.verify_key,
-                                                                          payment_tx          = add_pro_payment_tx,
-                                                                          master_sig          = master_key.sign(add_payment_hash).signature,
-                                                                          rotating_sig        = rotating_key.sign(add_payment_hash).signature,
-                                                                          err                 = err)
+        redeemed_payment = backend.add_pro_payment(version             = version,
+                                                   conn                = db_conn,
+                                                   signing_key         = backend_key,
+                                                   unix_ts_ms          = unix_ts_ms,
+                                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                   master_pkey         = master_key.verify_key,
+                                                   rotating_pkey       = rotating_key.verify_key,
+                                                   payment_tx          = add_pro_payment_tx,
+                                                   master_sig          = master_key.sign(add_payment_hash).signature,
+                                                   rotating_sig        = rotating_key.sign(add_payment_hash).signature,
+                                                   err                 = err)
         it.proof = redeemed_payment.proof
 
         # Verify payment was redeemed
-        unredeemed_payment_list = backend.get_unredeemed_payments_list(setup_db.conn)
+        unredeemed_payment_list = backend.get_unredeemed_payments_list(db_conn)
         assert len(unredeemed_payment_list) == 0
         assert redeemed_payment.status == backend.RedeemPaymentStatus.Success
 
         # Try claiming it again, this should fail because it has already been claimed
         redeemed_payment_2nd = backend.add_pro_payment(version             = version,
-                                                       conn                = setup_db.conn,
+                                                       conn                = db_conn,
                                                        signing_key         = backend_key,
                                                        unix_ts_ms          = unix_ts_ms,
                                                        redeemed_unix_ts_ms = redeemed_unix_ts_ms,
@@ -267,16 +266,16 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         assert len(redeemed_payment_2nd.proof.gen_index_hash) == 0
         err.msg_list.clear()
 
-    runtime: backend.RuntimeRow                             = backend.get_runtime(setup_db.conn)
+    runtime: backend.RuntimeRow                             = backend.get_runtime(db_conn)
     assert runtime.gen_index                               == 2
 
-    user_list: list[backend.UserRow]                        = backend.get_users_list(setup_db.conn)
+    user_list: list[backend.UserRow]                        = backend.get_users_list(db_conn)
     assert len(user_list)                                  == 1
     assert user_list[0].master_pkey                        == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                          == runtime.gen_index - 1
     assert user_list[0].expiry_unix_ts_ms                  == scenarios[1].expiry_unix_ts_ms
 
-    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(setup_db.conn)
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].plan                            == scenarios[0].plan
@@ -304,10 +303,10 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert len(payment_list[0].apple.original_tx_id)       == 0
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
-    revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(setup_db.conn)
+    revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db_conn)
     assert len(revocation_list)                            == 0
 
-    expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(setup_db.conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
+    expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(db_conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
     assert expire_result.already_done_by_someone_else      == False
     assert expire_result.success                           == True
     assert expire_result.payments                          == 1
@@ -320,7 +319,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     payment_tx.google_payment_token                         = scenarios[1].google_payment_token
     payment_tx.google_order_id                              = scenarios[1].google_order_id
     new_grace_duration_ms                                   = 10000
-    updated: bool                                           = backend.update_payment_renewal_info(conn                     = setup_db.conn,
+    updated: bool                                           = backend.update_payment_renewal_info(conn                     = db_conn,
                                                                                                   payment_tx               = payment_tx,
                                                                                                   grace_period_duration_ms = new_grace_duration_ms,
                                                                                                   auto_renewing            = False,
@@ -328,7 +327,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert not err.has() and updated
 
     # NOTE: Verify that the new grace was assigned to the user
-    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(setup_db.conn)
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db_conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].plan         == scenarios[0].plan
@@ -359,13 +358,13 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     # NOTE: Get the user and payments and verify that the expiry and grace are correct
-    with db.transaction(setup_db.conn) as tx:
+    with db.transaction(db_conn) as tx:
         get: backend.GetUserAndPayments           = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
         assert get.user.auto_renewing            == False
         assert get.user.grace_period_duration_ms == new_grace_duration_ms
 
     # NOTE: Verify the DB invariants
-    _ = backend.verify_db(setup_db.conn, err)
+    _ = backend.verify_db(db_conn, err)
     if len(err.msg_list) > 0:
         for it in err.msg_list:
             print(f"ERROR: {it}")
@@ -400,7 +399,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
-        backend.add_unredeemed_payment(conn                              = setup_db.conn,
+        backend.add_unredeemed_payment(conn                              = db_conn,
                                        payment_tx                        = payment_tx,
                                        plan                              = it.plan,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -414,8 +413,8 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         # redeemed
         assert len(auto_redeem_scenarios) == 2
         if index == 0:
-            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(setup_db.conn)
-            assert len(unredeemed_payment_list)               == 1
+            unredeemed_payment_list              = backend.get_unredeemed_payments_list(db_conn)
+            assert len(unredeemed_payment_list) == 1
 
             # Register the payment
             version: int = 0
@@ -429,7 +428,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                                         payment_tx    = add_pro_payment_tx)
 
             redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
-                                                                              conn                = setup_db.conn,
+                                                                              conn                = db_conn,
                                                                               signing_key         = backend_key,
                                                                               unix_ts_ms          = unix_ts_ms,
                                                                               redeemed_unix_ts_ms = redeemed_unix_ts_ms,
@@ -444,20 +443,20 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
             assert redeemed_payment.status == backend.RedeemPaymentStatus.Success, redeemed_payment
 
             # Verify payment was redeemed
-            unredeemed_payment_list = backend.get_unredeemed_payments_list(setup_db.conn)
+            unredeemed_payment_list = backend.get_unredeemed_payments_list(db_conn)
             assert len(unredeemed_payment_list) == 0
 
-            payment_list = backend.get_payments_list(setup_db.conn)
+            payment_list = backend.get_payments_list(db_conn)
             assert len(payment_list) == 3
 
         # NOTE: This is the payment that was not claimed via add_pro_payment. If we check the
         # payments table there should be 4 payments (2 from the first test, 2 from this test). The 2
         # from this test should be set to redeemed.
         if index == 1:
-            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(setup_db.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(db_conn)
             assert len(unredeemed_payment_list)               == 0
 
-            payments_list: list[backend.PaymentRow]           = backend.get_payments_list(setup_db.conn)
+            payments_list: list[backend.PaymentRow]           = backend.get_payments_list(db_conn)
             assert len(payments_list)                        == 4
             assert payments_list[2].status                   == base.PaymentStatus.Redeemed
             assert payments_list[2].google_order_id          == auto_redeem_scenarios[0].google_order_id
@@ -484,16 +483,17 @@ def test_server_add_payment_flow(monkeypatch):
     dummy_sub_v2_data = platform_google_types.SubscriptionV2Data()
     monkeypatch.setattr("platform_google_api.fetch_subscription_v2_details", lambda *args, **kwargs: dummy_sub_v2_data)
 
-    with tempfile.NamedTemporaryFile(suffix='.db') as db_tmp_file:
-        err                             = base.ErrorSink()
-        setup_db: backend.SetupDBResult = backend.setup_db(database_url=f'sqlite:///{db_tmp_file.name}', err=err)
-        assert len(err.msg_list) == 0, f'{err.msg_list}'
-        assert setup_db.conn
-
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as db_tmp_file:
+        db_url                                     = "sqlite:///" + db_tmp_file.name
+        err                                        = base.ErrorSink()
+        db_engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url=db_url, err=err)
+        assert not err.has(), f'{err.msg_list}'
+        assert db_engine
         # Setup local flask instance
-        runtime                       = backend.get_runtime(setup_db.conn)
-        flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=setup_db.path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
-        flask_client: werkzeug.Client = flask_app.test_client()
+        db_conn: sqlalchemy.engine.Connection = db_engine.connect()
+        runtime                               = backend.get_runtime(db_conn)
+        flask_app:    flask.Flask             = server.init(testing_mode=True, database_url=db_url, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
+        flask_client: werkzeug.Client         = flask_app.test_client()
 
         # Setup keys for onion requests
         server_x25519_skey = runtime.backend_key.to_curve25519_private_key()
@@ -510,7 +510,7 @@ def test_server_add_payment_flow(monkeypatch):
         payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
         payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-        backend.add_unredeemed_payment(conn                              = setup_db.conn,
+        backend.add_unredeemed_payment(conn                              = db_conn,
                                        payment_tx                        = payment_tx,
                                        plan                              = base.ProPlan.OneMonth,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -558,6 +558,9 @@ def test_server_add_payment_flow(monkeypatch):
             assert len(err.msg_list) == 0,                                       '{err.msg_list}'
             assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
             assert len(result_items) == 0,                                       f'Response was: {json.dumps(response_json, indent=2)}'
+
+        db_conn.close()
+        db_conn = db_engine.connect()
 
         if 1: # Simulate client request to register a payment
             version: int                            = 0
@@ -627,10 +630,10 @@ def test_server_add_payment_flow(monkeypatch):
                                                          result_gen_index_hash,
                                                          result_rotating_pkey,
                                                          result_expiry_unix_ts_ms)
-            runtime = backend.get_runtime(setup_db.conn)
+            runtime = backend.get_runtime(db_conn)
             _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
                 assert get_user.user.gen_index == 0
 
@@ -708,9 +711,9 @@ def test_server_add_payment_flow(monkeypatch):
         if 1: # Register another payment on the same user, backend will choose the latest expiring payment
             new_payment_tx                      = base.PaymentProviderTransaction()
             new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
-            new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
-            new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
-            backend.add_unredeemed_payment(conn                              = setup_db.conn,
+            new_payment_tx.google_payment_token = os.urandom(int(len(payment_tx.google_payment_token) / 2)).hex()
+            new_payment_tx.google_order_id      = 'DEV.' + os.urandom(int(len(payment_tx.google_payment_token) / 2)).hex()
+            backend.add_unredeemed_payment(conn                              = db_conn,
                                            payment_tx                        = new_payment_tx,
                                            plan                              = base.ProPlan.OneMonth,
                                            unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -722,10 +725,10 @@ def test_server_add_payment_flow(monkeypatch):
             new_add_pro_payment_tx.provider             = new_payment_tx.provider
             new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
             new_add_pro_payment_tx.google_order_id      = new_payment_tx.google_order_id
-            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                            master_pkey=master_key.verify_key,
-                                                                            rotating_pkey=rotating_key.verify_key,
-                                                                            payment_tx=new_add_pro_payment_tx)
+            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version       = version,
+                                                                            master_pkey   = master_key.verify_key,
+                                                                            rotating_pkey = rotating_key.verify_key,
+                                                                            payment_tx    = new_add_pro_payment_tx)
 
             request_body = {
                 'version':              version,
@@ -787,6 +790,7 @@ def test_server_add_payment_flow(monkeypatch):
             _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         curr_revocation_ticket: int = 0
+
         if 1: # Get the revocation list
             request_body={'version': 0, 'ticket':  curr_revocation_ticket}
             onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
@@ -824,9 +828,12 @@ def test_server_add_payment_flow(monkeypatch):
             # payment but we _do_ increment the user's generation index
             assert len(result_items) == 0
 
+            db_conn.close()
+            db_conn = db_engine.connect()
+
             # Grab the generation index, and then calculate the expected generation index hash
             gen_index = 0
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 get_user = backend.get_user_and_payments(tx, master_key.verify_key)
                 assert get_user.user.gen_index == 1
                 gen_index = get_user.user.gen_index
@@ -834,7 +841,7 @@ def test_server_add_payment_flow(monkeypatch):
             post_revoke_gen_index_hash: bytes = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
 
             # We will now manually revoke the user and check the revocation list again
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                            google_payment_token = new_add_pro_payment_tx.google_payment_token,
                                                            revoke_unix_ts_ms    = unix_ts_ms,
@@ -879,7 +886,7 @@ def test_server_add_payment_flow(monkeypatch):
                 # Check user entitlement updated after revoke. We should prefer the unrevoked payment
                 # as we have 2 payments for the user simultaneously where the latter was revoked but
                 # the original was not.
-                with db.transaction(setup_db.conn) as tx:
+                with db.transaction(db_conn) as tx:
                     get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
 
                 for it in result_items:
@@ -917,9 +924,9 @@ def test_server_add_payment_flow(monkeypatch):
             result_json = response_json['result']
 
             # Extract the fields
-            result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
-            result_items = base.json_dict_require_array(d=result_json, key='items', err=err)
-            result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+            result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
+            result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
+            result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
             assert result_ticket  == 1, f'Response was: {json.dumps(response_json, indent=2)}'
@@ -1060,13 +1067,13 @@ def test_server_add_payment_flow(monkeypatch):
         # grace period
         if 1:
             # NOTE: Verify that there is no grace period set first
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
                 assert get_user.user.grace_period_duration_ms == 0
 
             # NOTE: Grab the latest expiring payment so that we have access to the payment details
             last_payment = backend.PaymentRow()
-            for payment_it in backend.get_payments_list(setup_db.conn):
+            for payment_it in backend.get_payments_list(db_conn):
                 if payment_it.expiry_unix_ts_ms > last_payment.expiry_unix_ts_ms:
                     last_payment = payment_it
 
@@ -1078,7 +1085,7 @@ def test_server_add_payment_flow(monkeypatch):
             payment_tx.apple_web_line_order_tx_id = last_payment.apple.web_line_order_tx_id
             payment_tx.google_payment_token       = last_payment.google_payment_token
             payment_tx.google_order_id            = last_payment.google_order_id
-            _ = backend.update_payment_renewal_info(setup_db.conn,
+            _ = backend.update_payment_renewal_info(db_conn,
                                                     payment_tx,
                                                     grace_period_duration_ms=10 * 1000,
                                                     auto_renewing=True,
@@ -1087,7 +1094,7 @@ def test_server_add_payment_flow(monkeypatch):
 
             # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
             pro_proof_deadline_unix_ts_ms: int = 0
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
                 assert get_user.user.grace_period_duration_ms > 0
                 pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
@@ -1100,8 +1107,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                                      rotating_pkey = rotating_key.verify_key,
                                                                      unix_ts_ms    = unix_ts_ms)
 
-            runtime = backend.get_runtime(setup_db.conn)
-            proof: backend.ProSubscriptionProof = backend.generate_pro_proof(conn           = setup_db.conn,
+            runtime = backend.get_runtime(db_conn)
+            proof: backend.ProSubscriptionProof = backend.generate_pro_proof(conn           = db_conn,
                                                                              version        = request_version,
                                                                              signing_key    = runtime.backend_key,
                                                                              gen_index_salt = runtime.gen_index_salt,
@@ -1128,8 +1135,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                                   rotating_pkey = rotating_key.verify_key,
                                                                   unix_ts_ms    = unix_ts_ms)
 
-            runtime = backend.get_runtime(setup_db.conn)
-            proof = backend.generate_pro_proof(conn           = setup_db.conn,
+            runtime = backend.get_runtime(db_conn)
+            proof = backend.generate_pro_proof(conn           = db_conn,
                                                version        = request_version,
                                                signing_key    = runtime.backend_key,
                                                gen_index_salt = runtime.gen_index_salt,
@@ -1154,7 +1161,7 @@ def test_server_add_payment_flow(monkeypatch):
             err.msg_list.clear()
 
         if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
-            with db.transaction(setup_db.conn) as tx:
+            with db.transaction(db_conn) as tx:
                 revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                            google_payment_token = payment_tx.google_payment_token,
                                                            revoke_unix_ts_ms    = start_unix_ts_ms,

@@ -43,8 +43,8 @@ CREATE TABLE IF NOT EXISTS payments (
     -- the event was associated with. Before adding this payment to the DB it's the caller's
     -- responsibility to have independently re-verified the token using Google APIs provided to
     -- assert the token was valid.
-    google_payment_token              BLOB,
-    google_order_id                   BLOB,
+    google_payment_token              TEXT,
+    google_order_id                   TEXT,
 
     -- On some platforms the initiation of a refund can be recorded manually by the originating
     -- device by calling the backend with the payment details to mark as having initiated a refund.

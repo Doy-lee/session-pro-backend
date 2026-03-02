@@ -275,25 +275,6 @@ class AllocatedGenID:
     gen_index_salt:    bytes = b''
 
 @dataclasses.dataclass
-class SetupDBResult:
-    """
-    Class is returned by backend.setup_db() which opens the DB and maintains a connection to the DB
-    via `conn`. Caller must close `conn` if they wish to release the connection from the DB.
-    The setup function creates the tables required to operate the Session Pro Backend.
-
-    Normally you would not return the DB connection as it's easy to accidentally leak the DB
-    connection in this object however we also use this in tests which use an in-memory transient DB
-    If we were to close connection before returning to the user, the DB will be wiped from memory
-    making it useless for tests.
-
-    For the most part the callers of this API (tests and main entry point) explicitly close the DB
-    when they are done with it.
-    """
-    path:    str                                 = ''
-    success: bool                                = False
-    conn:    sqlalchemy.engine.Connection | None = None
-
-@dataclasses.dataclass
 class OpenDBAtPath:
     conn: sqlalchemy.engine.Connection
     engine: sqlalchemy.engine.Engine
@@ -595,29 +576,28 @@ def db_info_string(conn: sqlalchemy.engine.Connection, db_path: str, err: base.E
 
     return result
 
-def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.SigningKey | None = None) -> SetupDBResult:
+def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.SigningKey | None = None) -> sqlalchemy.engine.Engine | None:
     """
-    Open/connect to a database and bootstrap tables if needed.
-
+    Opens a database and bootstraps/migrates schema if needed.
     Args:
         database_url: Full database URL (e.g., 'sqlite:///path/to/db.db' or 'postgresql://user:pass@host/db')
                      Caller is responsible for providing the correct URL scheme.
         backend_key: Optional backend signing key for initialization
         err: Error sink for collecting error messages
     """
-    result: SetupDBResult = SetupDBResult()
-    result.path           = database_url
+    conn:   sqlalchemy.engine.Connection | None = None
+    result: sqlalchemy.engine.Engine     | None = None
     try:
-        engine      = db.create_engine(database_url)
-        result.conn = engine.connect()
+        result = db.create_engine(database_url)
+        conn   = result.connect()
     except Exception as e:
         err.msg_list.append(f'Failed to open/connect to DB at {database_url}: {e}')
         return result
 
-    with db.transaction(result.conn) as tx:
-        try:
+    try:
+        with db.transaction(conn) as tx:
             # Determine schema file based on database type
-            if db.is_postgres(engine):
+            if db.is_postgres(result):
                 schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.pgsql')
             else:
                 schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.sql')
@@ -626,7 +606,7 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
             with open(schema_path, 'r') as f:
                 schema_sql = f.read()
 
-            if db.is_postgres(engine):
+            if db.is_postgres(result):
                 for statement in schema_sql.split(';'):
                     statement = statement.strip()
                     if statement:
@@ -636,16 +616,16 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
 
             # NOTE: Version migration
             target_db_version = 7
-            db_version = db.get_db_version(tx.conn, engine)
+            db_version = db.get_db_version(tx.conn, result)
 
             # NOTE: v0 is the nil state - DB never bootstrapped, teleport to target
             if db_version == 0:
                 db_version = target_db_version
-                db.set_db_version(tx.conn, engine, db_version)
+                db.set_db_version(tx.conn, result, db_version)
 
             if db_version == 5:
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                if not db.is_postgres(engine):
+                if not db.is_postgres(result):
                     _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
                     _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
                     for row in db.query(tx.conn, ('SELECT master_pkey FROM users')).fetchall():
@@ -653,15 +633,15 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
                         google_obfuscated_account_id: bytes = google_obfuscated_account_id_from_master_pkey(nacl.signing.VerifyKey(master_pkey))
                         _ = db.query(tx.conn, 'UPDATE users SET google_obfuscated_account_id = :g WHERE master_pkey = :m', g=google_obfuscated_account_id, m=master_pkey)
                 db_version += 1
-                db.set_db_version(tx.conn, engine, db_version)
+                db.set_db_version(tx.conn, result, db_version)
 
             if db_version == 6:
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
-                if not db.is_postgres(engine):
+                if not db.is_postgres(result):
                     _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
                     _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
                 db_version += 1
-                db.set_db_version(tx.conn, engine, db_version)
+                db.set_db_version(tx.conn, result, db_version)
 
             # NOTE: Verify that the DB was migrated to the target version
             assert db_version == target_db_version
@@ -677,13 +657,11 @@ def setup_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.S
                     INSERT INTO runtime (gen_index, gen_index_salt, backend_key, last_expire_unix_ts_ms, apple_notification_checkpoint_unix_ts_ms, revocation_ticket)
                     VALUES (0, :salt, :backend_key, 0, 0, 0)
                 '''), salt=os.urandom(hashlib.blake2b.SALT_SIZE), backend_key=bytes(backend_key))
-
-            result.success = True
-        except Exception:
-            err.msg_list.append(f"Failed to bootstrap DB tables: {traceback.format_exc()}")
-
-    if not result.success:
-        result.conn.close()
+    except Exception:
+        err.msg_list.append(f"Failed to bootstrap DB tables: {traceback.format_exc()}")
+    finally:
+        if conn:
+            conn.close()
 
     return result
 
@@ -992,6 +970,7 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
     # account.
 
+    base.print_db_to_stdout_tx(tx.conn)
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         row_result = db.query(tx.conn, f'''
             UPDATE payments
@@ -1011,6 +990,10 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
               order_id            = payment_tx.google_order_id,
               where_status        = int(base.PaymentStatus.Unredeemed.value),
               account_id          = google_obfuscated_account_id_from_master_pkey(master_pkey))
+
+        import pprint
+        print(f"account id: {google_obfuscated_account_id_from_master_pkey(master_pkey).hex()}")
+        pprint.pprint(f"payment_tx: {payment_tx}")
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         row_result = db.query(tx.conn, f'''
             UPDATE payments

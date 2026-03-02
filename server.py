@@ -577,7 +577,7 @@ class UserProStatus(enum.IntEnum):
 # Keys stored in the flask app config dictionary that can be retrieved within
 # a request to get the path to the SQLite DB to load and use for that request.
 
-FLASK_CONFIG_DB_PATH_KEY                            = 'session_pro_backend_db_path'
+FLASK_CONFIG_DB_URL_KEY                            = 'session_pro_backend_db_url'
 
 # Name of the endpoints exposed on the server
 FLASK_ROUTE_ADD_PRO_PAYMENT                         = '/add_pro_payment'
@@ -681,14 +681,14 @@ def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signi
 
 @contextlib.contextmanager
 def get_db() -> collections.abc.Iterator[backend.OpenDBAtPath]:
-    db_path = typing.cast(str, flask.current_app.config[FLASK_CONFIG_DB_PATH_KEY])
-    with backend.OpenDBAtPath(db_path) as open_db:
+    database_url = typing.cast(str, flask.current_app.config[FLASK_CONFIG_DB_URL_KEY])
+    with backend.OpenDBAtPath(database_url) as open_db:
         yield open_db
 
-def init(testing_mode: bool, db_path: str, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
+def init(testing_mode: bool, database_url: str, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
     result                                                      = flask.Flask(__name__)
     result.config['TESTING']                                    = testing_mode
-    result.config[FLASK_CONFIG_DB_PATH_KEY]                     = db_path
+    result.config[FLASK_CONFIG_DB_URL_KEY]                     = database_url
     result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
     result.register_blueprint(onion_req.flask_blueprint_v4)
@@ -852,9 +852,10 @@ def get_pro_revocations():
     revocation_ticket: int = 0
     begin             = time.perf_counter()
     with get_db() as open_db:
-        revocation_ticket = backend.get_revocation_ticket(open_db.conn)
-        if ticket < revocation_ticket:
-            with db.transaction(open_db.conn) as tx:
+        with db.transaction(open_db.conn) as tx:
+            runtime_row = db.query_one(tx.conn, "SELECT revocation_ticket FROM runtime")
+            revocation_ticket = runtime_row[0] if runtime_row else 0
+            if ticket < revocation_ticket:
                 runtime = backend.get_runtime_tx(tx)
                 for row in backend.get_pro_revocations_iterator_tx(tx):
                     gen_index:         int   = row[0]
