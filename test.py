@@ -494,17 +494,14 @@ def test_server_add_payment_flow(monkeypatch):
     assert setup_db.conn
 
     # Setup local flask instance
-    runtime = backend.get_runtime(setup_db.conn)
-    flask_app:    flask.Flask     = server.init(testing_mode=True,
-                                                db_path=setup_db.path,
-                                                server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
+    runtime                       = backend.get_runtime(setup_db.conn)
+    flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=setup_db.path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
     flask_client: werkzeug.Client = flask_app.test_client()
 
     # Setup keys for onion requests
     server_x25519_skey = runtime.backend_key.to_curve25519_private_key()
     our_x25519_skey    = nacl.public.PrivateKey.generate()
-    shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey,
-                                                   server_x25519_pkey=server_x25519_skey.public_key)
+    shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey, server_x25519_pkey=server_x25519_skey.public_key)
 
     # Register an unredeemed payment (by writing the the token to the DB directly)
     start_unix_ts_ms: int           = int(time.time() * 1000)
@@ -702,7 +699,6 @@ def test_server_add_payment_flow(monkeypatch):
                                               result_gen_index_hash,
                                               result_rotating_pkey,
                                               result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(setup_db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
@@ -791,7 +787,6 @@ def test_server_add_payment_flow(monkeypatch):
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
                                                      result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(setup_db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0
@@ -839,8 +834,7 @@ def test_server_add_payment_flow(monkeypatch):
             assert get_user.user.gen_index == 1
             gen_index = get_user.user.gen_index
 
-        runtime:                    backend.RuntimeRow = backend.get_runtime(setup_db.conn)
-        post_revoke_gen_index_hash: bytes              = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
+        post_revoke_gen_index_hash: bytes = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
 
         # We will now manually revoke the user and check the revocation list again
         with db.transaction(setup_db.conn) as tx:
