@@ -559,9 +559,6 @@ def test_server_add_payment_flow(monkeypatch):
             assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
             assert len(result_items) == 0,                                       f'Response was: {json.dumps(response_json, indent=2)}'
 
-        db_conn.close()
-        db_conn = db_engine.connect()
-
         if 1: # Simulate client request to register a payment
             version: int                            = 0
             add_pro_payment_tx                      = backend.UserPaymentTransaction()
@@ -828,7 +825,8 @@ def test_server_add_payment_flow(monkeypatch):
             # payment but we _do_ increment the user's generation index
             assert len(result_items) == 0
 
-            db_conn.close()
+            # Flask did some writes using an independent connection so those writes are made visible by
+            # refreshing the connection and updating the "snapshot" that the following code sees.
             db_conn = db_engine.connect()
 
             # Grab the generation index, and then calculate the expected generation index hash

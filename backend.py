@@ -970,7 +970,6 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     # redeemed and it'd be nice to allow the user to claim it and get it attributed to their
     # account.
 
-    base.print_db_to_stdout_tx(tx.conn)
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         row_result = db.query(tx.conn, f'''
             UPDATE payments
@@ -990,10 +989,6 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
               order_id            = payment_tx.google_order_id,
               where_status        = int(base.PaymentStatus.Unredeemed.value),
               account_id          = google_obfuscated_account_id_from_master_pkey(master_pkey))
-
-        import pprint
-        print(f"account id: {google_obfuscated_account_id_from_master_pkey(master_pkey).hex()}")
-        pprint.pprint(f"payment_tx: {payment_tx}")
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         row_result = db.query(tx.conn, f'''
             UPDATE payments
