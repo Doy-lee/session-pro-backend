@@ -146,7 +146,7 @@ GoogleUnhandledNotificationIterator: typing.TypeAlias = tuple[int,        # mess
                                                               str | None, # payload
                                                               int]        # expiry_unix_ts_ms
 
-UserRowIterator:                     typing.TypeAlias = tuple[bytes, # master_pkey
+UserRowTuple:                        typing.TypeAlias = tuple[bytes, # master_pkey
                                                               int,   # gen_index
                                                               int,   # expiry_unix_ts_ms
                                                               int,   # grace_period_duration_ms
@@ -289,8 +289,8 @@ class SetupDBResult:
     For the most part the callers of this API (tests and main entry point) explicitly close the DB
     when they are done with it.
     """
-    path:    str                              = ''
-    success: bool                             = False
+    path:    str                                 = ''
+    success: bool                                = False
     conn:    sqlalchemy.engine.Connection | None = None
 
 @dataclasses.dataclass
@@ -436,7 +436,7 @@ def get_user_and_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.Verif
     result.payments_count = row[0] if row else 0
     return result
 
-def _user_from_row_iterator(row: UserRowIterator) -> UserRow:
+def _user_from_row_iterator(row: UserRowTuple) -> UserRow:
     result                              = UserRow()
     result.found                        = True
     result.master_pkey                  = row[0]

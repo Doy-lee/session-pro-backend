@@ -17,6 +17,7 @@ import nacl.signing
 import nacl.bindings
 import nacl.public
 import os
+import tempfile
 import time
 import werkzeug
 import dataclasses
@@ -481,376 +482,317 @@ def test_server_add_payment_flow(monkeypatch):
     )
 
     dummy_sub_v2_data = platform_google_types.SubscriptionV2Data()
-    monkeypatch.setattr(
-        "platform_google_api.fetch_subscription_v2_details",
-        lambda *args, **kwargs: dummy_sub_v2_data
-    )
+    monkeypatch.setattr("platform_google_api.fetch_subscription_v2_details", lambda *args, **kwargs: dummy_sub_v2_data)
 
+    with tempfile.NamedTemporaryFile(suffix='.db') as db_tmp_file:
+        err                             = base.ErrorSink()
+        setup_db: backend.SetupDBResult = backend.setup_db(database_url=f'sqlite:///{db_tmp_file.name}', err=err)
+        assert len(err.msg_list) == 0, f'{err.msg_list}'
+        assert setup_db.conn
 
-    # Setup DB
-    err                             = base.ErrorSink()
-    setup_db: backend.SetupDBResult = backend.setup_db(database_url='sqlite:///file:test_server_db?mode=memory&cache=shared&uri=true', err=err)
-    assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert setup_db.conn
+        # Setup local flask instance
+        runtime                       = backend.get_runtime(setup_db.conn)
+        flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=setup_db.path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
+        flask_client: werkzeug.Client = flask_app.test_client()
 
-    # Setup local flask instance
-    runtime                       = backend.get_runtime(setup_db.conn)
-    flask_app:    flask.Flask     = server.init(testing_mode=True, db_path=setup_db.path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
-    flask_client: werkzeug.Client = flask_app.test_client()
+        # Setup keys for onion requests
+        server_x25519_skey = runtime.backend_key.to_curve25519_private_key()
+        our_x25519_skey    = nacl.public.PrivateKey.generate()
+        shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey, server_x25519_pkey=server_x25519_skey.public_key)
 
-    # Setup keys for onion requests
-    server_x25519_skey = runtime.backend_key.to_curve25519_private_key()
-    our_x25519_skey    = nacl.public.PrivateKey.generate()
-    shared_key: bytes  = onion_req.make_shared_key(our_x25519_skey=our_x25519_skey, server_x25519_pkey=server_x25519_skey.public_key)
-
-    # Register an unredeemed payment (by writing the the token to the DB directly)
-    start_unix_ts_ms: int           = int(time.time() * 1000)
-    unix_ts_ms: int                 = start_unix_ts_ms
-    next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
-    master_key                      = nacl.signing.SigningKey.generate()
-    rotating_key                    = nacl.signing.SigningKey.generate()
-    payment_tx                      = base.PaymentProviderTransaction()
-    payment_tx.provider             = base.PaymentProvider.GooglePlayStore
-    payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    backend.add_unredeemed_payment(conn                              = setup_db.conn,
-                                   payment_tx                        = payment_tx,
-                                   plan                              = base.ProPlan.OneMonth,
-                                   unredeemed_unix_ts_ms             = unix_ts_ms,
-                                   expiry_unix_ts_ms                 = next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 90) * 1000),
-                                   platform_refund_expiry_unix_ts_ms = 0,
-                                   platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
-                                   err                               = err)
-    assert len(err.msg_list) == 0, f'{err.msg_list}'
-
-    if 1: # Grab the pro status before anything has happened
-        version:      int   = 0
-        count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
-        request_body={'version':     version,
-                      'master_pkey': bytes(master_key.verify_key).hex(),
-                      'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms':  unix_ts_ms,
-                      'count':       count}
-
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
-                                                  request_body=request_body)
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-        result_items                               = base.json_dict_require_array(d=result_json, key='items',  err=err)
-        result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
-        assert len(err.msg_list) == 0,                                       '{err.msg_list}'
-        assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert len(result_items) == 0,                                       f'Response was: {json.dumps(response_json, indent=2)}'
-
-    if 1: # Simulate client request to register a payment
-        version: int                            = 0
-        add_pro_payment_tx                      = backend.UserPaymentTransaction()
-        add_pro_payment_tx.provider             = payment_tx.provider
-        add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
-        add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
-
-        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                        master_pkey=master_key.verify_key,
-                                                                        rotating_pkey=rotating_key.verify_key,
-                                                                        payment_tx=add_pro_payment_tx)
-
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
-                                                  request_body={
-                                                      'version':              version,
-                                                      'master_pkey':          bytes(master_key.verify_key).hex(),
-                                                      'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
-                                                      'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-                                                      'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-                                                      'payment_tx': {
-                                                          'provider':             add_pro_payment_tx.provider.value,
-                                                          'google_payment_token': add_pro_payment_tx.google_payment_token,
-                                                          'google_order_id':      add_pro_payment_tx.google_order_id,
-                                                      }
-                                                  })
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-        # Parse status from response
-        assert response_json['status'] == 0,  f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        assert isinstance(result_json, dict)
-        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
-        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Parse hex fields to bytes
-        result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
-        result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
-        result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2, err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Check the rotating key returned matches what we asked the server to sign
-        assert result_rotating_pkey == rotating_key.verify_key
-
-        # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.build_proof_hash(result_version,
-                                                     result_gen_index_hash,
-                                                     result_rotating_pkey,
-                                                     result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(setup_db.conn)
-        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
-
-        with db.transaction(setup_db.conn) as tx:
-            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.user.gen_index == 0
-
-    if 1: # Authorise a new rotated key for the pro subscription
-        new_rotating_key    = nacl.signing.SigningKey.generate()
-        version             = 0
-        unix_ts_ms          = int(time.time() * 1000)
-        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version=version,
-                                                                   master_pkey=master_key.verify_key,
-                                                                   rotating_pkey=new_rotating_key.verify_key,
-                                                                   unix_ts_ms=unix_ts_ms)
-
-        request_body = {
-            'version':       version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
-            'unix_ts_ms':    unix_ts_ms,
-            'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
-        }
-
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GENERATE_PRO_PROOF,
-                                                  request_body=request_body)
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
-        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Parse hex fields to bytes
-        result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
-        result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
-        result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Check the rotating key returned matches what we asked the server to sign
-        assert result_rotating_pkey == new_rotating_key.verify_key
-
-        # Check that the server signed our proof w/ their public key
-        proof_hash = backend.build_proof_hash(result_version,
-                                              result_gen_index_hash,
-                                              result_rotating_pkey,
-                                              result_expiry_unix_ts_ms)
-        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
-
-        # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
-        # overrun of 30 days we round up to 31 days)
-        assert result_expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0
-        assert result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 31)) or \
-               result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 30))
-
-    new_add_pro_payment_tx = backend.UserPaymentTransaction()
-    if 1: # Register another payment on the same user, backend will choose the latest expiring payment
-        new_payment_tx                      = base.PaymentProviderTransaction()
-        new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
-        new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
-        new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
+        # Register an unredeemed payment (by writing the the token to the DB directly)
+        start_unix_ts_ms: int           = int(time.time() * 1000)
+        unix_ts_ms: int                 = start_unix_ts_ms
+        next_day_unix_ts_ms: int        = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
+        master_key                      = nacl.signing.SigningKey.generate()
+        rotating_key                    = nacl.signing.SigningKey.generate()
+        payment_tx                      = base.PaymentProviderTransaction()
+        payment_tx.provider             = base.PaymentProvider.GooglePlayStore
+        payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
+        payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
         backend.add_unredeemed_payment(conn                              = setup_db.conn,
-                                       payment_tx                        = new_payment_tx,
+                                       payment_tx                        = payment_tx,
                                        plan                              = base.ProPlan.OneMonth,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
-                                       expiry_unix_ts_ms                 = unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                       expiry_unix_ts_ms                 = next_day_unix_ts_ms + ((base.SECONDS_IN_DAY * 90) * 1000),
                                        platform_refund_expiry_unix_ts_ms = 0,
                                        platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
                                        err                               = err)
+        assert len(err.msg_list) == 0, f'{err.msg_list}'
 
-        new_add_pro_payment_tx.provider             = new_payment_tx.provider
-        new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
-        new_add_pro_payment_tx.google_order_id      = new_payment_tx.google_order_id
-        payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
-                                                                        master_pkey=master_key.verify_key,
-                                                                        rotating_pkey=rotating_key.verify_key,
-                                                                        payment_tx=new_add_pro_payment_tx)
+        if 1: # Grab the pro status before anything has happened
+            version:      int   = 0
+            count:        int   = 10_000
+            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            request_body={'version':     version,
+                          'master_pkey': bytes(master_key.verify_key).hex(),
+                          'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                          'unix_ts_ms':  unix_ts_ms,
+                          'count':       count}
 
-        request_body = {
-            'version':              version,
-            'master_pkey':          bytes(master_key.verify_key).hex(),
-            'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
-            'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
-            'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
-            'payment_tx': {
-                'provider':             new_add_pro_payment_tx.provider.value,
-                'google_payment_token': new_add_pro_payment_tx.google_payment_token,
-                'google_order_id':      new_add_pro_payment_tx.google_order_id,
-            }
-        }
-
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
-                                                  request_body=request_body)
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
-        result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
-        result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
-        result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
-        result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Parse hex fields to bytes
-        result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
-        result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
-        result_gen_index_hash: bytes =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-
-        # Check the rotating key returned matches what we asked the server to sign
-        assert result_rotating_pkey == rotating_key.verify_key
-
-        # Check that the server signed our proof w/ their public key
-        proof_hash: bytes = backend.build_proof_hash(result_version,
-                                                     result_gen_index_hash,
-                                                     result_rotating_pkey,
-                                                     result_expiry_unix_ts_ms)
-        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
-
-    curr_revocation_ticket: int = 0
-    if 1: # Get the revocation list
-        request_body={'version': 0, 'ticket':  curr_revocation_ticket}
-        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
-                                                  shared_key      = shared_key,
-                                                  endpoint        = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
-                                                  request_body    = request_body)
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
-        result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
-        result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_version == 0
-        assert result_ticket  == 0
-        curr_revocation_ticket = result_ticket
-
-        # Check that the server returned an empty revocation list, we no longer revoke the old
-        # payment but we _do_ increment the user's generation index
-        assert len(result_items) == 0
-
-        # Grab the generation index, and then calculate the expected generation index hash
-        gen_index = 0
-        with db.transaction(setup_db.conn) as tx:
-            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.user.gen_index == 1
-            gen_index = get_user.user.gen_index
-
-        post_revoke_gen_index_hash: bytes = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
-
-        # We will now manually revoke the user and check the revocation list again
-        with db.transaction(setup_db.conn) as tx:
-            revoked = backend.add_google_revocation_tx(tx                   = tx,
-                                                       google_payment_token = new_add_pro_payment_tx.google_payment_token,
-                                                       revoke_unix_ts_ms    = unix_ts_ms,
-                                                       err                  = err)
-            assert revoked
-            assert not err.has()
-
-        if 1: # Get the revocation list, again
-            request_body={'version': 0, 'ticket':  curr_revocation_ticket}
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                      shared_key   = shared_key,
-                                                      endpoint     = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
-                                                      request_body = request_body)
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
+                                                      request_body=request_body)
+
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+            # Parse status from response
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
+
+            # Extract the fields
+            result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+            result_items                               = base.json_dict_require_array(d=result_json, key='items',  err=err)
+            result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
+            assert len(err.msg_list) == 0,                                       '{err.msg_list}'
+            assert result_status     == server.UserProStatus.NeverBeenPro.value, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert len(result_items) == 0,                                       f'Response was: {json.dumps(response_json, indent=2)}'
+
+        if 1: # Simulate client request to register a payment
+            version: int                            = 0
+            add_pro_payment_tx                      = backend.UserPaymentTransaction()
+            add_pro_payment_tx.provider             = payment_tx.provider
+            add_pro_payment_tx.google_payment_token = payment_tx.google_payment_token
+            add_pro_payment_tx.google_order_id      = payment_tx.google_order_id
+
+            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
+                                                                            master_pkey=master_key.verify_key,
+                                                                            rotating_pkey=rotating_key.verify_key,
+                                                                            payment_tx=add_pro_payment_tx)
+
+            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
+                                                      request_body={
+                                                          'version':              version,
+                                                          'master_pkey':          bytes(master_key.verify_key).hex(),
+                                                          'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+                                                          'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                                          'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                                          'payment_tx': {
+                                                              'provider':             add_pro_payment_tx.provider.value,
+                                                              'google_payment_token': add_pro_payment_tx.google_payment_token,
+                                                              'google_order_id':      add_pro_payment_tx.google_order_id,
+                                                          }
+                                                      })
+
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+            # Parse status from response
+            assert response_json['status'] == 0,  f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
+
+            # Extract the fields
+            assert isinstance(result_json, dict)
+            result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+            result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+            result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+            result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+            result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Parse hex fields to bytes
+            result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+            result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+            result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2, err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Check the rotating key returned matches what we asked the server to sign
+            assert result_rotating_pkey == rotating_key.verify_key
+
+            # Check that the server signed our proof w/ their public key
+            proof_hash: bytes = backend.build_proof_hash(result_version,
+                                                         result_gen_index_hash,
+                                                         result_rotating_pkey,
+                                                         result_expiry_unix_ts_ms)
+            runtime = backend.get_runtime(setup_db.conn)
+            _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+
+            with db.transaction(setup_db.conn) as tx:
+                get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+                assert get_user.user.gen_index == 0
+
+        if 1: # Authorise a new rotated key for the pro subscription
+            new_rotating_key    = nacl.signing.SigningKey.generate()
+            version             = 0
+            unix_ts_ms          = int(time.time() * 1000)
+            hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version=version,
+                                                                       master_pkey=master_key.verify_key,
+                                                                       rotating_pkey=new_rotating_key.verify_key,
+                                                                       unix_ts_ms=unix_ts_ms)
+
+            request_body = {
+                'version':       version,
+                'master_pkey':   bytes(master_key.verify_key).hex(),
+                'rotating_pkey': bytes(new_rotating_key.verify_key).hex(),
+                'unix_ts_ms':    unix_ts_ms,
+                'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
+                'rotating_sig':  bytes(new_rotating_key.sign(hash_to_sign).signature).hex(),
+            }
+
+            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_GENERATE_PRO_PROOF,
+                                                      request_body=request_body)
+
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+            # Parse status from response
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
+
+            # Extract the fields
+            result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+            result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+            result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+            result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+            result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Parse hex fields to bytes
+            result_rotating_pkey  = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+            result_sig            =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+            result_gen_index_hash =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Check the rotating key returned matches what we asked the server to sign
+            assert result_rotating_pkey == new_rotating_key.verify_key
+
+            # Check that the server signed our proof w/ their public key
+            proof_hash = backend.build_proof_hash(result_version,
+                                                  result_gen_index_hash,
+                                                  result_rotating_pkey,
+                                                  result_expiry_unix_ts_ms)
+            _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+
+            # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
+            # overrun of 30 days we round up to 31 days)
+            assert result_expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0
+            assert result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 31)) or \
+                   result_expiry_unix_ts_ms == base.round_unix_ts_ms_to_start_of_day(unix_ts_ms + (base.MILLISECONDS_IN_DAY * 30))
+
+        new_add_pro_payment_tx = backend.UserPaymentTransaction()
+        if 1: # Register another payment on the same user, backend will choose the latest expiring payment
+            new_payment_tx                      = base.PaymentProviderTransaction()
+            new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
+            new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
+            new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
+            backend.add_unredeemed_payment(conn                              = setup_db.conn,
+                                           payment_tx                        = new_payment_tx,
+                                           plan                              = base.ProPlan.OneMonth,
+                                           unredeemed_unix_ts_ms             = unix_ts_ms,
+                                           expiry_unix_ts_ms                 = unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                           platform_refund_expiry_unix_ts_ms = 0,
+                                           platform_obfuscated_account_id    = backend.google_obfuscated_account_id_from_master_pkey(master_key.verify_key),
+                                           err                               = err)
+
+            new_add_pro_payment_tx.provider             = new_payment_tx.provider
+            new_add_pro_payment_tx.google_payment_token = new_payment_tx.google_payment_token
+            new_add_pro_payment_tx.google_order_id      = new_payment_tx.google_order_id
+            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version=version,
+                                                                            master_pkey=master_key.verify_key,
+                                                                            rotating_pkey=rotating_key.verify_key,
+                                                                            payment_tx=new_add_pro_payment_tx)
+
+            request_body = {
+                'version':              version,
+                'master_pkey':          bytes(master_key.verify_key).hex(),
+                'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+                'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                'payment_tx': {
+                    'provider':             new_add_pro_payment_tx.provider.value,
+                    'google_payment_token': new_add_pro_payment_tx.google_payment_token,
+                    'google_order_id':      new_add_pro_payment_tx.google_order_id,
+                }
+            }
+
+            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_ADD_PRO_PAYMENT,
+                                                      request_body=request_body)
+
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+            # Parse status from response
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
+
+            # Extract the fields
+            result_version:            int = base.json_dict_require_int(d=result_json, key='version',          err=err)
+            result_gen_index_hash_hex: str = base.json_dict_require_str(d=result_json, key='gen_index_hash',   err=err)
+            result_rotating_pkey_hex:  str = base.json_dict_require_str(d=result_json, key='rotating_pkey',    err=err)
+            result_expiry_unix_ts_ms:  int = base.json_dict_require_int(d=result_json, key='expiry_unix_ts_ms', err=err)
+            result_sig_hex:            str = base.json_dict_require_str(d=result_json, key='sig',              err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Parse hex fields to bytes
+            result_rotating_pkey         = nacl.signing.VerifyKey(base.hex_to_bytes(hex=result_rotating_pkey_hex,  label='Rotating public key',   hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err))
+            result_sig:            bytes =                        base.hex_to_bytes(hex=result_sig_hex,            label='Signature',             hex_len=nacl.bindings.crypto_sign_BYTES * 2,          err=err)
+            result_gen_index_hash: bytes =                        base.hex_to_bytes(hex=result_gen_index_hash_hex, label='Generation index hash', hex_len=backend.BLAKE2B_DIGEST_SIZE * 2,              err=err)
+            assert len(err.msg_list) == 0, '{err.msg_list}'
+
+            # Check the rotating key returned matches what we asked the server to sign
+            assert result_rotating_pkey == rotating_key.verify_key
+
+            # Check that the server signed our proof w/ their public key
+            proof_hash: bytes = backend.build_proof_hash(result_version,
+                                                         result_gen_index_hash,
+                                                         result_rotating_pkey,
+                                                         result_expiry_unix_ts_ms)
+            _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
+
+        curr_revocation_ticket: int = 0
+        if 1: # Get the revocation list
+            request_body={'version': 0, 'ticket':  curr_revocation_ticket}
+            onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                      shared_key      = shared_key,
+                                                      endpoint        = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                      request_body    = request_body)
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -875,118 +817,87 @@ def test_server_add_payment_flow(monkeypatch):
             result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_version == 0
-            assert result_ticket  == 1
+            assert result_ticket  == 0
             curr_revocation_ticket = result_ticket
-            assert len(result_items) == 1
 
-            # Check user entitlement updated after revoke. We should prefer the unrevoked payment
-            # as we have 2 payments for the user simultaneously where the latter was revoked but
-            # the original was not.
+            # Check that the server returned an empty revocation list, we no longer revoke the old
+            # payment but we _do_ increment the user's generation index
+            assert len(result_items) == 0
+
+            # Grab the generation index, and then calculate the expected generation index hash
+            gen_index = 0
             with db.transaction(setup_db.conn) as tx:
-                get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+                get_user = backend.get_user_and_payments(tx, master_key.verify_key)
+                assert get_user.user.gen_index == 1
+                gen_index = get_user.user.gen_index
 
-            for it in result_items:
-                it: dict[str, int | str]
-                assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
-                assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
-                assert it['gen_index_hash']    == post_revoke_gen_index_hash.hex()
-                assert it['expiry_unix_ts_ms'] == get_user.user.expiry_unix_ts_ms
+            post_revoke_gen_index_hash: bytes = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
 
-        assert not err.has()
+            # We will now manually revoke the user and check the revocation list again
+            with db.transaction(setup_db.conn) as tx:
+                revoked = backend.add_google_revocation_tx(tx                   = tx,
+                                                           google_payment_token = new_add_pro_payment_tx.google_payment_token,
+                                                           revoke_unix_ts_ms    = unix_ts_ms,
+                                                           err                  = err)
+                assert revoked
+                assert not err.has()
 
-    # Try grabbing the revocation again with the current ticket (we should get
-    # an empty list because we passed in the most up to date ticket)
-    if 1:
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
-                                                  request_body={'version': 0, 'ticket':  curr_revocation_ticket})
+            if 1: # Get the revocation list, again
+                request_body={'version': 0, 'ticket':  curr_revocation_ticket}
+                onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                          shared_key   = shared_key,
+                                                          endpoint     = server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                          request_body = request_body)
 
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
+                # POST and get response
+                response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+                onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+                assert onion_response.success
 
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+                # Parse the JSON from the response
+                response_json = json.loads(onion_response.body)
+                assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+                # Parse status from response
+                assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+                assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
+                # Parse result object is at root
+                assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+                result_json = response_json['result']
 
-        # Extract the fields
-        result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
-        result_items = base.json_dict_require_array(d=result_json, key='items', err=err)
-        result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
-        assert len(err.msg_list) == 0, '{err.msg_list}'
-        assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert result_ticket  == 1, f'Response was: {json.dumps(response_json, indent=2)}'
+                # Extract the fields
+                result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
+                result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
+                result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+                assert len(err.msg_list) == 0, '{err.msg_list}'
+                assert result_version == 0
+                assert result_ticket  == 1
+                curr_revocation_ticket = result_ticket
+                assert len(result_items) == 1
 
-        # List should be empty because we passed in the newest revocation
-        # ticket. There are no changes to the revocation list so the backend
-        # will return an empty list
-        assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+                # Check user entitlement updated after revoke. We should prefer the unrevoked payment
+                # as we have 2 payments for the user simultaneously where the latter was revoked but
+                # the original was not.
+                with db.transaction(setup_db.conn) as tx:
+                    get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
 
-    # Get the pro status now w/ a bunch of payments
-    if 1:
-        version:      int   = 0
-        unix_ts_ms:   int   = int(time.time() * 1000)
-        count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                for it in result_items:
+                    it: dict[str, int | str]
+                    assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
+                    assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
+                    assert it['gen_index_hash']    == post_revoke_gen_index_hash.hex()
+                    assert it['expiry_unix_ts_ms'] == get_user.user.expiry_unix_ts_ms
 
-        request_body={'version':     version,
-                      'master_pkey': bytes(master_key.verify_key).hex(),
-                      'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                      'unix_ts_ms':  unix_ts_ms,
-                      'count':       count}
+            assert not err.has()
 
-        onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                  shared_key=shared_key,
-                                                  endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
-                                                  request_body=request_body)
-
-        # POST and get response
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
-
-        # Parse the JSON from the response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-        # Parse status from response
-        assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Parse result object is at root
-        assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        result_json = response_json['result']
-
-        # Extract the fields
-        result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
-        result_items = base.json_dict_require_array(d=result_json, key='items',  err=err)
-        result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
-        assert len(err.msg_list) == 0,                                 '{err.msg_list}'
-        assert result_status     == server.UserProStatus.Active.value, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert len(result_items) == 2,                                 f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Retry the request but use a too old timestamp
+        # Try grabbing the revocation again with the current ticket (we should get
+        # an empty list because we passed in the most up to date ticket)
         if 1:
-            unix_ts_ms:   int   = int((time.time() * 1000) + (server.DEFAULT_TIMESTAMP_TOLERANCE_MS * 2))
-            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                       shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
-                                                      request_body={'version':     version,
-                                                                    'master_pkey': bytes(master_key.verify_key).hex(),
-                                                                    'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':  unix_ts_ms,
-                                                                    'count':       count})
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_REVOCATIONS,
+                                                      request_body={'version': 0, 'ticket':  curr_revocation_ticket})
 
             # POST and get response
             response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
@@ -998,294 +909,380 @@ def test_server_add_payment_flow(monkeypatch):
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse status from response
-            assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # Retry the request but create a hash with the rotating key
-        if 1:
-            unix_ts_ms:    int   = int(time.time() * 1000)
-            count:         int   = 10_000
-            hash_to_sign:  bytes = server.make_get_pro_details_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
-            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                      shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
-                                                      request_body={'version':     version,
-                                                                    'master_pkey': bytes(master_key.verify_key).hex(),
-                                                                    'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':  unix_ts_ms,
-                                                                    'count':       count})
-
-            # POST and get response
-            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-            assert onion_response.success
-
-            # Parse the JSON from the response
-            response_json = json.loads(onion_response.body)
-            assert isinstance(response_json, dict), f'Response {onion_response.body}'
-
-            # Parse status from response
-            assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-
-        # Retry the request but with no history
-        if 1:
-            unix_ts_ms:   int   = int(time.time() * 1000)
-            count:        int   = 0
-            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
-            onion_request       = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
-                                                      shared_key=shared_key,
-                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
-                                                      request_body={'version':     version,
-                                                                    'master_pkey': bytes(master_key.verify_key).hex(),
-                                                                    'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-                                                                    'unix_ts_ms':  unix_ts_ms,
-                                                                    'count':       count})
-
-            # POST and get response
-            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-            assert onion_response.success
-
-            # Parse the JSON from the response
-            response_json = json.loads(onion_response.body)
-            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
             result_json = response_json['result']
 
-            # Parse status from response
-            result_items= base.json_dict_require_array(d=result_json, key='items',  err=err)
+            # Extract the fields
+            result_version: int                        = base.json_dict_require_int(d=result_json, key='version', err=err)
+            result_items = base.json_dict_require_array(d=result_json, key='items', err=err)
+            result_ticket:  int                        = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
+            assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert result_ticket  == 1, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # List should be empty because we passed in the newest revocation
+            # ticket. There are no changes to the revocation list so the backend
+            # will return an empty list
             assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
 
-    # NOTE: Add a grace period to the payment and check that we can still generate proofs in said
-    # grace period
-    if 1:
-        # NOTE: Verify that there is no grace period set first
-        with db.transaction(setup_db.conn) as tx:
-            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.user.grace_period_duration_ms == 0
+        # Get the pro status now w/ a bunch of payments
+        if 1:
+            version:      int   = 0
+            unix_ts_ms:   int   = int(time.time() * 1000)
+            count:        int   = 10_000
+            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
 
-        # NOTE: Grab the latest expiring payment so that we have access to the payment details
-        last_payment = backend.PaymentRow()
-        for payment_it in backend.get_payments_list(setup_db.conn):
-            if payment_it.expiry_unix_ts_ms > last_payment.expiry_unix_ts_ms:
-                last_payment = payment_it
+            request_body={'version':     version,
+                          'master_pkey': bytes(master_key.verify_key).hex(),
+                          'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                          'unix_ts_ms':  unix_ts_ms,
+                          'count':       count}
 
-        # NOTE: Add a grace period
-        payment_tx                            = base.PaymentProviderTransaction()
-        payment_tx.provider                   = last_payment.payment_provider
-        payment_tx.apple_original_tx_id       = last_payment.apple.original_tx_id
-        payment_tx.apple_tx_id                = last_payment.apple.tx_id
-        payment_tx.apple_web_line_order_tx_id = last_payment.apple.web_line_order_tx_id
-        payment_tx.google_payment_token       = last_payment.google_payment_token
-        payment_tx.google_order_id            = last_payment.google_order_id
-        _ = backend.update_payment_renewal_info(setup_db.conn,
-                                                payment_tx,
-                                                grace_period_duration_ms=10 * 1000,
-                                                auto_renewing=True,
-                                                err=err)
-        assert not err.has()
+            onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                      shared_key=shared_key,
+                                                      endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
+                                                      request_body=request_body)
 
-        # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
-        pro_proof_deadline_unix_ts_ms: int = 0
-        with db.transaction(setup_db.conn) as tx:
-            get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
-            assert get_user.user.grace_period_duration_ms > 0
-            pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
+            # POST and get response
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
 
-        # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
-        request_version: int   = 0
-        unix_ts_ms:      int   = pro_proof_deadline_unix_ts_ms
-        hash_to_sign:    bytes = backend.make_generate_pro_proof_hash(version       = request_version,
-                                                                 master_pkey   = master_key.verify_key,
-                                                                 rotating_pkey = rotating_key.verify_key,
-                                                                 unix_ts_ms    = unix_ts_ms)
+            # Parse the JSON from the response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
-        runtime = backend.get_runtime(setup_db.conn)
-        proof: backend.ProSubscriptionProof = backend.generate_pro_proof(conn           = setup_db.conn,
-                                                                         version        = request_version,
-                                                                         signing_key    = runtime.backend_key,
-                                                                         gen_index_salt = runtime.gen_index_salt,
-                                                                         master_pkey    = master_key.verify_key,
-                                                                         rotating_pkey  = rotating_key.verify_key,
-                                                                         unix_ts_ms     = unix_ts_ms,
-                                                                         master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                                                         rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                                                         err            = err)
-        assert not err.has(), base.readable_unix_ts_ms(pro_proof_deadline_unix_ts_ms)
+            # Parse status from response
+            assert response_json['status'] == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # NOTE: Check that the proof is invalid
-        proof_hash = backend.build_proof_hash(proof.version,
-                                              proof.gen_index_hash,
-                                              proof.rotating_pkey,
-                                              proof.expiry_unix_ts_ms)
-        _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+            # Parse result object is at root
+            assert 'result' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            result_json = response_json['result']
 
+            # Extract the fields
+            result_version: int                        = base.json_dict_require_int(d=result_json, key='version',  err=err)
+            result_items = base.json_dict_require_array(d=result_json, key='items',  err=err)
+            result_status:  int                        = base.json_dict_require_int(d=result_json, key='status',  err=err)
+            assert len(err.msg_list) == 0,                                 '{err.msg_list}'
+            assert result_status     == server.UserProStatus.Active.value, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert len(result_items) == 2,                                 f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # NOTE: Try to generate a proof after the deadline (should fail)
-        unix_ts_ms: int = pro_proof_deadline_unix_ts_ms + 1
-        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = request_version,
-                                                              master_pkey   = master_key.verify_key,
-                                                              rotating_pkey = rotating_key.verify_key,
-                                                              unix_ts_ms    = unix_ts_ms)
+            # Retry the request but use a too old timestamp
+            if 1:
+                unix_ts_ms:   int   = int((time.time() * 1000) + (server.DEFAULT_TIMESTAMP_TOLERANCE_MS * 2))
+                hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                          shared_key=shared_key,
+                                                          endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
+                                                          request_body={'version':     version,
+                                                                        'master_pkey': bytes(master_key.verify_key).hex(),
+                                                                        'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                                                                        'unix_ts_ms':  unix_ts_ms,
+                                                                        'count':       count})
 
-        runtime = backend.get_runtime(setup_db.conn)
-        proof = backend.generate_pro_proof(conn           = setup_db.conn,
-                                           version        = request_version,
-                                           signing_key    = runtime.backend_key,
-                                           gen_index_salt = runtime.gen_index_salt,
-                                           master_pkey    = master_key.verify_key,
-                                           rotating_pkey  = rotating_key.verify_key,
-                                           unix_ts_ms     = unix_ts_ms,
-                                           master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                           rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                           err            = err)
+                # POST and get response
+                response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+                onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+                assert onion_response.success
 
-        proof_hash = backend.build_proof_hash(proof.version,
-                                              proof.gen_index_hash,
-                                              proof.rotating_pkey,
-                                              proof.expiry_unix_ts_ms)
+                # Parse the JSON from the response
+                response_json = json.loads(onion_response.body)
+                assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
-        failed: bool = False
-        try:
+                # Parse status from response
+                assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
+                assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
+                assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Retry the request but create a hash with the rotating key
+            if 1:
+                unix_ts_ms:    int   = int(time.time() * 1000)
+                count:         int   = 10_000
+                hash_to_sign:  bytes = server.make_get_pro_details_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                          shared_key=shared_key,
+                                                          endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
+                                                          request_body={'version':     version,
+                                                                        'master_pkey': bytes(master_key.verify_key).hex(),
+                                                                        'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                                                                        'unix_ts_ms':  unix_ts_ms,
+                                                                        'count':       count})
+
+                # POST and get response
+                response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+                onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+                assert onion_response.success
+
+                # Parse the JSON from the response
+                response_json = json.loads(onion_response.body)
+                assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+                # Parse status from response
+                assert response_json['status'] == server.RESPONSE_PARSE_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
+                assert len(response_json['errors']) > 0, f'Response was: {json.dumps(response_json, indent=2)}'
+                assert 'result' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+
+            # Retry the request but with no history
+            if 1:
+                unix_ts_ms:   int   = int(time.time() * 1000)
+                count:        int   = 0
+                hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                onion_request       = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
+                                                          shared_key=shared_key,
+                                                          endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
+                                                          request_body={'version':     version,
+                                                                        'master_pkey': bytes(master_key.verify_key).hex(),
+                                                                        'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                                                                        'unix_ts_ms':  unix_ts_ms,
+                                                                        'count':       count})
+
+                # POST and get response
+                response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+                onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+                assert onion_response.success
+
+                # Parse the JSON from the response
+                response_json = json.loads(onion_response.body)
+                assert isinstance(response_json, dict), f'Response {onion_response.body}'
+                result_json = response_json['result']
+
+                # Parse status from response
+                result_items= base.json_dict_require_array(d=result_json, key='items',  err=err)
+                assert len(err.msg_list) == 0, '{err.msg_list}'
+                assert len(result_items) == 0, f'Response was: {json.dumps(response_json, indent=2)}'
+
+        # NOTE: Add a grace period to the payment and check that we can still generate proofs in said
+        # grace period
+        if 1:
+            # NOTE: Verify that there is no grace period set first
+            with db.transaction(setup_db.conn) as tx:
+                get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+                assert get_user.user.grace_period_duration_ms == 0
+
+            # NOTE: Grab the latest expiring payment so that we have access to the payment details
+            last_payment = backend.PaymentRow()
+            for payment_it in backend.get_payments_list(setup_db.conn):
+                if payment_it.expiry_unix_ts_ms > last_payment.expiry_unix_ts_ms:
+                    last_payment = payment_it
+
+            # NOTE: Add a grace period
+            payment_tx                            = base.PaymentProviderTransaction()
+            payment_tx.provider                   = last_payment.payment_provider
+            payment_tx.apple_original_tx_id       = last_payment.apple.original_tx_id
+            payment_tx.apple_tx_id                = last_payment.apple.tx_id
+            payment_tx.apple_web_line_order_tx_id = last_payment.apple.web_line_order_tx_id
+            payment_tx.google_payment_token       = last_payment.google_payment_token
+            payment_tx.google_order_id            = last_payment.google_order_id
+            _ = backend.update_payment_renewal_info(setup_db.conn,
+                                                    payment_tx,
+                                                    grace_period_duration_ms=10 * 1000,
+                                                    auto_renewing=True,
+                                                    err=err)
+            assert not err.has()
+
+            # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
+            pro_proof_deadline_unix_ts_ms: int = 0
+            with db.transaction(setup_db.conn) as tx:
+                get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
+                assert get_user.user.grace_period_duration_ms > 0
+                pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
+
+            # NOTE: Try to generate a proof on the deadline timestamp (which includes grace), should be permitted
+            request_version: int   = 0
+            unix_ts_ms:      int   = pro_proof_deadline_unix_ts_ms
+            hash_to_sign:    bytes = backend.make_generate_pro_proof_hash(version       = request_version,
+                                                                     master_pkey   = master_key.verify_key,
+                                                                     rotating_pkey = rotating_key.verify_key,
+                                                                     unix_ts_ms    = unix_ts_ms)
+
+            runtime = backend.get_runtime(setup_db.conn)
+            proof: backend.ProSubscriptionProof = backend.generate_pro_proof(conn           = setup_db.conn,
+                                                                             version        = request_version,
+                                                                             signing_key    = runtime.backend_key,
+                                                                             gen_index_salt = runtime.gen_index_salt,
+                                                                             master_pkey    = master_key.verify_key,
+                                                                             rotating_pkey  = rotating_key.verify_key,
+                                                                             unix_ts_ms     = unix_ts_ms,
+                                                                             master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                                                             rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                                                             err            = err)
+            assert not err.has(), base.readable_unix_ts_ms(pro_proof_deadline_unix_ts_ms)
+
+            # NOTE: Check that the proof is invalid
+            proof_hash = backend.build_proof_hash(proof.version,
+                                                  proof.gen_index_hash,
+                                                  proof.rotating_pkey,
+                                                  proof.expiry_unix_ts_ms)
             _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
-        except:
-            failed = True
-        assert err.has() and failed
-        err.msg_list.clear()
 
-    if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
-        with db.transaction(setup_db.conn) as tx:
-            revoked = backend.add_google_revocation_tx(tx                   = tx,
-                                                       google_payment_token = payment_tx.google_payment_token,
-                                                       revoke_unix_ts_ms    = start_unix_ts_ms,
-                                                       err                  = err)
-        assert revoked
-        assert not err.has()
 
-        # Try requesting a proof normally which should now fail as everything has been revoked
-        generate_pro_proof_hash_version = 0
-        hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = generate_pro_proof_hash_version,
-                                                                   master_pkey   = master_key.verify_key,
-                                                                   rotating_pkey = rotating_key.verify_key,
-                                                                   unix_ts_ms    = start_unix_ts_ms)
+            # NOTE: Try to generate a proof after the deadline (should fail)
+            unix_ts_ms: int = pro_proof_deadline_unix_ts_ms + 1
+            hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = request_version,
+                                                                  master_pkey   = master_key.verify_key,
+                                                                  rotating_pkey = rotating_key.verify_key,
+                                                                  unix_ts_ms    = unix_ts_ms)
 
-        request_body = {
-            'version':       generate_pro_proof_hash_version,
-            'master_pkey':   bytes(master_key.verify_key).hex(),
-            'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-            'unix_ts_ms':    start_unix_ts_ms,
-            'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'rotating_sig':  bytes(rotating_key.sign(hash_to_sign).signature).hex(),
-        }
+            runtime = backend.get_runtime(setup_db.conn)
+            proof = backend.generate_pro_proof(conn           = setup_db.conn,
+                                               version        = request_version,
+                                               signing_key    = runtime.backend_key,
+                                               gen_index_salt = runtime.gen_index_salt,
+                                               master_pkey    = master_key.verify_key,
+                                               rotating_pkey  = rotating_key.verify_key,
+                                               unix_ts_ms     = unix_ts_ms,
+                                               master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                               rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                               err            = err)
 
-        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
-                                                  shared_key      = shared_key,
-                                                  endpoint        = server.FLASK_ROUTE_GENERATE_PRO_PROOF,
-                                                  request_body    = request_body)
+            proof_hash = backend.build_proof_hash(proof.version,
+                                                  proof.gen_index_hash,
+                                                  proof.rotating_pkey,
+                                                  proof.expiry_unix_ts_ms)
 
-        # POST and get response for pro proof
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
+            failed: bool = False
+            try:
+                _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=proof.sig)
+            except:
+                failed = True
+            assert err.has() and failed
+            err.msg_list.clear()
 
-        # Parse the JSON from the pro proof response
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+        if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
+            with db.transaction(setup_db.conn) as tx:
+                revoked = backend.add_google_revocation_tx(tx                   = tx,
+                                                           google_payment_token = payment_tx.google_payment_token,
+                                                           revoke_unix_ts_ms    = start_unix_ts_ms,
+                                                           err                  = err)
+            assert revoked
+            assert not err.has()
 
-        # Parse status from the pro proof response
-        assert response_json['status'] == server.RESPONSE_GENERIC_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            # Try requesting a proof normally which should now fail as everything has been revoked
+            generate_pro_proof_hash_version = 0
+            hash_to_sign: bytes = backend.make_generate_pro_proof_hash(version       = generate_pro_proof_hash_version,
+                                                                       master_pkey   = master_key.verify_key,
+                                                                       rotating_pkey = rotating_key.verify_key,
+                                                                       unix_ts_ms    = start_unix_ts_ms)
 
-    if 1: # Initiate a "refund" request on the payment
-        set_refund_requested_version = 0
-        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
-                                                                            master_pkey                 = master_key.verify_key,
-                                                                            unix_ts_ms                  = start_unix_ts_ms,
-                                                                            refund_requested_unix_ts_ms = start_unix_ts_ms,
-                                                                            payment_tx                  = new_add_pro_payment_tx)
+            request_body = {
+                'version':       generate_pro_proof_hash_version,
+                'master_pkey':   bytes(master_key.verify_key).hex(),
+                'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+                'unix_ts_ms':    start_unix_ts_ms,
+                'master_sig':    bytes(master_key.sign(hash_to_sign).signature).hex(),
+                'rotating_sig':  bytes(rotating_key.sign(hash_to_sign).signature).hex(),
+            }
 
-        request_body = {
-            'version':                     set_refund_requested_version,
-            'master_pkey':                 bytes(master_key.verify_key).hex(),
-            'master_sig':                  bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'unix_ts_ms':                  start_unix_ts_ms,
-            'refund_requested_unix_ts_ms': start_unix_ts_ms,
-            'payment_tx': {
-                'provider':             new_add_pro_payment_tx.provider.value,
-                'google_payment_token': new_add_pro_payment_tx.google_payment_token,
-                'google_order_id':      new_add_pro_payment_tx.google_order_id,
-            },
-        }
+            onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                      shared_key      = shared_key,
+                                                      endpoint        = server.FLASK_ROUTE_GENERATE_PRO_PROOF,
+                                                      request_body    = request_body)
 
-        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
-                                                  shared_key      = shared_key,
-                                                  endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
-                                                  request_body    = request_body)
+            # POST and get response for pro proof
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
 
-        # POST and get response for refund request
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
+            # Parse the JSON from the pro proof response
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
-        # Parse the JSON refund request
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+            # Parse status from the pro proof response
+            assert response_json['status'] == server.RESPONSE_GENERIC_ERROR, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # Parse fields in the JSON
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['result']['updated'] == True,                    f'Response was: {json.dumps(response_json, indent=2)}'
+        if 1: # Initiate a "refund" request on the payment
+            set_refund_requested_version = 0
+            hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                                master_pkey                 = master_key.verify_key,
+                                                                                unix_ts_ms                  = start_unix_ts_ms,
+                                                                                refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                                payment_tx                  = new_add_pro_payment_tx)
 
-    if 1: # Initiate a "refund" on a non-existing payment
-        set_refund_requested_version = 0
+            request_body = {
+                'version':                     set_refund_requested_version,
+                'master_pkey':                 bytes(master_key.verify_key).hex(),
+                'master_sig':                  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                'unix_ts_ms':                  start_unix_ts_ms,
+                'refund_requested_unix_ts_ms': start_unix_ts_ms,
+                'payment_tx': {
+                    'provider':             new_add_pro_payment_tx.provider.value,
+                    'google_payment_token': new_add_pro_payment_tx.google_payment_token,
+                    'google_order_id':      new_add_pro_payment_tx.google_order_id,
+                },
+            }
 
-        fake_payment                      = backend.UserPaymentTransaction()
-        fake_payment.provider             = base.PaymentProvider.GooglePlayStore
-        fake_payment.google_payment_token = 'non-existent-payment-token-to-trigger-fail-response'
-        fake_payment.google_order_id      = 'non-existent-order-id-to-trigger-fail-response'
+            onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                      shared_key      = shared_key,
+                                                      endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
+                                                      request_body    = request_body)
 
-        hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
-                                                                            master_pkey                 = master_key.verify_key,
-                                                                            unix_ts_ms                  = start_unix_ts_ms,
-                                                                            refund_requested_unix_ts_ms = start_unix_ts_ms,
-                                                                            payment_tx                  = fake_payment)
+            # POST and get response for refund request
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
 
-        request_body = {
-            'version':     set_refund_requested_version,
-            'master_pkey': bytes(master_key.verify_key).hex(),
-            'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
-            'payment_tx': {
-                'provider':             fake_payment.provider.value,
-                'google_payment_token': fake_payment.google_payment_token,
-                'google_order_id':      fake_payment.google_order_id,
-            },
-            'unix_ts_ms':                  start_unix_ts_ms,
-            'refund_requested_unix_ts_ms': start_unix_ts_ms,
-        }
+            # Parse the JSON refund request
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
-        onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
-                                                  shared_key      = shared_key,
-                                                  endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
-                                                  request_body    = request_body)
+            # Parse fields in the JSON
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['result']['updated'] == True,                    f'Response was: {json.dumps(response_json, indent=2)}'
 
-        # POST and get response for refund request
-        response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
-        onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
-        assert onion_response.success
+        if 1: # Initiate a "refund" on a non-existing payment
+            set_refund_requested_version = 0
 
-        # Parse the JSON refund request
-        response_json = json.loads(onion_response.body)
-        assert isinstance(response_json, dict), f'Response {onion_response.body}'
+            fake_payment                      = backend.UserPaymentTransaction()
+            fake_payment.provider             = base.PaymentProvider.GooglePlayStore
+            fake_payment.google_payment_token = 'non-existent-payment-token-to-trigger-fail-response'
+            fake_payment.google_order_id      = 'non-existent-order-id-to-trigger-fail-response'
 
-        # Parse fields in the JSON, we expect it to fail
-        assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
-        assert response_json['result']['updated'] == False,                   f'Response was: {json.dumps(response_json, indent=2)}'
+            hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                                master_pkey                 = master_key.verify_key,
+                                                                                unix_ts_ms                  = start_unix_ts_ms,
+                                                                                refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                                payment_tx                  = fake_payment)
+
+            request_body = {
+                'version':     set_refund_requested_version,
+                'master_pkey': bytes(master_key.verify_key).hex(),
+                'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
+                'payment_tx': {
+                    'provider':             fake_payment.provider.value,
+                    'google_payment_token': fake_payment.google_payment_token,
+                    'google_order_id':      fake_payment.google_order_id,
+                },
+                'unix_ts_ms':                  start_unix_ts_ms,
+                'refund_requested_unix_ts_ms': start_unix_ts_ms,
+            }
+
+            onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                                      shared_key      = shared_key,
+                                                      endpoint        = server.FLASK_ROUTE_SET_PAYMENT_REFUND_REQUESTED,
+                                                      request_body    = request_body)
+
+            # POST and get response for refund request
+            response:       werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+            onion_response: onion_req.Response         = onion_req.make_response_v4(shared_key=shared_key, encrypted_response=response.data)
+            assert onion_response.success
+
+            # Parse the JSON refund request
+            response_json = json.loads(onion_response.body)
+            assert isinstance(response_json, dict), f'Response {onion_response.body}'
+
+            # Parse fields in the JSON, we expect it to fail
+            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
+            assert response_json['result']['updated'] == False,                   f'Response was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
