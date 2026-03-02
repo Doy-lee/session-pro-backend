@@ -208,7 +208,7 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     for it in webhook_loggers:
                         it.emit_text(msg)
 
-            # NOTE: Do a backup of the DB (SQLite only)
+            # NOTE: Do a backup of the DB (SQLite only) and generate reports
             if db_path.startswith('sqlite://') and not db_path.startswith('sqlite://:'):
                 backup_db_path: str = base.backup_file_path(pathlib.Path(db_path.replace('sqlite:///', '')), next_day_date)
                 with backend.OpenDBAtPath(db_path) as src:
@@ -229,27 +229,27 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     finally:
                         dest_sql_conn.close()
 
-            # NOTE: Generate the reports
-            if len(webhook_loggers):
-                daily_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Daily, 7)
-                daily_report_str   = backend.generate_report_str(backend.ReportPeriod.Daily, daily_report, backend.ReportType.Human)
-                weekly_report_str  = ''
-                monthly_report_str = ''
-                if next_day_date.weekday() == 0:
-                    weekly_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Weekly, 4)
-                    weekly_report_str = backend.generate_report_str(backend.ReportPeriod.Weekly, weekly_report, backend.ReportType.Human)
+                    # NOTE: Generate the reports
+                    if len(webhook_loggers):
+                        daily_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Daily, 7)
+                        daily_report_str   = backend.generate_report_str(backend.ReportPeriod.Daily, daily_report, backend.ReportType.Human)
+                        weekly_report_str  = ''
+                        monthly_report_str = ''
+                        if next_day_date.weekday() == 0:
+                            weekly_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Weekly, 4)
+                            weekly_report_str = backend.generate_report_str(backend.ReportPeriod.Weekly, weekly_report, backend.ReportType.Human)
 
-                if next_day_date.day == 1:
-                    monthly_report: list[backend.ReportRow] = backend.generate_report_rows(db_path, backend.ReportPeriod.Monthly, 3)
-                    monthly_report_str = backend.generate_report_str(backend.ReportPeriod.Monthly, monthly_report, backend.ReportType.Human)
+                        if next_day_date.day == 1:
+                            monthly_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Monthly, 3)
+                            monthly_report_str = backend.generate_report_str(backend.ReportPeriod.Monthly, monthly_report, backend.ReportType.Human)
 
-                for it in webhook_loggers:
-                    if len(daily_report_str):
-                        it.emit_text(daily_report_str)
-                    if len(weekly_report_str):
-                        it.emit_text(weekly_report_str)
-                    if len(monthly_report_str):
-                        it.emit_text(monthly_report_str)
+                        for it in webhook_loggers:
+                            if len(daily_report_str):
+                                it.emit_text(daily_report_str)
+                            if len(weekly_report_str):
+                                it.emit_text(weekly_report_str)
+                            if len(monthly_report_str):
+                                it.emit_text(monthly_report_str)
 
 def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
@@ -649,7 +649,8 @@ def entry_point() -> flask.Flask:
     # NOTE: Generate a report if requested
     if parsed_args.parsed_generate_report_args:
         generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
-        report_rows:          list[backend.ReportRow] = backend.generate_report_rows(parsed_args.db_path, generate_report_args.period, limit=generate_report_args.count)
+        with backend.OpenDBAtPath(parsed_args.db_path) as report_db:
+            report_rows: list[backend.ReportRow] = backend.generate_report_rows(report_db.conn, generate_report_args.period, limit=generate_report_args.count)
         print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
         sys.exit(1)
 

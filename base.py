@@ -15,7 +15,6 @@ import pathlib
 import sys
 import threading
 import time
-import traceback
 import typing
 import typing_extensions
 import urllib.request

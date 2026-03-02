@@ -545,7 +545,6 @@ API
       }
 '''
 
-import collections.abc
 import dataclasses
 import enum
 import flask
@@ -557,6 +556,7 @@ import nacl.signing
 import time
 import typing
 import logging
+import db
 
 import base
 import backend
@@ -754,11 +754,11 @@ def add_pro_payment():
 
     # Submit the payment to the DB
     redeemed_payment    = backend.RedeemPayment()
-    db                  = open_db_from_flask_request_context(flask.current_app)
-    runtime             = backend.get_runtime(db.sql_conn)
+    open_db             = open_db_from_flask_request_context(flask.current_app)
+    runtime             = backend.get_runtime(open_db.conn)
     unix_ts_ms          = int(time_now() * 1000)
     redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
-    redeemed_payment = backend.add_pro_payment(sql_conn            = db.sql_conn,
+    redeemed_payment = backend.add_pro_payment(conn                = open_db.conn,
                                                version             = version,
                                                signing_key         = runtime.backend_key,
                                                unix_ts_ms          = unix_ts_ms,
@@ -823,18 +823,18 @@ def generate_pro_proof() -> flask.Response:
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Request proof from the backend
-    db = open_db_from_flask_request_context(flask.current_app)
-    runtime = backend.get_runtime(db.sql_conn)
-    proof = backend.generate_pro_proof(sql_conn       = db.sql_conn,
-                                       version        = version,
-                                       signing_key    = runtime.backend_key,
-                                       gen_index_salt = runtime.gen_index_salt,
-                                       master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
-                                       rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                       unix_ts_ms     = unix_ts_ms,
-                                       master_sig     = master_sig_bytes,
-                                       rotating_sig   = rotating_sig_bytes,
-                                       err            = err)
+    open_db = open_db_from_flask_request_context(flask.current_app)
+    runtime = backend.get_runtime(open_db.conn)
+    proof   = backend.generate_pro_proof(conn           = open_db.conn,
+                                         version        = version,
+                                         signing_key    = runtime.backend_key,
+                                         gen_index_salt = runtime.gen_index_salt,
+                                         master_pkey    = nacl.signing.VerifyKey(master_pkey_bytes),
+                                         rotating_pkey  = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                         unix_ts_ms     = unix_ts_ms,
+                                         master_sig     = master_sig_bytes,
+                                         rotating_sig   = rotating_sig_bytes,
+                                         err            = err)
 
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
@@ -865,13 +865,12 @@ def get_pro_revocations():
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
     begin             = time.perf_counter()
-    db                = open_db_from_flask_request_context(flask.current_app)
-    revocation_ticket = backend.get_revocation_ticket(db.sql_conn)
+    open_db           = open_db_from_flask_request_context(flask.current_app)
+    revocation_ticket = backend.get_revocation_ticket(open_db.conn)
     if ticket < revocation_ticket:
-        with db.SQLTransaction(db.sql_conn) as tx:
+        with db.transaction(open_db.conn) as tx:
             runtime = backend.get_runtime_tx(tx)
-            list_it: collections.abc.Iterator[tuple[int, int]] = backend.get_pro_revocations_iterator(tx)
-            for row in list_it:
+            for row in backend.get_pro_revocations_iterator_tx(tx):
                 gen_index:         int   = row[0]
                 expiry_unix_ts_ms: int   = row[1]
                 gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
@@ -948,8 +947,8 @@ def get_pro_details():
     # descriptive messaging
     error_report: int                                  = False
 
-    db = open_db_from_flask_request_context(flask.current_app)
-    with db.SQLTransaction(db.sql_conn) as tx:
+    open_db = open_db_from_flask_request_context(flask.current_app)
+    with db.transaction(open_db.conn) as tx:
         error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
         get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
         grace_period_duration_ms             = get_user.user.grace_period_duration_ms
@@ -1097,8 +1096,8 @@ def set_payment_refund_requested():
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     updated: bool = False
-    db = open_db_from_flask_request_context(flask.current_app)
-    updated = backend.set_refund_requested_unix_ts_ms(sql_conn   = db.sql_conn,
+    open_db = open_db_from_flask_request_context(flask.current_app)
+    updated = backend.set_refund_requested_unix_ts_ms(conn       = open_db.conn,
                                                       payment_tx = user_payment,
                                                       unix_ts_ms = refund_requested_unix_ts_ms)
 

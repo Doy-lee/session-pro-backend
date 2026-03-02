@@ -7,7 +7,7 @@ it and process said payments into the database layer (backend.py)
 import json
 import traceback
 import logging
-import sqlite3
+import sqlalchemy
 import threading
 import dataclasses
 import typing
@@ -153,7 +153,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
 
     # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
     with OpenDBAtPath(base.DB_PATH) as open_db:
-        with db.SQLTransaction(open_db.sql_conn) as tx:
+        with db.transaction(open_db.conn) as tx:
             db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
             for row in db_it:
                 message_id          = row[0]
@@ -245,7 +245,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             # inconsistencies.
                             def add_notification_id_to_db():
                                 with OpenDBAtPath(base.DB_PATH) as open_db:
-                                    with db.SQLTransaction(open_db.sql_conn) as tx:
+                                    with db.transaction(open_db.conn) as tx:
                                         if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
                                             # NOTE: Our message retention policy for this subscription is 7 days
                                             # (default). We add a little buffer as we don't know exactly which
@@ -300,7 +300,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                     # On any other error we raise the exception to the top-level handler
                                     # which will log it for us.
                                     lookup = backend.GoogleNotificationMessageIDInDB()
-                                    with db.SQLTransaction(open_db.sql_conn) as tx:
+                                    with db.transaction(open_db.conn) as tx:
                                         # NOTE: By definition to be in the sorted list, the message must
                                         # have also been submitted into the DB. So if for some reason the
                                         # notification doesn't exist anymore (maybe someone deleted it
@@ -380,8 +380,8 @@ def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransacti
     if not success:
         err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
 
-def validate_no_existing_purchase_token_error(purchase_token: str, sql_conn: sqlite3.Connection, err: base.ErrorSink):
-    result = backend.has_user_error(sql_conn=sql_conn, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=purchase_token)
+def validate_no_existing_purchase_token_error(purchase_token: str, conn: sqlalchemy.engine.Connection, err: base.ErrorSink):
+    result = backend.has_user_error(conn=conn, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=purchase_token)
     if result:
         err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
 

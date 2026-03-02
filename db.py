@@ -37,24 +37,20 @@ import sqlalchemy.event
 
 @dataclasses.dataclass
 class SQLTransaction:
-    """Transaction context with cancel support."""
-    conn: sqlalchemy.engine.Connection
+    conn:   sqlalchemy.engine.Connection
     cancel: bool = False
 
 @contextlib.contextmanager
 def transaction(conn: sqlalchemy.engine.Connection):
-    """Context manager for database transactions with cancel support."""
-    trans = conn.begin()
-    tx = SQLTransaction(conn=conn)
+    result = SQLTransaction(conn=conn)
     try:
-        yield tx
-        if tx.cancel:
-            trans.rollback()
-        else:
-            trans.commit()
-    except:
-        trans.rollback()
-        raise
+        with conn.begin() as tx:
+            yield result
+            if result.cancel: # SQLAlchemy will automatically rollback on exception
+                raise Exception("Cancel requested")
+    except Exception as e:
+        if str(e) != "Cancel requested":
+            raise
 
 def create_engine(database_url: str, **kwargs: Any) -> sqlalchemy.engine.Engine:
     parsed:    str  = database_url.split('://', 1)[0]

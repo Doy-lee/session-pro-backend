@@ -7,7 +7,7 @@ flows to receive, parse and process payment information into the database layer 
 import flask
 import json
 import typing
-import sqlite3
+import sqlalchemy
 import dataclasses
 import pprint
 import logging
@@ -903,9 +903,9 @@ def handle_notification_tx(decoded_notification: DecodedNotification, sql_tx: db
                                                expiry_unix_ts_ms = expiry_unix_ts_ms)
     return result
 
-def handle_notification(decoded_notification: DecodedNotification, sql_conn: sqlite3.Connection, notification_retry_duration_ms: int, err: base.ErrorSink) -> bool:
+def handle_notification(decoded_notification: DecodedNotification, conn: sqlalchemy.engine.Connection, notification_retry_duration_ms: int, err: base.ErrorSink) -> bool:
     result = False
-    with db.transaction(sql_conn) as tx:
+    with db.transaction(conn) as tx:
         result = handle_notification_tx(decoded_notification, tx, notification_retry_duration_ms, err)
     return result
 
@@ -976,7 +976,7 @@ def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: Ap
     except AppleAPIException as e:
         log.error(f'Failed to decode test notification: {e}')
 
-def catchup_on_missed_notifications(core: Core, sql_conn: sqlite3.Connection, end_unix_ts_ms: int):
+def catchup_on_missed_notifications(core: Core, sql_conn: sqlalchemy.engine.Connection, end_unix_ts_ms: int):
     # NOTE: Lock the DB and catch on up missed notifications
     with db.transaction(sql_conn) as tx:
         # NOTE: Do a catch-up check only if it's been 30mins since the last checkup. UWSGI spawns

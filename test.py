@@ -22,7 +22,7 @@ import werkzeug
 import dataclasses
 import typing
 import enum
-import sqlite3
+import sqlalchemy
 import traceback
 import datetime
 
@@ -35,6 +35,7 @@ import backend
 import base
 import server
 import platform_apple
+import db
 
 from appstoreserverlibrary.models.ResponseBodyV2DecodedPayload import ResponseBodyV2DecodedPayload as AppleResponseBodyV2DecodedPayload
 from appstoreserverlibrary.models.JWSTransactionDecodedPayload import JWSTransactionDecodedPayload as AppleJWSTransactionDecodedPayload
@@ -64,19 +65,17 @@ class TestingContext:
     """
 
     db:           backend.SetupDBResult
-    sql_conn:     sqlite3.Connection
+    db_conn:      sqlalchemy.engine.Connection
     flask_app:    flask.Flask
     flask_client: werkzeug.Client
 
     db_path:      str  = ''
-    uri:          bool = False
 
     platform_testing_env: bool = False
 
-    def __init__(self, db_path: str, uri: bool, platform_testing_env: bool = False):
-        self.db_path                           = db_path
-        self.uri                               = uri
-        self.platform_testing_env              = platform_testing_env
+    def __init__(self, db_path: str, platform_testing_env: bool = False):
+        self.db_path              = db_path
+        self.platform_testing_env = platform_testing_env
 
     def __enter__(self):
         base.PLATFORM_TESTING_ENV = self.platform_testing_env
@@ -85,15 +84,12 @@ class TestingContext:
         err     = base.ErrorSink()
         self.db = backend.setup_db(database_url=f'sqlite:///{self.db_path}', err=err)
         assert len(err.msg_list) == 0
-
-        runtime = backend.get_runtime(self.db.conn)
-        self.flask_app   = server.init(testing_mode=True,
-                                       db_path=self.db_path,
-                                       db_path_is_uri=self.uri,
-                                       server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
-        self.flask_client = self.flask_app.test_client()
         assert self.db.conn
-        self.conn = self.db.conn
+
+        runtime           = backend.get_runtime(self.db.conn)
+        self.flask_app    = server.init(testing_mode=True, db_path=self.db_path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
+        self.flask_client = self.flask_app.test_client()
+        self.db_conn      = self.db.conn
         return self
 
     def __exit__(self,
@@ -102,7 +98,7 @@ class TestingContext:
                  traceback: traceback.TracebackException | None):
         assert self.db.conn
         self.db.conn.close()
-        self.conn.close()
+        self.db_conn.close()
         base.PLATFORM_TESTING_ENV = False
         base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
         return False
@@ -154,10 +150,10 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     # payment tokens.
 
     # Setup DB
-    err                       = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(database_url='sqlite:///:memory:', err=err)
+    err                             = base.ErrorSink()
+    setup_db: backend.SetupDBResult = backend.setup_db(database_url="sqlite:///file:test_same_user?mode=memory&cache=shared&uri=true", err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert db.conn
+    assert setup_db.conn
 
     # Setup scenarios, single user who stacks a subscription
     backend_key:         nacl.signing.SigningKey = nacl.signing.SigningKey.generate()
@@ -200,7 +196,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
-        backend.add_unredeemed_payment(sql_conn                          = db.conn,
+        backend.add_unredeemed_payment(conn                              = setup_db.conn,
                                        payment_tx                        = payment_tx,
                                        plan                              = it.plan,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -210,7 +206,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                        err                               = err)
         assert len(err.msg_list) == 0
 
-        unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(db.conn)
+        unredeemed_payment_list: list[backend.PaymentRow] = backend.get_unredeemed_payments_list(setup_db.conn)
         assert len(unredeemed_payment_list)                       == 1
         assert unredeemed_payment_list[0].status                  == base.PaymentStatus.Unredeemed
         assert unredeemed_payment_list[0].payment_provider        == it.payment_provider
@@ -235,7 +231,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                                     payment_tx=add_pro_payment_tx)
 
         redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
-                                                                          sql_conn            = db.conn,
+                                                                          conn                = setup_db.conn,
                                                                           signing_key         = backend_key,
                                                                           unix_ts_ms          = unix_ts_ms,
                                                                           redeemed_unix_ts_ms = redeemed_unix_ts_ms,
@@ -248,13 +244,13 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         it.proof = redeemed_payment.proof
 
         # Verify payment was redeemed
-        unredeemed_payment_list = backend.get_unredeemed_payments_list(db.conn)
+        unredeemed_payment_list = backend.get_unredeemed_payments_list(setup_db.conn)
         assert len(unredeemed_payment_list) == 0
         assert redeemed_payment.status == backend.RedeemPaymentStatus.Success
 
         # Try claiming it again, this should fail because it has already been claimed
         redeemed_payment_2nd = backend.add_pro_payment(version             = version,
-                                                       sql_conn            = db.conn,
+                                                       conn                = setup_db.conn,
                                                        signing_key         = backend_key,
                                                        unix_ts_ms          = unix_ts_ms,
                                                        redeemed_unix_ts_ms = redeemed_unix_ts_ms,
@@ -270,16 +266,16 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         assert len(redeemed_payment_2nd.proof.gen_index_hash) == 0
         err.msg_list.clear()
 
-    runtime: backend.RuntimeRow                             = backend.get_runtime(db.conn)
+    runtime: backend.RuntimeRow                             = backend.get_runtime(setup_db.conn)
     assert runtime.gen_index                               == 2
 
-    user_list: list[backend.UserRow]                        = backend.get_users_list(db.conn)
+    user_list: list[backend.UserRow]                        = backend.get_users_list(setup_db.conn)
     assert len(user_list)                                  == 1
     assert user_list[0].master_pkey                        == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(user_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert user_list[0].gen_index                          == runtime.gen_index - 1
     assert user_list[0].expiry_unix_ts_ms                  == scenarios[1].expiry_unix_ts_ms
 
-    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.conn)
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(setup_db.conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].plan                            == scenarios[0].plan
@@ -307,10 +303,10 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert len(payment_list[0].apple.original_tx_id)       == 0
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
-    revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(db.conn)
+    revocation_list: list[backend.RevocationRow]            = backend.get_revocations_list(setup_db.conn)
     assert len(revocation_list)                            == 0
 
-    expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(db.conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
+    expire_result: backend.ExpireResult                     = backend.expire_payments_revocations_and_users(setup_db.conn, unix_ts_ms=scenarios[0].expiry_unix_ts_ms)
     assert expire_result.already_done_by_someone_else      == False
     assert expire_result.success                           == True
     assert expire_result.payments                          == 1
@@ -323,7 +319,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     payment_tx.google_payment_token                         = scenarios[1].google_payment_token
     payment_tx.google_order_id                              = scenarios[1].google_order_id
     new_grace_duration_ms                                   = 10000
-    updated: bool                                           = backend.update_payment_renewal_info(sql_conn                 = db.conn,
+    updated: bool                                           = backend.update_payment_renewal_info(conn                     = setup_db.conn,
                                                                                                   payment_tx               = payment_tx,
                                                                                                   grace_period_duration_ms = new_grace_duration_ms,
                                                                                                   auto_renewing            = False,
@@ -331,7 +327,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert not err.has() and updated
 
     # NOTE: Verify that the new grace was assigned to the user
-    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(db.conn)
+    payment_list: list[backend.PaymentRow]                  = backend.get_payments_list(setup_db.conn)
     assert len(payment_list)                               == 2
     assert payment_list[0].master_pkey                     == bytes(master_key.verify_key), 'lhs={}, rhs={}'.format(payment_list[0].master_pkey.hex(), bytes(master_key.verify_key).hex())
     assert payment_list[0].plan         == scenarios[0].plan
@@ -362,13 +358,13 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
     assert len(payment_list[0].apple.web_line_order_tx_id) == 0
 
     # NOTE: Get the user and payments and verify that the expiry and grace are correct
-    with db.SQLTransaction(db.conn) as tx:
-        get: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
+    with db.transaction(setup_db.conn) as tx:
+        get: backend.GetUserAndPayments           = backend.get_user_and_payments(tx=tx, master_pkey=master_key.verify_key)
         assert get.user.auto_renewing            == False
         assert get.user.grace_period_duration_ms == new_grace_duration_ms
 
     # NOTE: Verify the DB invariants
-    _ = backend.verify_db(db.conn, err)
+    _ = backend.verify_db(setup_db.conn, err)
     if len(err.msg_list) > 0:
         for it in err.msg_list:
             print(f"ERROR: {it}")
@@ -403,7 +399,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         payment_tx.provider             = it.payment_provider
         payment_tx.google_payment_token = it.google_payment_token
         payment_tx.google_order_id      = it.google_order_id
-        backend.add_unredeemed_payment(sql_conn                          = db.conn,
+        backend.add_unredeemed_payment(conn                              = setup_db.conn,
                                        payment_tx                        = payment_tx,
                                        plan                              = it.plan,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -417,7 +413,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         # redeemed
         assert len(auto_redeem_scenarios) == 2
         if index == 0:
-            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(db.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(setup_db.conn)
             assert len(unredeemed_payment_list)               == 1
 
             # Register the payment
@@ -432,7 +428,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                                         payment_tx    = add_pro_payment_tx)
 
             redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
-                                                                              sql_conn            = db.conn,
+                                                                              conn                = setup_db.conn,
                                                                               signing_key         = backend_key,
                                                                               unix_ts_ms          = unix_ts_ms,
                                                                               redeemed_unix_ts_ms = redeemed_unix_ts_ms,
@@ -447,20 +443,20 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
             assert redeemed_payment.status == backend.RedeemPaymentStatus.Success, redeemed_payment
 
             # Verify payment was redeemed
-            unredeemed_payment_list = backend.get_unredeemed_payments_list(db.conn)
+            unredeemed_payment_list = backend.get_unredeemed_payments_list(setup_db.conn)
             assert len(unredeemed_payment_list) == 0
 
-            payment_list = backend.get_payments_list(db.conn)
+            payment_list = backend.get_payments_list(setup_db.conn)
             assert len(payment_list) == 3
 
         # NOTE: This is the payment that was not claimed via add_pro_payment. If we check the
         # payments table there should be 4 payments (2 from the first test, 2 from this test). The 2
         # from this test should be set to redeemed.
         if index == 1:
-            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(db.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]  = backend.get_unredeemed_payments_list(setup_db.conn)
             assert len(unredeemed_payment_list)               == 0
 
-            payments_list: list[backend.PaymentRow]           = backend.get_payments_list(db.conn)
+            payments_list: list[backend.PaymentRow]           = backend.get_payments_list(setup_db.conn)
             assert len(payments_list)                        == 4
             assert payments_list[2].status                   == base.PaymentStatus.Redeemed
             assert payments_list[2].google_order_id          == auto_redeem_scenarios[0].google_order_id
@@ -492,16 +488,15 @@ def test_server_add_payment_flow(monkeypatch):
 
 
     # Setup DB
-    err                       = base.ErrorSink()
-    db: backend.SetupDBResult = backend.setup_db(database_url='sqlite:///file:test_server_db?mode=memory&cache=shared', err=err)
+    err                             = base.ErrorSink()
+    setup_db: backend.SetupDBResult = backend.setup_db(database_url='sqlite:///file:test_server_db?mode=memory&cache=shared&uri=true', err=err)
     assert len(err.msg_list) == 0, f'{err.msg_list}'
-    assert db.conn
+    assert setup_db.conn
 
     # Setup local flask instance
-    runtime = backend.get_runtime(db.conn)
+    runtime = backend.get_runtime(setup_db.conn)
     flask_app:    flask.Flask     = server.init(testing_mode=True,
-                                                db_path=db.path,
-                                                db_path_is_uri=True,
+                                                db_path=setup_db.path,
                                                 server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
     flask_client: werkzeug.Client = flask_app.test_client()
 
@@ -521,7 +516,7 @@ def test_server_add_payment_flow(monkeypatch):
     payment_tx.provider             = base.PaymentProvider.GooglePlayStore
     payment_tx.google_payment_token = os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
     payment_tx.google_order_id      = 'DEV.' + os.urandom(backend.BLAKE2B_DIGEST_SIZE).hex()
-    backend.add_unredeemed_payment(sql_conn                          = db.conn,
+    backend.add_unredeemed_payment(conn                              = setup_db.conn,
                                    payment_tx                        = payment_tx,
                                    plan                              = base.ProPlan.OneMonth,
                                    unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -638,10 +633,10 @@ def test_server_add_payment_flow(monkeypatch):
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
                                                      result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(db.conn)
+        runtime = backend.get_runtime(setup_db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.gen_index == 0
 
@@ -707,7 +702,7 @@ def test_server_add_payment_flow(monkeypatch):
                                               result_gen_index_hash,
                                               result_rotating_pkey,
                                               result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(db.conn)
+        runtime = backend.get_runtime(setup_db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
         # Check that the expiry time does not exceed 31 days (we clamped to 30 days and if there's
@@ -722,7 +717,7 @@ def test_server_add_payment_flow(monkeypatch):
         new_payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         new_payment_tx.google_payment_token = os.urandom(len(payment_tx.google_payment_token)).hex()
         new_payment_tx.google_order_id      = 'DEV.' + os.urandom(len(payment_tx.google_payment_token)).hex()
-        backend.add_unredeemed_payment(sql_conn                          = db.conn,
+        backend.add_unredeemed_payment(conn                              = setup_db.conn,
                                        payment_tx                        = new_payment_tx,
                                        plan                              = base.ProPlan.OneMonth,
                                        unredeemed_unix_ts_ms             = unix_ts_ms,
@@ -796,7 +791,7 @@ def test_server_add_payment_flow(monkeypatch):
                                                      result_gen_index_hash,
                                                      result_rotating_pkey,
                                                      result_expiry_unix_ts_ms)
-        runtime = backend.get_runtime(db.conn)
+        runtime = backend.get_runtime(setup_db.conn)
         _ = runtime.backend_key.verify_key.verify(smessage=proof_hash, signature=result_sig)
 
     curr_revocation_ticket: int = 0
@@ -839,16 +834,16 @@ def test_server_add_payment_flow(monkeypatch):
 
         # Grab the generation index, and then calculate the expected generation index hash
         gen_index = 0
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.gen_index == 1
             gen_index = get_user.user.gen_index
 
-        runtime:                    backend.RuntimeRow = backend.get_runtime(db.conn)
+        runtime:                    backend.RuntimeRow = backend.get_runtime(setup_db.conn)
         post_revoke_gen_index_hash: bytes              = backend.make_gen_index_hash(gen_index, runtime.gen_index_salt)
 
         # We will now manually revoke the user and check the revocation list again
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                        google_payment_token = new_add_pro_payment_tx.google_payment_token,
                                                        revoke_unix_ts_ms    = unix_ts_ms,
@@ -893,7 +888,7 @@ def test_server_add_payment_flow(monkeypatch):
             # Check user entitlement updated after revoke. We should prefer the unrevoked payment
             # as we have 2 payments for the user simultaneously where the latter was revoked but
             # the original was not.
-            with db.SQLTransaction(db.conn) as tx:
+            with db.transaction(setup_db.conn) as tx:
                 get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
 
             for it in result_items:
@@ -1074,13 +1069,13 @@ def test_server_add_payment_flow(monkeypatch):
     # grace period
     if 1:
         # NOTE: Verify that there is no grace period set first
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.grace_period_duration_ms == 0
 
         # NOTE: Grab the latest expiring payment so that we have access to the payment details
         last_payment = backend.PaymentRow()
-        for payment_it in backend.get_payments_list(db.conn):
+        for payment_it in backend.get_payments_list(setup_db.conn):
             if payment_it.expiry_unix_ts_ms > last_payment.expiry_unix_ts_ms:
                 last_payment = payment_it
 
@@ -1092,7 +1087,7 @@ def test_server_add_payment_flow(monkeypatch):
         payment_tx.apple_web_line_order_tx_id = last_payment.apple.web_line_order_tx_id
         payment_tx.google_payment_token       = last_payment.google_payment_token
         payment_tx.google_order_id            = last_payment.google_order_id
-        _ = backend.update_payment_renewal_info(db.conn,
+        _ = backend.update_payment_renewal_info(setup_db.conn,
                                                 payment_tx,
                                                 grace_period_duration_ms=10 * 1000,
                                                 auto_renewing=True,
@@ -1101,7 +1096,7 @@ def test_server_add_payment_flow(monkeypatch):
 
         # NOTE: Verify that the grace period is set and calculate the pro-proof deadline
         pro_proof_deadline_unix_ts_ms: int = 0
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx, master_key.verify_key)
             assert get_user.user.grace_period_duration_ms > 0
             pro_proof_deadline_unix_ts_ms = get_user.user.expiry_unix_ts_ms
@@ -1114,17 +1109,17 @@ def test_server_add_payment_flow(monkeypatch):
                                                                  rotating_pkey = rotating_key.verify_key,
                                                                  unix_ts_ms    = unix_ts_ms)
 
-        runtime = backend.get_runtime(db.conn)
-        proof: backend.ProSubscriptionProof = backend.generate_pro_proof(sql_conn       = db.conn,
-                                                                          version        = request_version,
-                                                                          signing_key    = runtime.backend_key,
-                                                                          gen_index_salt = runtime.gen_index_salt,
-                                                                          master_pkey    = master_key.verify_key,
-                                                                          rotating_pkey  = rotating_key.verify_key,
-                                                                          unix_ts_ms     = unix_ts_ms,
-                                                                          master_sig     = bytes(master_key.sign(hash_to_sign).signature),
-                                                                          rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
-                                                                          err            = err)
+        runtime = backend.get_runtime(setup_db.conn)
+        proof: backend.ProSubscriptionProof = backend.generate_pro_proof(conn           = setup_db.conn,
+                                                                         version        = request_version,
+                                                                         signing_key    = runtime.backend_key,
+                                                                         gen_index_salt = runtime.gen_index_salt,
+                                                                         master_pkey    = master_key.verify_key,
+                                                                         rotating_pkey  = rotating_key.verify_key,
+                                                                         unix_ts_ms     = unix_ts_ms,
+                                                                         master_sig     = bytes(master_key.sign(hash_to_sign).signature),
+                                                                         rotating_sig   = bytes(rotating_key.sign(hash_to_sign).signature),
+                                                                         err            = err)
         assert not err.has(), base.readable_unix_ts_ms(pro_proof_deadline_unix_ts_ms)
 
         # NOTE: Check that the proof is invalid
@@ -1142,8 +1137,8 @@ def test_server_add_payment_flow(monkeypatch):
                                                               rotating_pkey = rotating_key.verify_key,
                                                               unix_ts_ms    = unix_ts_ms)
 
-        runtime = backend.get_runtime(db.conn)
-        proof = backend.generate_pro_proof(sql_conn       = db.conn,
+        runtime = backend.get_runtime(setup_db.conn)
+        proof = backend.generate_pro_proof(conn           = setup_db.conn,
                                            version        = request_version,
                                            signing_key    = runtime.backend_key,
                                            gen_index_salt = runtime.gen_index_salt,
@@ -1168,7 +1163,7 @@ def test_server_add_payment_flow(monkeypatch):
         err.msg_list.clear()
 
     if 1: # Revoke the original payment from the user (so we have ended up revoking everything)
-        with db.SQLTransaction(db.conn) as tx:
+        with db.transaction(setup_db.conn) as tx:
             revoked = backend.add_google_revocation_tx(tx                   = tx,
                                                        google_payment_token = payment_tx.google_payment_token,
                                                        revoke_unix_ts_ms    = start_unix_ts_ms,
@@ -1387,7 +1382,7 @@ def dump_apple_signed_payloads(core: platform_apple.Core, body: AppleResponseBod
     print(print_python_decl_code_for_apple_obj(decoded_notification.tx_info, 0, prefix + 'tx_info') + "\n")
 
     print(f'{prefix}decoded_notification = platform_apple.DecodedNotification(body={prefix}body, tx_info={prefix}tx_info, renewal_info={prefix}renewal_info)')
-    print(f'_ = platform_apple.handle_notification(decoded_notification={prefix}decoded_notification, sql_conn=test.conn, err=err)')
+    print(f'_ = platform_apple.handle_notification(decoded_notification={prefix}decoded_notification, conn=test.conn, err=err)')
 
 def test_platform_apple():
     err = base.ErrorSink()
@@ -1401,7 +1396,7 @@ def test_platform_apple():
     # intended to test, is still being tested despite changing the productId from 1 week to 1 month.
 
     # NOTE: Did renew notification
-    with TestingContext(db_path='file:test_platform_apple_db_1?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_1?mode=memory&cache=shared&uri=true') as test:
         # NOTE: Original payload (requires keys to decrypt)
         if 0:
             core:                      platform_apple.Core       = platform_apple.init()
@@ -1505,11 +1500,11 @@ def test_platform_apple():
 
         notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
         err = base.ErrorSink()
-        _ = platform_apple.handle_notification(decoded_notification=notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+        _ = platform_apple.handle_notification(decoded_notification=notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has(), err.msg_list
 
         # NOTE: Subscription renewal should be unredeemed
-        unredeemed_list: list[backend.PaymentRow]             = backend.get_unredeemed_payments_list(test.conn)
+        unredeemed_list: list[backend.PaymentRow]             = backend.get_unredeemed_payments_list(test.db_conn)
         assert len(unredeemed_list)                          == 1
         assert unredeemed_list[0].master_pkey                == None
         assert unredeemed_list[0].status                     == base.PaymentStatus.Unredeemed
@@ -1590,7 +1585,7 @@ def test_platform_apple():
     #
     # This was done by executing these sequences in the time-frame that a subscription is active for
     # on Apple's sandbox environment.
-    with TestingContext(db_path='file:test_platform_apple_db_2?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_2?mode=memory&cache=shared&uri=true') as test:
         if 1: # Subscribe notification
             # NOTE: Original payload (requires keys to decrypt)
             if 0:
@@ -1702,11 +1697,11 @@ def test_platform_apple():
             decoded_notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            _ = platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            _ = platform_apple.handle_notification(decoded_notification=decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: Subscription purchase is unredeemed
-            unredeemed_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.conn)
+            unredeemed_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.db_conn)
             assert len(unredeemed_list)                                 == 1
             assert unredeemed_list[0].master_pkey                       == None
             assert unredeemed_list[0].status                            == base.PaymentStatus.Unredeemed
@@ -1834,11 +1829,11 @@ def test_platform_apple():
             decoded_notification                     = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: Check payment is still in the DB and that auto-renewing was turned off
-            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.db_conn)
             assert len(payment_list)                                 == 1
             assert payment_list[0].master_pkey                       == None
             assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
@@ -1966,14 +1961,14 @@ def test_platform_apple():
             decoded_notification = platform_apple.DecodedNotification(body=body, tx_info=tx_info, renewal_info=renewal_info)
 
             err = base.ErrorSink()
-            platform_apple.handle_notification(decoded_notification=decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
             # NOTE: The payment expires as per Apple's notification. We don't have to do anything
             # necessarily as our proofs will self-expire.
 
             # NOTE: Check payment is still in the DB
-            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.db_conn)
             assert len(payment_list)                                 == 1
             assert payment_list[0].master_pkey                       == None
             assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
@@ -1990,10 +1985,10 @@ def test_platform_apple():
             assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
 
             # NOTE: Now expire the payment
-            _ = backend.expire_payments_revocations_and_users(sql_conn=test.conn, unix_ts_ms=payment_list[0].expiry_unix_ts_ms + 1)
+            _ = backend.expire_payments_revocations_and_users(conn=test.db_conn, unix_ts_ms=payment_list[0].expiry_unix_ts_ms + 1)
 
             # NOTE: Now check that the payments were marked expired
-            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.db_conn)
             assert len(payment_list) == 1
             assert payment_list[0].master_pkey                       == None
             assert payment_list[0].status                            == base.PaymentStatus.Expired
@@ -2018,7 +2013,7 @@ def test_platform_apple():
     #  - 4 [DID_CHANGE_RENEWAL_PREF]                             Cancel the downgrade (we are now back at 1wk subscription)
     #  - 5 [DID_CHANGE_RENEWAL_STATUS, sub: AUTO_RENEW_DISABLED] Disable auto-renew
     #  - 6 [EXPIRED,                   sub: VOLUNTARY]           ??
-    with TestingContext(db_path='file:test_platform_apple_db_3?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_3?mode=memory&cache=shared&uri=true') as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
             e00_sub_to_3_months: dict[str, base.JSONValue] = json.loads('''
@@ -2768,10 +2763,10 @@ def test_platform_apple():
 
         # NOTE: Witness 3 month subscription
         if 1:
-            platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check payment got added to the DB
-            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.db_conn)
             assert len(unredeemed_payment_list)                                 == 1
             assert unredeemed_payment_list[0].master_pkey                       == None
             assert unredeemed_payment_list[0].status                            == base.PaymentStatus.Unredeemed
@@ -2812,7 +2807,7 @@ def test_platform_apple():
             })
 
             # NOTE: Check payment got redeemed to the DB
-            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]                    = backend.get_payments_list(test.db_conn)
             assert len(payment_list)                                 == 1
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == base.PaymentStatus.Redeemed
@@ -2835,14 +2830,14 @@ def test_platform_apple():
         # month subscription following it. This means that going to a 1 week subscription is
         # considered an "upgrade".
         if 1:
-            platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: An upgrade is applied immediately because the user pays on the spot to upgrade.
             # The old subscription should be revoked incase the user already redeemed it and the
             # new payment should be sitting in the unredeemed queue.
 
             # NOTE: Check the previous payment was refunded
-            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.db_conn)
             assert len(payment_list)                                 == 2
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == base.PaymentStatus.Revoked
@@ -2870,11 +2865,11 @@ def test_platform_apple():
             #
             # We will test the other branches by modifying the timestamps, but for the reference
             # tests that use "real" sandbox data we will go with the flow.
-            revocation_list: list[backend.RevocationRow]              = backend.get_revocations_list(test.conn)
+            revocation_list: list[backend.RevocationRow]              = backend.get_revocations_list(test.db_conn)
             assert len(revocation_list)                              == 0
 
             # NOTE: Check the new payment is not in the unredeemed queue because auto-redeeming kicked in
-            unredeemed_payment_list: list[backend.PaymentRow]         = backend.get_unredeemed_payments_list(test.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]         = backend.get_unredeemed_payments_list(test.db_conn)
             assert len(unredeemed_payment_list)                      == 0
 
             # NOTE: Check the details of the auto-redeemed payment
@@ -2894,20 +2889,20 @@ def test_platform_apple():
             assert payment_list[1].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
 
         if 1:
-            platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification,           conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the payment was marked not auto-renewing
-            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.db_conn)
             assert len(payment_list)               == 2
             assert payment_list[-1].auto_renewing  == False
 
         # NOTE: A downgrade should be a no-op as it's queued to execute at the end of the billing
         # cycle, but it does implicitly mean that auto-renewing is turned back on.
         if 1:
-            platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the new payment has remain unchanged
-            payment_list: list[backend.PaymentRow]    = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]    = backend.get_payments_list(test.db_conn)
             assert len(payment_list)                 == 2
             assert payment_list[-1].master_pkey      == bytes(master_key.verify_key)
             assert payment_list[-1].status           == base.PaymentStatus.Redeemed
@@ -2935,10 +2930,10 @@ def test_platform_apple():
         # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
         # remain on the 1wk plan
         if 1:
-            platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check that the initial 3 month subscription remains refunded (e.g. unchanged)
-            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow] = backend.get_payments_list(test.db_conn)
             assert len(payment_list) == 2
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == base.PaymentStatus.Revoked
@@ -2956,7 +2951,7 @@ def test_platform_apple():
             assert payment_list[0].apple.web_line_order_tx_id        == e00_sub_to_3_months_tx_info.webOrderLineItemId
 
             # NOTE: Check that the 1 week plan remains unchanged
-            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.conn)
+            unredeemed_payment_list: list[backend.PaymentRow]                    = backend.get_unredeemed_payments_list(test.db_conn)
             assert len(unredeemed_payment_list)                                 == 0
 
             assert payment_list[-1].master_pkey                       == bytes(master_key.verify_key)
@@ -2976,21 +2971,21 @@ def test_platform_apple():
 
         # NOTE: Disable auto renew, flag should be turned false for the 1 week plan payment
         if 1:
-            platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: Check the payment was marked not auto-renewing
-            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.db_conn)
             assert len(payment_list)               == 2
             assert payment_list[-1].auto_renewing  == False
 
         # NOTE: Expire the subscription
         if 1:
-            platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+            platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   conn=test.db_conn, notification_retry_duration_ms=0, err=err)
 
             # NOTE: This is a no-op, but in this test we haven't advanced time past the expiry yet
             # so actually the subscription should still be marked unredeemed in the database hence
             # check that the 1 week plan remains unchanged
-            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.conn)
+            payment_list: list[backend.PaymentRow]  = backend.get_payments_list(test.db_conn)
             assert len(payment_list)               == 2
 
             assert payment_list[-1].master_pkey                       == bytes(master_key.verify_key)
@@ -3024,7 +3019,7 @@ def test_platform_apple():
     #
     #  - 1 [APPLE CONSUMPTION REQUEST, sub: ??] No-op
     #  - 2 [APPLE REFUND,              sub: ??] Disable auto-renew
-    with TestingContext(db_path='file:test_platform_apple_db_4?mode=memory&cache=shared', uri=True) as test:
+    with TestingContext(db_path='file:test_platform_apple_db_4?mode=memory&cache=shared&uri=true') as test:
         # NOTE: Original payload (this requires keys to decrypt)
         if 0:
             e00_sub_to_3_months: dict[str, base.JSONValue] = json.loads('''
@@ -3057,7 +3052,7 @@ def test_platform_apple():
             #     pathlib.Path('/AppleRootCA-G3.cer').read_bytes(),
             # ]
 
-            core: platform_apple.Core = platform_apple.init(sql_conn    = test.conn,
+            core: platform_apple.Core = platform_apple.init(conn        = test.db_conn,
                                                             key_id      = '9S69CZVVW2',
                                                             issuer_id   = 'a7e44301-18a6-4ee1-b21a-c7be8a5b39de',
                                                             bundle_id   = 'com.loki-project.loki-messenger',
@@ -3169,7 +3164,7 @@ def test_platform_apple():
         e00_sub_to_3_months_tx_info.webOrderLineItemId               = '2000000114930708'
 
         e00_sub_to_3_months_decoded_notification                     = platform_apple.DecodedNotification(body=e00_sub_to_3_months_body, tx_info=e00_sub_to_3_months_tx_info, renewal_info=e00_sub_to_3_months_renewal_info)
-        e00_result: bool                                             = platform_apple.handle_notification(decoded_notification = e00_sub_to_3_months_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+        e00_result: bool                                             = platform_apple.handle_notification(decoded_notification = e00_sub_to_3_months_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e00_result
 
@@ -3268,7 +3263,7 @@ def test_platform_apple():
         e01_consumption_req_tx_info.webOrderLineItemId               = '2000000114930653'
 
         e01_consumption_req_decoded_notification                     = platform_apple.DecodedNotification(body=e01_consumption_req_body, tx_info=e01_consumption_req_tx_info, renewal_info=e01_consumption_req_renewal_info)
-        e01_result: bool                                             = platform_apple.handle_notification(decoded_notification=e01_consumption_req_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+        e01_result: bool                                             = platform_apple.handle_notification(decoded_notification=e01_consumption_req_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e01_result
 
@@ -3367,13 +3362,13 @@ def test_platform_apple():
         e02_apple_refund_tx_info.webOrderLineItemId                  = '2000000114930653'
 
         e02_apple_refund_decoded_notification = platform_apple.DecodedNotification(body=e02_apple_refund_body, tx_info=e02_apple_refund_tx_info, renewal_info=e02_apple_refund_renewal_info)
-        e02_result: bool                      = platform_apple.handle_notification(decoded_notification=e02_apple_refund_decoded_notification, sql_conn=test.conn, notification_retry_duration_ms=0, err=err)
+        e02_result: bool                      = platform_apple.handle_notification(decoded_notification=e02_apple_refund_decoded_notification, conn=test.db_conn, notification_retry_duration_ms=0, err=err)
         assert not err.has()
         assert e02_result
 
         # NOTE: For this unit test we only test the ending state because we've already tested the
         # user flow up to this point via other tests.
-        payments: list[backend.PaymentRow] = backend.get_payments_list(test.conn)
+        payments: list[backend.PaymentRow] = backend.get_payments_list(test.db_conn)
         assert len(payments) == 1
         assert payments[0].status                     == base.PaymentStatus.Revoked
         assert payments[0].apple.original_tx_id       == e00_sub_to_3_months_tx_info.originalTransactionId
@@ -3382,7 +3377,7 @@ def test_platform_apple():
         assert payments[0].revoked_unix_ts_ms         == e02_apple_refund_tx_info.revocationDate
 
 def test_google_platform_handle_notification(monkeypatch):
-    with TestingContext(db_path='file:test_platform_google_db_1?mode=memory&cache=shared', uri=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_1?mode=memory&cache=shared&uri=true') as ctx:
         _ = platform_google.init(project_name            = 'loki-5a81e',
                                  package_name            = 'network.loki.messenger',
                                  subscription_name       = 'session-pro-sub',
@@ -3459,7 +3454,7 @@ def test_google_platform_handle_notification(monkeypatch):
         err_rtdn = base.ErrorSink()
         parse    = platform_google.parse_notification(scenario.rtdn_event, err_rtdn)
         handled  = False
-        with db.SQLTransaction(ctx.conn) as tx:
+        with db.transaction(ctx.db_conn) as tx:
             handled = platform_google.handle_parsed_notification(tx, parse, err_rtdn)
         assert not err_rtdn.has() and handled and len(parse.purchase_token) > 0
 
@@ -3520,7 +3515,7 @@ def test_google_platform_handle_notification(monkeypatch):
 
     def backend_expire_payments_at_end_of_day(event_ms: int, assert_success: bool = False):
         end_of_day_ts_ms = event_ms + backend.round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider=base.PaymentProvider.GooglePlayStore, unix_ts_ms=event_ms)
-        expire_result = backend.expire_payments_revocations_and_users(sql_conn=ctx.conn, unix_ts_ms=end_of_day_ts_ms)
+        expire_result = backend.expire_payments_revocations_and_users(conn=ctx.db_conn, unix_ts_ms=end_of_day_ts_ms)
         if assert_success:
             assert expire_result.success
 
@@ -3529,12 +3524,12 @@ def test_google_platform_handle_notification(monkeypatch):
     """
 
     def assert_clean_state(ctx: TestingContext):
-        assert len(backend.get_unredeemed_payments_list(ctx.conn)) == 0
-        assert len(backend.get_payments_list(ctx.conn)) == 0
-        assert len(backend.get_revocations_list(ctx.conn)) == 0
+        assert len(backend.get_unredeemed_payments_list(ctx.db_conn)) == 0
+        assert len(backend.get_payments_list(ctx.db_conn)) == 0
+        assert len(backend.get_revocations_list(ctx.db_conn)) == 0
 
     def assert_has_unredeemed_payment(tx: TestTx, plan: base.ProPlan, platform_refund_expiry_unix_ts_ms: int, ctx: TestingContext):
-        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.conn)
+        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.db_conn)
         found = False
         for unredeemed_payment in unredeemed_payments:
             if unredeemed_payment.google_order_id == tx.order_id:
@@ -3555,7 +3550,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert found
 
     def assert_has_payment(tx: TestTx, plan: base.ProPlan, redeemed_ts_ms_rounded: int, platform_refund_expiry_unix_ts_ms: int, user_ctx: TestUserCtx, ctx: TestingContext):
-        payments = backend.get_payments_list(ctx.conn)
+        payments = backend.get_payments_list(ctx.db_conn)
         assert len(payments) == user_ctx.payments
         payment = payments[-1]
         assert isinstance(payment, backend.PaymentRow)
@@ -3573,7 +3568,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert payment.google_order_id                                                 == tx.order_id
 
     def assert_has_user(tx: TestTx, user_ctx: TestUserCtx, ctx: TestingContext):
-        user = backend.get_user(sql_conn=ctx.conn, master_pkey=user_ctx.master_key.verify_key)
+        user = backend.get_user(conn=ctx.db_conn, master_pkey=user_ctx.master_key.verify_key)
         assert isinstance(user, backend.UserRow)
         assert user.master_pkey == bytes(user_ctx.master_key.verify_key)
         assert user.gen_index == user_ctx.payments - 1 # NOTE: this is wrong, but it wont be a problem until we have tests which revoke then resubscribe, fix this when that happens
@@ -3647,7 +3642,7 @@ def test_google_platform_handle_notification(monkeypatch):
         tx, platform_refund_expiry_unix_tx_ms = test_make_purchase(purchase=purchase, plan=plan, ctx=ctx)
         # Redeem subscription payment
         redeemed_ts_ms_rounded = add_payment(tx=tx, user_ctx=user_ctx, ctx=ctx)
-        assert len(backend.get_unredeemed_payments_list(ctx.conn)) == 0
+        assert len(backend.get_unredeemed_payments_list(ctx.db_conn)) == 0
 
         user_ctx.payments += 1
         assert_has_payment(tx=tx, plan=plan, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
@@ -3655,7 +3650,7 @@ def test_google_platform_handle_notification(monkeypatch):
         assert_pro_details(tx=tx, pro_status=server.UserProStatus.Active, payment_status=base.PaymentStatus.Redeemed, auto_renew=True, grace_duration_ms=base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS, redeemed_ts_ms_rounded=redeemed_ts_ms_rounded, platform_refund_expiry_unix_ts_ms=platform_refund_expiry_unix_tx_ms, user_ctx=user_ctx, ctx=ctx)
         return tx, platform_refund_expiry_unix_tx_ms, redeemed_ts_ms_rounded
 
-    with TestingContext(db_path='file:test_platform_google_db_2?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_2?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User cancels
@@ -3736,7 +3731,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            revoke_unix_ts_ms                 = refund_tx.event_ms,
                            unix_ts_ms                        = refund_tx.event_ms + 1)
 
-    with TestingContext(db_path='file:test_platform_google_db_3?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_3?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as subscription fails to renew
@@ -3862,7 +3857,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                            ctx                               = ctx,
                            unix_ts_ms                        = tx_expire.event_ms)
 
-    with TestingContext(db_path='file:test_platform_google_db_4?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_4?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User renews 1-month subscription
@@ -4068,7 +4063,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                             ctx=ctx,
                             unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db_5?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_5?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4141,7 +4136,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         user_ctx=user_ctx, ctx=ctx,
         unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db_6?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_6?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4238,7 +4233,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
             ctx=ctx,
             unix_ts_ms=tx_grace.event_ms + test_product_details.grace_period.milliseconds)
 
-    with TestingContext(db_path='file:test_platform_google_db_7?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_7?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User enters grace period as they fail to renew
@@ -4340,7 +4335,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           user_ctx                          = user_ctx,
                           ctx                               = ctx)
 
-    with TestingContext(db_path='file:test_platform_google_db_8?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_8?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4410,7 +4405,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           user_ctx                          = user_ctx,
                           ctx                               = ctx)
 
-    with TestingContext(db_path='file:test_platform_google_db_9?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_9?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4507,7 +4502,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db_10?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_10?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4625,7 +4620,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db_11?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_11?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. User changes to 3-month plan
@@ -4718,7 +4713,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
                           ctx                               = ctx)
 
 
-    with TestingContext(db_path='file:test_platform_google_db_12?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_12?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 3-month subscription
         2. Renews
@@ -4726,7 +4721,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. Expires
         """
 
-    with TestingContext(db_path='file:test_platform_google_db_13?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_13?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. Renews
@@ -4734,21 +4729,21 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         3. Expires
         """
 
-    with TestingContext(db_path='file:test_platform_google_db_14?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_14?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 3-month subscription
         2. User changes to 1-month subscription
         3. Renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db_15?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_15?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. User changes to 1-month subscription
         3. Renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db_16?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_16?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4801,7 +4796,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
             unix_ts_ms=tx_refund_a.event_ms + 1, # +1 to increment us over the threshold to be expired
             revoke_unix_ts_ms=tx_refund_a.event_ms)
 
-    with TestingContext(db_path='file:test_platform_google_db_17?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_17?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4809,7 +4804,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         4. User renews
         """
 
-    with TestingContext(db_path='file:test_platform_google_db_18?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_18?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 12-month subscription
         2. Developer refunds subscription (removing entitlement)
@@ -4818,7 +4813,7 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         """
 
 
-    with TestingContext(db_path='file:test_platform_google_db_19?mode=memory&cache=shared', uri=True, platform_testing_env=True) as ctx:
+    with TestingContext(db_path='file:test_platform_google_db_19?mode=memory&cache=shared&uri=true', platform_testing_env=True) as ctx:
         """
         1. User purchases 1-month subscription, but does not redeem it.
         2. Developer refunds subscription (removing entitlement)
@@ -4860,13 +4855,13 @@ current_state={'kind': 'androidpublisher#subscriptionPurchaseV2', 'startTime': '
         """1. User purchases 1-month subscription, but does not redeem it."""
         tx, _ = test_make_purchase(purchase=purchase, plan=base.ProPlan.OneMonth, ctx=ctx)
         tx, _ = test_make_purchase(purchase=renew, plan=base.ProPlan.OneMonth, ctx=ctx)
-        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.conn)
+        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.db_conn)
         for payment in unredeemed_payments:
             assert payment.status == base.PaymentStatus.Unredeemed
 
         """2. Developer refunds subscription (removing entitlement)"""
         _ = test_notification(refund_a, ctx)
-        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.conn)
+        unredeemed_payments = backend.get_unredeemed_payments_list(ctx.db_conn)
         for payment in unredeemed_payments:
             assert payment.status == base.PaymentStatus.Revoked
         _ = test_notification(refund_b, ctx)
