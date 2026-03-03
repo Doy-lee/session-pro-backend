@@ -29,6 +29,7 @@ import dataclasses
 import enum
 import traceback
 import sqlite3
+import sqlalchemy.engine
 
 import base
 import backend
@@ -627,22 +628,21 @@ def entry_point() -> flask.Flask:
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
     # NOTE: Open the DB (create tables if necessary)
-    engine: sqlalchemy.engine.Engine = backend.bootstrap_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
-    if len(err.msg_list) > 0:
-        log.error(f"{err.msg_list}")
+    engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
+    if err.has():
+        log.error(err.build())
         sys.exit(1)
+    assert engine
 
     # NOTE: Sanity check dev mode
-    with backend.OpenDBAtPath(parsed_args.db_path) as open_db:
+    with db.connection(engine) as conn:
+        runtime_row: backend.RuntimeRow = backend.get_runtime(conn)
         if base.DEV_BACKEND_MODE:
-            assert open_db.conn
-            runtime_row: backend.RuntimeRow = backend.get_runtime(open_db.conn)
             assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
                     "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
         # NOTE: Dump some startup diagnostics
-        assert open_db.conn is not None
-        info_string: str = backend.db_info_string(conn=open_db.conn, db_path=parsed_args.db_path, err=err)
+        info_string: str = backend.db_info_string(conn=conn, db_path=parsed_args.db_path, err=err)
         if len(err.msg_list) > 0:
             log.error(f"{err.msg_list}")
             sys.exit(1)
@@ -650,8 +650,7 @@ def entry_point() -> flask.Flask:
         # NOTE: Generate a report if requested
         if parsed_args.parsed_generate_report_args:
             generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
-            with backend.OpenDBAtPath(parsed_args.db_path) as report_db:
-                report_rows: list[backend.ReportRow] = backend.generate_report_rows(report_open_db.conn, generate_report_args.period, limit=generate_report_args.count)
+            report_rows:          list[backend.ReportRow] = backend.generate_report_rows(conn, generate_report_args.period, limit=generate_report_args.count)
             print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
             sys.exit(1)
 
@@ -665,7 +664,7 @@ def entry_point() -> flask.Flask:
                     label += f'\n'
                 label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
 
-                with db.transaction(open_db.conn) as tx:
+                with db.transaction(conn) as tx:
                     match it.command:
                         case RevokeCommand.Nil: pass
                         case RevokeCommand.List:
@@ -725,18 +724,14 @@ def entry_point() -> flask.Flask:
                             assert it.payment_provider == base.PaymentProvider.iOSAppStore
                             error.apple_original_tx_id = it.payment_id
 
-                        if backend.has_user_error(conn=open_db.conn,
-                                                  payment_provider=it.payment_provider,
-                                                  payment_id=it.payment_id):
+                        if backend.has_user_error(conn=conn, payment_provider=it.payment_provider, payment_id=it.payment_id):
                             label += f' (skipped)'
                         else:
-                            backend.add_user_error(conn=open_db.conn, error=error, unix_ts_ms=int(time.time() * 1000))
+                            backend.add_user_error(conn=conn, error=error, unix_ts_ms=int(time.time() * 1000))
                             count +=1
                             label += f' (added)'
                     else:
-                        if backend.delete_user_errors(conn=open_db.conn,
-                                                      payment_provider = it.payment_provider,
-                                                      payment_id       = it.payment_id):
+                        if backend.delete_user_errors(conn=conn, payment_provider=it.payment_provider, payment_id=it.payment_id):
                             count +=1
                             label += f' (deleted)'
                         else:
@@ -752,7 +747,7 @@ def entry_point() -> flask.Flask:
                         label += f'\n'
                     label += f'  {index:02d} {it.message_id} = {it.command.name}'
 
-                    with db.transaction(open_db.conn) as tx:
+                    with db.transaction(conn) as tx:
                         delete:  bool = it.command == SetGoogleNotificationCommand.Delete
                         updated: bool = backend.google_set_notification_handled(tx         = tx,
                                                                                 message_id = it.message_id,
@@ -767,7 +762,7 @@ def entry_point() -> flask.Flask:
 
         # NOTE: Handle printing of the DB to standard out if requested
         if parsed_args.print_tables:
-            base.print_db_to_stdout(open_db.conn)
+            base.print_db_to_stdout(conn)
             sys.exit(1)
 
         startup_log = '\n'
@@ -865,16 +860,14 @@ def entry_point() -> flask.Flask:
         thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
         thread.start()
 
-        runtime = backend.get_runtime(open_db.conn)
-        result: flask.Flask = server.init(testing_mode=False, db_path=parsed_args.db_path, server_x25519_skey=runtime.backend_key.to_curve25519_private_key())
-
         # NOTE: Add flask to our global logger
+        result: flask.Flask = server.init(testing_mode=False, database_url=parsed_args.db_path, server_x25519_skey=runtime_row.backend_key.to_curve25519_private_key())
         if 1:
-            result.logger.addHandler(console_logger)
+            _ = result.logger.addHandler(console_logger)
             if file_logger:
-                result.logger.addHandler(file_logger)
+                _ = result.logger.addHandler(file_logger)
             for it in webhook_loggers:
-                result.logger.addHandler(it)
+                _ = result.logger.addHandler(it)
 
         # NOTE: Enable Apple iOS App Store notifications routes on the server if enabled. Apple will
         # contact the endpoint when a notification is generated.
@@ -890,9 +883,7 @@ def entry_point() -> flask.Flask:
 
             # NOTE: Offset by 10s to account for clock drift between backend and the Apple servers
             end_unix_ts_ms = int((time.time() - 10) * 1000)
-            platform_apple.catchup_on_missed_notifications(core           = core,
-                                                           sql_conn       = open_db.conn,
-                                                           end_unix_ts_ms = end_unix_ts_ms)
+            platform_apple.catchup_on_missed_notifications(core=core, sql_conn=conn, end_unix_ts_ms=end_unix_ts_ms)
 
         # NOTE: Enable Google Play Store notification handling, this is a blocking call so it's delegated
         # to a thread. We use Google's asynchronous streaming pull client which spawns a thread pool

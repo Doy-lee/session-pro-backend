@@ -41,6 +41,14 @@ class SQLTransaction:
     cancel: bool = False
 
 @contextlib.contextmanager
+def connection(engine: sqlalchemy.engine.Engine):
+    conn = engine.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+@contextlib.contextmanager
 def transaction(conn: sqlalchemy.engine.Connection):
     result = SQLTransaction(conn=conn)
     try:

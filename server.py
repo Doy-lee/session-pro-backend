@@ -680,8 +680,8 @@ def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signi
     return result
 
 @contextlib.contextmanager
-def get_db() -> collections.abc.Iterator[backend.OpenDBAtPath]:
-    database_url = typing.cast(str, flask.current_app.config[FLASK_CONFIG_DB_URL_KEY])
+def get_db(flask_app: flask.Flask) -> collections.abc.Iterator[backend.OpenDBAtPath]:
+    database_url = typing.cast(str, flask_app.config[FLASK_CONFIG_DB_URL_KEY])
     with backend.OpenDBAtPath(database_url) as open_db:
         yield open_db
 
@@ -740,7 +740,7 @@ def add_pro_payment():
 
     # Submit the payment to the DB
     redeemed_payment    = backend.RedeemPayment()
-    with get_db() as open_db:
+    with get_db(flask.current_app) as open_db:
         runtime             = backend.get_runtime(open_db.conn)
         unix_ts_ms          = int(time_now() * 1000)
         redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
@@ -809,7 +809,7 @@ def generate_pro_proof() -> flask.Response:
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Request proof from the backend
-    with get_db() as open_db:
+    with get_db(flask.current_app) as open_db:
         runtime = backend.get_runtime(open_db.conn)
         proof   = backend.generate_pro_proof(conn           = open_db.conn,
                                              version        = version,
@@ -851,7 +851,7 @@ def get_pro_revocations():
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int = 0
     begin             = time.perf_counter()
-    with get_db() as open_db:
+    with get_db(flask.current_app) as open_db:
         with db.transaction(open_db.conn) as tx:
             runtime_row = db.query_one(tx.conn, "SELECT revocation_ticket FROM runtime")
             revocation_ticket = runtime_row[0] if runtime_row else 0
@@ -934,7 +934,7 @@ def get_pro_details():
     # descriptive messaging
     error_report: int                                  = False
 
-    with get_db() as open_db:
+    with get_db(flask.current_app) as open_db:
         with db.transaction(open_db.conn) as tx:
             error_report                         = int(backend.has_user_error_from_master_pkey_tx(tx, master_pkey_nacl))
             get_user: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey_nacl)
@@ -1083,7 +1083,7 @@ def set_payment_refund_requested():
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     updated: bool = False
-    with get_db() as open_db:
+    with get_db(flask.current_app) as open_db:
         updated = backend.set_refund_requested_unix_ts_ms(conn       = open_db.conn,
                                                           payment_tx = user_payment,
                                                           unix_ts_ms = refund_requested_unix_ts_ms)
