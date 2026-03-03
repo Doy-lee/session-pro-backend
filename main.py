@@ -214,45 +214,45 @@ def backend_maintenance_thread_entry_point(db_path: str):
             if db_path.startswith('sqlite://') and not db_path.startswith('sqlite://:'):
                 backup_db_path: str = base.backup_file_path(pathlib.Path(db_path.replace('sqlite:///', '')), next_day_date)
                 with db.open_database(db_path) as engine:
-                    with db.connection(engine) as src:
+                    with db.connection(engine) as conn:
                         def progress(status: int, remaining: int, total: int):
                             log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
 
                         dest_sql_conn = sqlite3.connect(backup_db_path)
                         try:
                             log.info(f"Backing up: {db_path} → {backup_db_path}")
-                            src.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
+                            conn.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
                             log.info("Backup completed successfully!")
                             for it in webhook_loggers:
                                 it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
                         except KeyboardInterrupt:
                             log.warning("Backup cancelled by user.")
-                    except Exception:
-                        log.error(f"Backup failed: {traceback.format_exc()}")
-                    finally:
-                        dest_sql_conn.close()
+                        except Exception:
+                            log.error(f"Backup failed: {traceback.format_exc()}")
+                        finally:
+                            dest_sql_conn.close()
 
-                    # NOTE: Generate the reports
-                    if len(webhook_loggers):
-                        daily_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Daily, 7)
-                        daily_report_str   = backend.generate_report_str(backend.ReportPeriod.Daily, daily_report, backend.ReportType.Human)
-                        weekly_report_str  = ''
-                        monthly_report_str = ''
-                        if next_day_date.weekday() == 0:
-                            weekly_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Weekly, 4)
-                            weekly_report_str = backend.generate_report_str(backend.ReportPeriod.Weekly, weekly_report, backend.ReportType.Human)
+                        # NOTE: Generate the reports
+                        if len(webhook_loggers):
+                            daily_report: list[backend.ReportRow] = backend.generate_report_rows(conn, backend.ReportPeriod.Daily, 7)
+                            daily_report_str   = backend.generate_report_str(backend.ReportPeriod.Daily, daily_report, backend.ReportType.Human)
+                            weekly_report_str  = ''
+                            monthly_report_str = ''
+                            if next_day_date.weekday() == 0:
+                                weekly_report: list[backend.ReportRow] = backend.generate_report_rows(conn, backend.ReportPeriod.Weekly, 4)
+                                weekly_report_str                      = backend.generate_report_str(backend.ReportPeriod.Weekly, weekly_report, backend.ReportType.Human)
 
-                        if next_day_date.day == 1:
-                            monthly_report: list[backend.ReportRow] = backend.generate_report_rows(src.conn, backend.ReportPeriod.Monthly, 3)
-                            monthly_report_str = backend.generate_report_str(backend.ReportPeriod.Monthly, monthly_report, backend.ReportType.Human)
+                            if next_day_date.day == 1:
+                                monthly_report: list[backend.ReportRow] = backend.generate_report_rows(conn, backend.ReportPeriod.Monthly, 3)
+                                monthly_report_str                      = backend.generate_report_str(backend.ReportPeriod.Monthly, monthly_report, backend.ReportType.Human)
 
-                        for it in webhook_loggers:
-                            if len(daily_report_str):
-                                it.emit_text(daily_report_str)
-                            if len(weekly_report_str):
-                                it.emit_text(weekly_report_str)
-                            if len(monthly_report_str):
-                                it.emit_text(monthly_report_str)
+                            for it in webhook_loggers:
+                                if len(daily_report_str):
+                                    it.emit_text(daily_report_str)
+                                if len(weekly_report_str):
+                                    it.emit_text(weekly_report_str)
+                                if len(monthly_report_str):
+                                    it.emit_text(monthly_report_str)
 
 def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
