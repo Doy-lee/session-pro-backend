@@ -24,7 +24,7 @@ import google.api_core.exceptions
 import backend
 import base
 import db
-from backend import OpenDBAtPath
+
 from base import (
     ProPlan,
     JSONObject,
@@ -152,21 +152,22 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     sorted_msg_list: list[SortedMessage] = []
 
     # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
-    with OpenDBAtPath(base.DB_PATH) as open_db:
-        with db.transaction(open_db.conn) as tx:
-            db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
-            for row in db_it:
-                message_id          = row[0]
-                payload: str | None = row[1]
-                if not payload:
-                    continue
+    with db.open_database(base.DB_PATH) as engine:
+        with db.connection(engine) as conn:
+            with db.transaction(conn) as tx:
+                db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
+                for row in db_it:
+                    message_id          = row[0]
+                    payload: str | None = row[1]
+                    if not payload:
+                        continue
 
-                raw_msg      = typing.cast(google.pubsub_v1.types.ReceivedMessage, google.pubsub_v1.types.ReceivedMessage.from_json(payload))
-                message_data = json.loads(raw_msg.message.data)
-                tmp_err      = base.ErrorSink()
-                parse        = parse_notification(message_data, tmp_err);
+                    raw_msg      = typing.cast(google.pubsub_v1.types.ReceivedMessage, google.pubsub_v1.types.ReceivedMessage.from_json(payload))
+                    message_data = json.loads(raw_msg.message.data)
+                    tmp_err      = base.ErrorSink()
+                    parse        = parse_notification(message_data, tmp_err);
 
-                sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
+                    sorted_msg_list.append(SortedMessage(event_unix_ts_ms   = parse.event_time_ms,
                                                      message_id         = message_id,
                                                      parse              = parse,
                                                      ack_id             = raw_msg.ack_id,
@@ -244,22 +245,23 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             # notification is handled or not is going to be bypassed and cause state
                             # inconsistencies.
                             def add_notification_id_to_db():
-                                with OpenDBAtPath(base.DB_PATH) as open_db:
-                                    with db.transaction(open_db.conn) as tx:
-                                        if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
-                                            # NOTE: Our message retention policy for this subscription is 7 days
-                                            # (default). We add a little buffer as we don't know exactly which
-                                            # timestamp Google uses.
-                                            #
-                                            # We always store the messages to mitigate network failures on
-                                            # acknowledgement. We store this in JSON because in the
-                                            # erroneous case there's highly likelihood we need human
-                                            # intervention and having human-readability there will be
-                                            # important.
-                                            backend.google_add_notification_id_tx(tx                = tx,
-                                                                                  message_id        = message_id,
-                                                                                  expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
-                                                                                  payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
+                                with db.open_database(base.DB_PATH) as engine:
+                                    with db.connection(engine) as conn:
+                                        with db.transaction(conn) as tx:
+                                            if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
+                                                # NOTE: Our message retention policy for this subscription is 7 days
+                                                # (default). We add a little buffer as we don't know exactly which
+                                                # timestamp Google uses.
+                                                #
+                                                # We always store the messages to mitigate network failures on
+                                                # acknowledgement. We store this in JSON because in the
+                                                # erroneous case there's highly likelihood we need human
+                                                # intervention and having human-readability there will be
+                                                # important.
+                                                backend.google_add_notification_id_tx(tx                = tx,
+                                                                                      message_id        = message_id,
+                                                                                      expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
+                                                                                      payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
 
                             db.retry_on_database_locked(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
                             if err.has():
@@ -291,38 +293,39 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         # file to mark a message as being done or handled so we check before proceeding.
                         if attempt:
                             try:
-                                with OpenDBAtPath(base.DB_PATH) as open_db:
-                                    # NOTE: If we try to mutate the database and it's locked, unlike
-                                    # before we just set the handled flag to false. This causes the
-                                    # message to be reattempted. In the add notification ID to DB phase
-                                    # we manually implement a retry to handle that.
-                                    #
-                                    # On any other error we raise the exception to the top-level handler
-                                    # which will log it for us.
-                                    lookup = backend.GoogleNotificationMessageIDInDB()
-                                    with db.transaction(open_db.conn) as tx:
-                                        # NOTE: By definition to be in the sorted list, the message must
-                                        # have also been submitted into the DB. So if for some reason the
-                                        # notification doesn't exist anymore (maybe someone deleted it
-                                        # out-of-band) then we skip the notification.
-                                        lookup                 = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
-                                        user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
-                                        if not lookup.present or lookup.present and lookup.handled:
-                                            handled = True
-                                        else:
-                                            handled = handle_parsed_notification(tx, msg.parse, err)
+                                with db.open_database(base.DB_PATH) as engine:
+                                    with db.connection(engine) as conn:
+                                        # NOTE: If we try to mutate the database and it's locked, unlike
+                                        # before we just set the handled flag to false. This causes the
+                                        # message to be reattempted. In the add notification ID to DB phase
+                                        # we manually implement a retry to handle that.
+                                        #
+                                        # On any other error we raise the exception to the top-level handler
+                                        # which will log it for us.
+                                        lookup = backend.GoogleNotificationMessageIDInDB()
+                                        with db.transaction(conn) as tx:
+                                            # NOTE: By definition to be in the sorted list, the message must
+                                            # have also been submitted into the DB. So if for some reason the
+                                            # notification doesn't exist anymore (maybe someone deleted it
+                                            # out-of-band) then we skip the notification.
+                                            lookup                 = backend.google_notification_message_id_is_in_db_tx(tx, msg.message_id)
+                                            user_is_in_error_state = backend.has_user_error_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                            if not lookup.present or lookup.present and lookup.handled:
+                                                handled = True
+                                            else:
+                                                handled = handle_parsed_notification(tx, msg.parse, err)
 
-                                        # NOTE: Clear user error if success, or add one if we failed
-                                        if lookup.present:
-                                            if handled:
-                                                _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
-                                                if user_is_in_error_state:
-                                                    _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
-                                            elif user_is_in_error_state == False:
-                                                user_error                      = backend.UserError()
-                                                user_error.provider             = base.PaymentProvider.GooglePlayStore
-                                                user_error.google_payment_token = msg.parse.purchase_token
-                                                backend.add_user_error_tx(tx, error = user_error, unix_ts_ms = int(now * 1000))
+                                            # NOTE: Clear user error if success, or add one if we failed
+                                            if lookup.present:
+                                                if handled:
+                                                    _ = backend.google_set_notification_handled(tx=tx, message_id=msg.message_id, delete=False)
+                                                    if user_is_in_error_state:
+                                                        _ = backend.delete_user_errors_tx(tx=tx, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=msg.parse.purchase_token)
+                                                elif user_is_in_error_state == False:
+                                                    user_error                      = backend.UserError()
+                                                    user_error.provider             = base.PaymentProvider.GooglePlayStore
+                                                    user_error.google_payment_token = msg.parse.purchase_token
+                                                    backend.add_user_error_tx(tx, error = user_error, unix_ts_ms = int(now * 1000))
                             except Exception as e:
                                 # NOTE: On exception failure we'll just mark the message as not
                                 # handled, this will bump the retry delay of the message

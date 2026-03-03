@@ -1515,14 +1515,14 @@ def test_platform_apple():
             assert not err.has(), err.msg_list
 
             # NOTE: Subscription renewal should be unredeemed
-        unredeemed_list: list[backend.PaymentRow]             = backend.get_unredeemed_payments_list(conn)
-        assert len(unredeemed_list)                          == 1
-        assert unredeemed_list[0].master_pkey                == None
-        assert unredeemed_list[0].status                     == base.PaymentStatus.Unredeemed
-        assert unredeemed_list[0].payment_provider           == base.PaymentProvider.iOSAppStore
-        assert unredeemed_list[0].apple.original_tx_id       == tx_info.originalTransactionId
-        assert unredeemed_list[0].apple.tx_id                == tx_info.transactionId
-        assert unredeemed_list[0].apple.web_line_order_tx_id == tx_info.webOrderLineItemId
+            unredeemed_list: list[backend.PaymentRow]             = backend.get_unredeemed_payments_list(conn)
+            assert len(unredeemed_list)                          == 1
+            assert unredeemed_list[0].master_pkey                == None
+            assert unredeemed_list[0].status                     == base.PaymentStatus.Unredeemed
+            assert unredeemed_list[0].payment_provider           == base.PaymentProvider.iOSAppStore
+            assert unredeemed_list[0].apple.original_tx_id       == tx_info.originalTransactionId
+            assert unredeemed_list[0].apple.tx_id                == tx_info.transactionId
+            assert unredeemed_list[0].apple.web_line_order_tx_id == tx_info.webOrderLineItemId
 
         # NOTE: Then claim the payment
         master_key   = nacl.signing.SigningKey.generate()
@@ -1714,19 +1714,19 @@ def test_platform_apple():
                 assert not err.has(), err.msg_list
 
                 # NOTE: Subscription purchase is unredeemed
-            unredeemed_list                                              = backend.get_unredeemed_payments_list(conn)
-            assert len(unredeemed_list)                                 == 1
-            assert unredeemed_list[0].master_pkey                       == None
-            assert unredeemed_list[0].status                            == base.PaymentStatus.Unredeemed
-            assert unredeemed_list[0].plan                              == base.ProPlan.OneMonth
-            assert unredeemed_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert unredeemed_list[0].auto_renewing                     == True
-            assert unredeemed_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
-            assert unredeemed_list[0].redeemed_unix_ts_ms               == None
-            assert unredeemed_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert unredeemed_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
-            assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
-            assert unredeemed_list[0].revoked_unix_ts_ms                == None
+                unredeemed_list                                              = backend.get_unredeemed_payments_list(conn)
+                assert len(unredeemed_list)                                 == 1
+                assert unredeemed_list[0].master_pkey                       == None
+                assert unredeemed_list[0].status                            == base.PaymentStatus.Unredeemed
+                assert unredeemed_list[0].plan                              == base.ProPlan.OneMonth
+                assert unredeemed_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+                assert unredeemed_list[0].auto_renewing                     == True
+                assert unredeemed_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
+                assert unredeemed_list[0].redeemed_unix_ts_ms               == None
+                assert unredeemed_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
+                assert unredeemed_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
+                assert unredeemed_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
+                assert unredeemed_list[0].revoked_unix_ts_ms                == None
             assert unredeemed_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert unredeemed_list[0].apple.tx_id                       == tx_info.transactionId
             assert unredeemed_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -1847,19 +1847,19 @@ def test_platform_apple():
                 assert not err.has(), err.msg_list
 
                 # NOTE: Check payment is still in the DB and that auto-renewing was turned off
-            payment_list                                               = backend.get_payments_list(conn)
-            assert len(payment_list)                                 == 1
-            assert payment_list[0].master_pkey                       == None
-            assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
-            assert payment_list[0].plan                              == base.ProPlan.OneMonth
-            assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert payment_list[0].auto_renewing                     == False
-            assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
-            assert payment_list[0].redeemed_unix_ts_ms               == None
-            assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
-            assert payment_list[0].revoked_unix_ts_ms                == None
+                payment_list                                               = backend.get_payments_list(conn)
+                assert len(payment_list)                                 == 1
+                assert payment_list[0].master_pkey                       == None
+                assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
+                assert payment_list[0].plan                              == base.ProPlan.OneMonth
+                assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+                assert payment_list[0].auto_renewing                     == False
+                assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
+                assert payment_list[0].redeemed_unix_ts_ms               == None
+                assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
+                assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
+                assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
+                assert payment_list[0].revoked_unix_ts_ms                == None
             assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
             assert payment_list[0].apple.tx_id                       == tx_info.transactionId
             assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
@@ -1979,47 +1979,47 @@ def test_platform_apple():
                 _ = platform_apple.handle_notification(decoded_notification=decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
                 assert not err.has(), err.msg_list
 
-            # NOTE: The payment expires as per Apple's notification. We don't have to do anything
-            # necessarily as our proofs will self-expire.
+                # NOTE: The payment expires as per Apple's notification. We don't have to do anything
+                # necessarily as our proofs will self-expire.
 
-            # NOTE: Check payment is still in the DB
-            payment_list                                              = backend.get_payments_list(conn)
-            assert len(payment_list)                                 == 1
-            assert payment_list[0].master_pkey                       == None
-            assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
-            assert payment_list[0].plan                              == base.ProPlan.OneMonth
-            assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
-            assert payment_list[0].redeemed_unix_ts_ms               == None
-            assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
-            assert payment_list[0].revoked_unix_ts_ms                == None
-            assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
-            assert payment_list[0].apple.tx_id                       == tx_info.transactionId
-            assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
+                # NOTE: Check payment is still in the DB
+                payment_list                                              = backend.get_payments_list(conn)
+                assert len(payment_list)                                 == 1
+                assert payment_list[0].master_pkey                       == None
+                assert payment_list[0].status                            == base.PaymentStatus.Unredeemed
+                assert payment_list[0].plan                              == base.ProPlan.OneMonth
+                assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+                assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
+                assert payment_list[0].redeemed_unix_ts_ms               == None
+                assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
+                assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
+                assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
+                assert payment_list[0].revoked_unix_ts_ms                == None
+                assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
+                assert payment_list[0].apple.tx_id                       == tx_info.transactionId
+                assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
 
             # NOTE: Now expire the payment
-            _ = backend.expire_payments_revocations_and_users(conn=conn, unix_ts_ms=payment_list[0].expiry_unix_ts_ms + 1)
-
-            # NOTE: Now check that the payments were marked expired
             with test.connection() as conn:
+                _ = backend.expire_payments_revocations_and_users(conn=conn, unix_ts_ms=payment_list[0].expiry_unix_ts_ms + 1)
+
+                # NOTE: Now check that the payments were marked expired
                 payment_list = backend.get_payments_list(conn)
 
-            assert len(payment_list)                                 == 1
-            assert payment_list[0].master_pkey                       == None
-            assert payment_list[0].status                            == base.PaymentStatus.Expired
-            assert payment_list[0].plan                              == base.ProPlan.OneMonth
-            assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
-            assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
-            assert payment_list[0].redeemed_unix_ts_ms               == None
-            assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
-            assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
-            assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
-            assert payment_list[0].revoked_unix_ts_ms                == None
-            assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
-            assert payment_list[0].apple.tx_id                       == tx_info.transactionId
-            assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
+                assert len(payment_list)                                 == 1
+                assert payment_list[0].master_pkey                       == None
+                assert payment_list[0].status                            == base.PaymentStatus.Expired
+                assert payment_list[0].plan                              == base.ProPlan.OneMonth
+                assert payment_list[0].payment_provider                  == base.PaymentProvider.iOSAppStore
+                assert payment_list[0].unredeemed_unix_ts_ms             == tx_info.purchaseDate
+                assert payment_list[0].redeemed_unix_ts_ms               == None
+                assert payment_list[0].expiry_unix_ts_ms                 == tx_info.expiresDate
+                assert payment_list[0].grace_period_duration_ms          == base.DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
+                assert payment_list[0].platform_refund_expiry_unix_ts_ms == tx_info.expiresDate
+                assert payment_list[0].revoked_unix_ts_ms                == None
+                assert payment_list[0].apple.original_tx_id              == tx_info.originalTransactionId
+                assert payment_list[0].apple.tx_id                       == tx_info.transactionId
+                assert payment_list[0].apple.web_line_order_tx_id        == tx_info.webOrderLineItemId
 
 
     # NOTE: Execute the sequence
@@ -2780,12 +2780,12 @@ def test_platform_apple():
 
         # NOTE: Witness 3 month subscription
         if 1:
+            unredeemed_payment_list = []
             with test.connection() as conn:
                 _ = platform_apple.handle_notification(decoded_notification=e00_sub_to_3_months_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
                 assert not err.has(), err.msg_list
+                unredeemed_payment_list = backend.get_unredeemed_payments_list(conn)
 
-                # NOTE: Check payment got added to the DB
-            unredeemed_payment_list                                              = backend.get_unredeemed_payments_list(conn)
             assert len(unredeemed_payment_list)                                 == 1
             assert unredeemed_payment_list[0].master_pkey                       == None
             assert unredeemed_payment_list[0].status                            == base.PaymentStatus.Unredeemed
@@ -2850,17 +2850,16 @@ def test_platform_apple():
         # 1 week was put at the top of the list, this makes it have a higher ranking than the 3
         # month subscription following it. This means that going to a 1 week subscription is
         # considered an "upgrade".
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e01_upgrade_to_1wk_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
+            payment_list = backend.get_payments_list(conn)
 
             # NOTE: An upgrade is applied immediately because the user pays on the spot to upgrade.
             # The old subscription should be revoked incase the user already redeemed it and the
             # new payment should be sitting in the unredeemed queue.
 
             # NOTE: Check the previous payment was refunded
-            payment_list                                              = backend.get_payments_list(conn)
             assert len(payment_list)                                 == 2
             assert payment_list[0].master_pkey                       == bytes(master_key.verify_key)
             assert payment_list[0].status                            == base.PaymentStatus.Revoked
@@ -2911,10 +2910,9 @@ def test_platform_apple():
             assert payment_list[1].apple.tx_id                       == e01_upgrade_to_1wk_tx_info.transactionId
             assert payment_list[1].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
 
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e02_disable_auto_renew_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
 
             # NOTE: Check the payment was marked not auto-renewing
             payment_list                            = backend.get_payments_list(conn)
@@ -2923,10 +2921,9 @@ def test_platform_apple():
 
         # NOTE: A downgrade should be a no-op as it's queued to execute at the end of the billing
         # cycle, but it does implicitly mean that auto-renewing is turned back on.
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e03_queue_downgrade_to_3_months_decoded_notification,  conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
 
             # NOTE: Check the new payment has remain unchanged
             payment_list                              = backend.get_payments_list(conn)
@@ -2956,10 +2953,9 @@ def test_platform_apple():
 
         # NOTE: Cancelling a downgrade means that the queued downgrade to 3 months is undone. We
         # remain on the 1wk plan
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e04_cancel_downgrade_to_3_months_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
 
             # NOTE: Check that the initial 3 month subscription remains refunded (e.g. unchanged)
             payment_list                                              = backend.get_payments_list(conn)
@@ -3001,10 +2997,9 @@ def test_platform_apple():
             assert payment_list[-1].apple.web_line_order_tx_id        == e01_upgrade_to_1wk_tx_info.webOrderLineItemId
 
         # NOTE: Disable auto renew, flag should be turned false for the 1 week plan payment
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e05_disable_auto_renew_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
 
             # NOTE: Check the payment was marked not auto-renewing
             payment_list: list[backend.PaymentRow]  = backend.get_payments_list(conn)
@@ -3012,10 +3007,9 @@ def test_platform_apple():
             assert payment_list[-1].auto_renewing  == False
 
         # NOTE: Expire the subscription
-        if 1:
-            with test.connection() as conn:
-                _ = platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   conn=conn, notification_retry_duration_ms=0, err=err)
-                assert not err.has(), err.msg_list
+        with test.connection() as conn:
+            _ = platform_apple.handle_notification(decoded_notification=e06_expire_voluntary_decoded_notification,   conn=conn, notification_retry_duration_ms=0, err=err)
+            assert not err.has(), err.msg_list
 
             # NOTE: This is a no-op, but in this test we haven't advanced time past the expiry yet
             # so actually the subscription should still be marked unredeemed in the database hence
@@ -3402,15 +3396,15 @@ def test_platform_apple():
             _ = platform_apple.handle_notification(decoded_notification=e02_apple_refund_decoded_notification, conn=conn, notification_retry_duration_ms=0, err=err)
             assert not err.has(), err.msg_list
 
-        # NOTE: For this unit test we only test the ending state because we've already tested the
-        # user flow up to this point via other tests.
-        payments: list[backend.PaymentRow] = backend.get_payments_list(conn)
-        assert len(payments) == 1
-        assert payments[0].status                     == base.PaymentStatus.Revoked
-        assert payments[0].apple.original_tx_id       == e00_sub_to_3_months_tx_info.originalTransactionId
-        assert payments[0].apple.tx_id                == e00_sub_to_3_months_tx_info.transactionId
-        assert payments[0].apple.web_line_order_tx_id == e00_sub_to_3_months_tx_info.webOrderLineItemId
-        assert payments[0].revoked_unix_ts_ms         == e02_apple_refund_tx_info.revocationDate
+            # NOTE: For this unit test we only test the ending state because we've already tested the
+            # user flow up to this point via other tests.
+            payments: list[backend.PaymentRow] = backend.get_payments_list(conn)
+            assert len(payments) == 1
+            assert payments[0].status                     == base.PaymentStatus.Revoked
+            assert payments[0].apple.original_tx_id       == e00_sub_to_3_months_tx_info.originalTransactionId
+            assert payments[0].apple.tx_id                == e00_sub_to_3_months_tx_info.transactionId
+            assert payments[0].apple.web_line_order_tx_id == e00_sub_to_3_months_tx_info.webOrderLineItemId
+            assert payments[0].revoked_unix_ts_ms         == e02_apple_refund_tx_info.revocationDate
 
 def test_google_platform_handle_notification(monkeypatch):
     with TestingContext() as ctx:

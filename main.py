@@ -170,9 +170,10 @@ def backend_maintenance_thread_entry_point(db_path: str):
             # NOTE: Expire rows from the database
             if 1:
                 expire_result = backend.ExpireResult()
-                with backend.OpenDBAtPath(db_path) as db:
-                    expire_result = backend.expire_payments_revocations_and_users(conn=db.conn,
-                                                                                  unix_ts_ms=int(next_day_unix_ts_s * 1000))
+                with db.open_database(db_path) as engine:
+                    with db.connection(engine) as conn:
+                        expire_result = backend.expire_payments_revocations_and_users(conn=conn,
+                                                                                      unix_ts_ms=int(next_day_unix_ts_s * 1000))
 
                 yesterday_str: str = datetime.datetime.fromtimestamp(next_day_unix_ts_s - base.SECONDS_IN_DAY).strftime('%Y-%m-%d')
                 today_str: str     = datetime.datetime.fromtimestamp(next_day_unix_ts_s).strftime('%m-%d')
@@ -212,19 +213,20 @@ def backend_maintenance_thread_entry_point(db_path: str):
             # NOTE: Do a backup of the DB (SQLite only) and generate reports
             if db_path.startswith('sqlite://') and not db_path.startswith('sqlite://:'):
                 backup_db_path: str = base.backup_file_path(pathlib.Path(db_path.replace('sqlite:///', '')), next_day_date)
-                with backend.OpenDBAtPath(db_path) as src:
-                    def progress(status: int, remaining: int, total: int):
-                        log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
+                with db.open_database(db_path) as engine:
+                    with db.connection(engine) as src:
+                        def progress(status: int, remaining: int, total: int):
+                            log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
 
-                    dest_sql_conn = sqlite3.connect(backup_db_path)
-                    try:
-                        log.info(f"Backing up: {db_path} → {backup_db_path}")
-                        src.conn.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
-                        log.info("Backup completed successfully!")
-                        for it in webhook_loggers:
-                            it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
-                    except KeyboardInterrupt:
-                        log.warning("Backup cancelled by user.")
+                        dest_sql_conn = sqlite3.connect(backup_db_path)
+                        try:
+                            log.info(f"Backing up: {db_path} → {backup_db_path}")
+                            src.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
+                            log.info("Backup completed successfully!")
+                            for it in webhook_loggers:
+                                it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
+                        except KeyboardInterrupt:
+                            log.warning("Backup cancelled by user.")
                     except Exception:
                         log.error(f"Backup failed: {traceback.format_exc()}")
                     finally:

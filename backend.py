@@ -274,23 +274,6 @@ class AllocatedGenID:
     gen_index:         int   = 0
     gen_index_salt:    bytes = b''
 
-@dataclasses.dataclass
-class OpenDBAtPath:
-    conn: sqlalchemy.engine.Connection
-    engine: sqlalchemy.engine.Engine
-
-    def __init__(self, database_url: str):
-        self.engine = db.create_engine(database_url)
-        self.conn = self.engine.connect()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type: object | None, exc_value: object | None, traceback: object | None):
-        self.conn.close()
-        self.engine.dispose()
-        return False
-
 def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) -> bytes:
     result: bytes = hashlib.sha256(bytes(pkey)).digest()
     return result
@@ -733,7 +716,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
         # NOTE: Verify the plan, it should always be set once it enters the DB..
         if it.plan == base.ProPlan.Nil:
                err.msg_list.append(f'Payment #{index} had an invalid plan, received ({base.reflect_enum(it.plan)})')
-        base.verify_payment_provider(it.payment_provider, err)
+        _ = base.verify_payment_provider(it.payment_provider, err)
 
         # NOTE: Check that the payment's redeemed ts is a reasonable value
         if it.redeemed_unix_ts_ms and it.redeemed_unix_ts_ms < PRO_ENABLED_UNIX_TS:
@@ -791,15 +774,15 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
             master_pkey_dict[master_pkey_bytes] = expiry_unix_ts_ms
 
         # NOTE: Mark all the payments as revoked
-        db.query(tx.conn, '''
+        _ = db.query(tx.conn, '''
         UPDATE payments
         SET    status = :status, revoked_unix_ts_ms = :revoked_ts, auto_renewing = 0
         WHERE  id = :id AND (status = :unredeemed OR status = :redeemed)
-        ''', 
-            status=int(base.PaymentStatus.Revoked.value), 
-            revoked_ts=revoke_unix_ts_ms, 
-            id=id, 
-            unredeemed=int(base.PaymentStatus.Unredeemed.value), 
+        ''',
+            status=int(base.PaymentStatus.Revoked.value),
+            revoked_ts=revoke_unix_ts_ms,
+            id=id,
+            unredeemed=int(base.PaymentStatus.Unredeemed.value),
             redeemed=int(base.PaymentStatus.Redeemed.value))
 
     revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.iOSAppStore, revoke_unix_ts_ms)
@@ -1286,7 +1269,7 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
     # NOTE: Having `RETURNING master_pkey` seems to break rowcount and returns 0 even on
     # row modification. We use fetchone instead
     assert result_set
-    row    = typing.cast(sqlalchemy.Row[bytes] | None, result_set.fetchone())
+    row    = typing.cast(sqlalchemy.Row[tuple[bytes]] | None, result_set.fetchone())
     result = row is not None
 
     # NOTE: Update the user's expiry to the latest known expiry
@@ -1468,7 +1451,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
             LIMIT    1
         '''), {'provider': int(payment_tx.provider.value), 'orig_tx_id': payment_tx.apple_original_tx_id})
 
-    master_pkey_record = typing.cast(sqlalchemy.Row[bytes] | None, result_set.fetchone())
+    master_pkey_record = typing.cast(sqlalchemy.Row[tuple[bytes]] | None, result_set.fetchone())
     if master_pkey_record and master_pkey_record[0]:
         master_pkey   = nacl.signing.VerifyKey(master_pkey_record[0])
         user: UserRow = get_user_from_sql_tx(tx, master_pkey)
@@ -2124,7 +2107,7 @@ def get_payment_tx(tx:          db.SQLTransaction,
         record = result_set.fetchone()
         if record:
             row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
-            result = payment_row_from_tuple(row)
+            result = payment_row_from_tuple(tuple(row))
 
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         result_set = db.query(tx.conn, '''
@@ -2139,7 +2122,7 @@ def get_payment_tx(tx:          db.SQLTransaction,
         record = result_set.fetchone()
         if record:
             row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
-            result = payment_row_from_tuple(row)
+            result = payment_row_from_tuple(tuple(row))
  
     return result
 
@@ -2257,8 +2240,8 @@ def google_get_unhandled_notification_iterator(tx: db.SQLTransaction) -> collect
     return typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], result_set)
 
 def google_notification_message_id_is_in_db_tx(tx: db.SQLTransaction, message_id: int) -> GoogleNotificationMessageIDInDB:
-    row: sqlalchemy.Row[int] | None = typing.cast(sqlalchemy.Row[int], db.query_one(tx.conn, '''SELECT handled FROM google_notification_history WHERE message_id = :message_id''', message_id=message_id))
-    result                          = GoogleNotificationMessageIDInDB()
+    row    = typing.cast(sqlalchemy.Row[tuple[int]] | None, db.query_one(tx.conn, '''SELECT handled FROM google_notification_history WHERE message_id = :message_id''', message_id=message_id))
+    result = GoogleNotificationMessageIDInDB()
     if row is not None:
         result.present = True
         result.handled = row[0] > 0 # NOTE: Should always be 0 or 1 but we'll be extra careful
@@ -2352,23 +2335,13 @@ def generate_report_rows(conn: sqlalchemy.engine.Connection, period: ReportPerio
                   AND status != {base.PaymentStatus.Revoked.value}
             """)
 
-            count = result_set.fetchone()[0] or 0
+            count        = result_set.fetchone()[0] or 0
             period_label = _format_period_label(it, period)
             result[period_label] = count
 
         return result
 
     result: list[ReportRow] = []
-    with db.transaction(conn) as tx:
-        unredeemed: dict[str, int] = fetch_counts(
-            tx_conn        = tx.conn,
-            period         = period,
-            unix_ts_ms_column = "unredeemed_unix_ts_ms",
-            where_clause   = f"status = {base.PaymentStatus.Unredeemed.value}",
-        )
-
-    result: list[ReportRow] = []
-
     with db.transaction(conn) as tx:
         unredeemed: dict[str, int] = fetch_counts(
             tx_conn           = tx.conn,
