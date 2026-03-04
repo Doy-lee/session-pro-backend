@@ -53,8 +53,7 @@ DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS:  int = 60 * 60 * 1 * 1000
 DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS: int = DEFAULT_APPLE_GRACE_PERIOD_DURATION_MS
 
 # NOTE: Global variables
-DB_PATH                        = ''
-DB_PATH_IS_URI                 = False
+DB_URL                         = ''
 DEV_BACKEND_MODE               = False
 DEV_BACKEND_DETERMINISTIC_SKEY = bytes([0xCD] * 32)
 UNSAFE_LOGGING                 = False

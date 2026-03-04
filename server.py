@@ -689,7 +689,7 @@ def get_db(flask_app: flask.Flask) -> collections.abc.Iterator[sqlalchemy.engine
 def init(testing_mode: bool, database_url: str, server_x25519_skey: nacl.public.PrivateKey) -> flask.Flask:
     result                                                      = flask.Flask(__name__)
     result.config['TESTING']                                    = testing_mode
-    result.config[FLASK_CONFIG_DB_URL_KEY]                     = database_url
+    result.config[FLASK_CONFIG_DB_URL_KEY]                      = database_url
     result.config[onion_req.FLASK_CONFIG_ONION_REQ_X25519_SKEY] = server_x25519_skey
     result.register_blueprint(flask_blueprint)
     result.register_blueprint(onion_req.flask_blueprint_v4)

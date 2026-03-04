@@ -87,7 +87,7 @@ class SessionWebhook:
 @dataclasses.dataclass
 class ParsedArgs:
     ini_path:                            str                             = ''
-    db_path:                             str                             = ''
+    db_url:                              str                             = ''
     log_path:                            str                             = ''
     print_tables:                        bool                            = False
     dev:                                 bool                            = False
@@ -146,7 +146,7 @@ def signal_handler(sig: int, _frame: types.FrameType | None):
     _ = signal.signal(sig, signal.SIG_DFL)
     signal.raise_signal(sig)
 
-def backend_maintenance_thread_entry_point(db_path: str):
+def backend_maintenance_thread_entry_point(db_url: str):
     global stop_maintenance_thread
     while not stop_maintenance_thread:
         start_unix_ts_s:    float = time.time()
@@ -170,7 +170,7 @@ def backend_maintenance_thread_entry_point(db_path: str):
             # NOTE: Expire rows from the database
             if 1:
                 expire_result = backend.ExpireResult()
-                with db.open_database(db_path) as engine:
+                with db.open_database(db_url) as engine:
                     with db.connection(engine) as conn:
                         expire_result = backend.expire_payments_revocations_and_users(conn=conn,
                                                                                       unix_ts_ms=int(next_day_unix_ts_s * 1000))
@@ -192,10 +192,9 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     log.error(f'Daily pruning for {yesterday_str} failed due to an unknown DB error')
 
             # NOTE: Do backup rotation
-            if 1:
-                dry_run: base.BackupRotationDryRun = base.backup_rotation_dry_run(base_file_path = pathlib.Path(db_path),
-                                                                                  now            = datetime.datetime.now())
-
+            db_file_path: str | None = db.file_path_from_sqlite_url(db_url)
+            if db_file_path:
+                dry_run: base.BackupRotationDryRun = base.backup_rotation_dry_run(base_file_path=pathlib.Path(db_file_path), now=datetime.datetime.now())
                 if len(dry_run.to_delete):
                     msg = 'Rotating backups and deleting:\n'
                     for index, it in enumerate(dry_run.to_delete):
@@ -210,21 +209,20 @@ def backend_maintenance_thread_entry_point(db_path: str):
                     for it in webhook_loggers:
                         it.emit_text(msg)
 
-            # NOTE: Do a backup of the DB (SQLite only) and generate reports
-            if db_path.startswith('sqlite://') and not db_path.startswith('sqlite://:'):
-                backup_db_path: str = base.backup_file_path(pathlib.Path(db_path.replace('sqlite:///', '')), next_day_date)
-                with db.open_database(db_path) as engine:
+                # NOTE: Do a backup of the DB (SQLite only) and generate reports
+                backup_db_path: str = base.backup_file_path(pathlib.Path(db_file_path), next_day_date)
+                with db.open_database(db_url) as engine:
                     with db.connection(engine) as conn:
                         def progress(status: int, remaining: int, total: int):
                             log.info(f"Progress callback: status={status}, remaining={remaining}, total={total}")
 
                         dest_sql_conn = sqlite3.connect(backup_db_path)
                         try:
-                            log.info(f"Backing up: {db_path} → {backup_db_path}")
+                            log.info(f"Backing up: {db_url} → {backup_db_path}")
                             conn.connection.backup(dest_sql_conn, pages=128, progress=progress, sleep=1)
                             log.info("Backup completed successfully!")
                             for it in webhook_loggers:
-                                it.emit_text(f'Backed up DB successfully {db_path} -> {backup_db_path}')
+                                it.emit_text(f'Backed up DB successfully {db_url} -> {backup_db_path}')
                         except KeyboardInterrupt:
                             log.warning("Backup cancelled by user.")
                         except Exception:
@@ -429,7 +427,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         _                                          = ini_parser.read(filenames=result.ini_path)
 
         base_section: configparser.SectionProxy    = ini_parser['base']
-        result.db_path                             = base_section.get(option='db_path',                     fallback='')
+        result.db_url                              = base_section.get(option='db_url',                      fallback='')
         result.log_path                            = base_section.get(option='log_path',                    fallback='')
         result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
         result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
@@ -499,7 +497,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
                 err.msg_list.append('Platform Google was enabled but [google] section is missing')
 
     # NOTE: Get arguments from environment, they override .INI values if specified
-    result.db_path                        = os.getenv('SESH_PRO_BACKEND_DB_PATH',                            result.db_path)
+    result.db_url                         = os.getenv('SESH_PRO_BACKEND_DB_URL',                             result.db_url)
     result.log_path                       = os.getenv('SESH_PRO_BACKEND_LOG_PATH',                           result.log_path)
     result.print_tables                   = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
     result.dev                            = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
@@ -586,7 +584,7 @@ def entry_point() -> flask.Flask:
     parsed_args: ParsedArgs   = parse_args(err);
     base.UNSAFE_LOGGING       = parsed_args.unsafe_logging
     base.DEV_BACKEND_MODE     = parsed_args.dev
-    base.DB_PATH              = parsed_args.db_path
+    base.DB_URL               = parsed_args.db_url
     base.PLATFORM_TESTING_ENV = parsed_args.platform_testing_env
     if err.has():
         log.error(f'Failed to startup, invalid configuration options:\n  ' + '\n  '.join(err.msg_list))
@@ -616,13 +614,6 @@ def entry_point() -> flask.Flask:
             platform_google.log.addHandler(webhook_logger)
             platform_apple.log.addHandler(webhook_logger)
 
-    # NOTE: Ensure the path is setup for writing the database
-    try:
-        pathlib.Path(parsed_args.db_path).parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        log.error(f'Failed to create directory for {parsed_args.db_path}: {e}')
-        sys.exit(1)
-
     # NOTE: A developer backend generates a deterministic key for testing purposes
     backend_key: nacl.signing.SigningKey | None = None
     if parsed_args.dev:
@@ -630,7 +621,7 @@ def entry_point() -> flask.Flask:
         backend_key                    = nacl.signing.SigningKey(DEV_BACKEND_DETERMINISTIC_SKEY)
 
     # NOTE: Open the DB (create tables if necessary)
-    engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url=parsed_args.db_path, err=err, backend_key=backend_key)
+    engine: sqlalchemy.engine.Engine | None = backend.bootstrap_db(database_url=parsed_args.db_url, err=err, backend_key=backend_key)
     if err.has():
         log.error(err.build())
         sys.exit(1)
@@ -644,7 +635,7 @@ def entry_point() -> flask.Flask:
                     "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
         # NOTE: Dump some startup diagnostics
-        info_string: str = backend.db_info_string(conn=conn, db_path=parsed_args.db_path, err=err)
+        info_string: str = backend.db_info_string(conn=conn, db_url=parsed_args.db_url, err=err)
         if len(err.msg_list) > 0:
             log.error(f"{err.msg_list}")
             sys.exit(1)
@@ -779,7 +770,7 @@ def entry_point() -> flask.Flask:
         startup_log += f'  Features:\n'
         if len(parsed_args.ini_path) > 0:
             startup_log += f'    Config .INI file loaded: {parsed_args.ini_path}\n'
-        startup_log += f'    DB loaded from: {parsed_args.db_path}\n'
+        startup_log += f'    DB loaded from: {parsed_args.db_url}\n'
         if len(parsed_args.log_path):
             startup_log += f'    Logging to: {parsed_args.log_path}\n'
         else:
@@ -859,11 +850,11 @@ def entry_point() -> flask.Flask:
         # to clean the DB and race at UTC 00:00 to do so. We just make sure to do
         # that operation over an atomic transaction and allow exactly one process
         # out of the N available to actually clean the DB. The rest will no-op.
-        thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_path,))
+        thread = threading.Thread(target=backend_maintenance_thread_entry_point, args=(parsed_args.db_url,))
         thread.start()
 
         # NOTE: Add flask to our global logger
-        result: flask.Flask = server.init(testing_mode=False, database_url=parsed_args.db_path, server_x25519_skey=runtime_row.backend_key.to_curve25519_private_key())
+        result: flask.Flask = server.init(testing_mode=False, database_url=parsed_args.db_url, server_x25519_skey=runtime_row.backend_key.to_curve25519_private_key())
         if 1:
             _ = result.logger.addHandler(console_logger)
             if file_logger:

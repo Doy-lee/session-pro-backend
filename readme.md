@@ -43,20 +43,18 @@ layer and replies a response, if any.
 ## Options
 
 Customise the runtime behaviour of the server by specifying a .INI file via the environment variable
-`SESH_PRO_BACKEND_DB_PATH=<path/to/ini/file.ini>` (due to some UWSGI restrictions).
+`SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>` (due to some UWSGI restrictions).
 
 Note Python's implementation does not use quotes fro strings.
 
 ```ini
 [base]
-# Set the location to store the database of the backend to
-db_path                      = <path/to/db>
-
-# If you wish to use an in-memory database or shared in-memory database (i.e.
-# 'file::memory') this flag must be set. See:
-#
-#   https://www.sqlite.org/inmemorydb.html
-db_path_is_uri               = false
+# Set the database URL for the backend. Supported formats:
+#   - SQLite (in-memory):     sqlite://  or  sqlite:///:memory:
+#   - SQLite (relative path): sqlite:///path/to/database.db  (3 slashes, relative to CWD)
+#   - SQLite (absolute path): sqlite:////absolute/path/to/database.db  (4 slashes)
+#   - PostgreSQL:             postgresql://user:password@host:port/database
+db_url                       = sqlite:///backend.db
 
 # Set the path where logs and rotated logs will be stored (omit this value/line to opt out of
 # logging to a file completely)
@@ -273,8 +271,7 @@ can only be specified as an environment variable.
 SESH_PRO_BACKEND_INI_PATH=<path/to/ini/file.ini>
 
 # For the following options, see the .INI section for more information
-SESH_PRO_BACKEND_DB_PATH                 = <...>
-SESH_PRO_BACKEND_DB_PATH_IS_URI          = [0|1]
+SESH_PRO_BACKEND_DB_URL                  = <...>
 SESH_PRO_BACKEND_LOG_PATH                = <...>
 SESH_PRO_BACKEND_PRINT_TABLES            = [0|1]
 SESH_PRO_BACKEND_DEV                     = [0|1]
@@ -308,7 +305,7 @@ python -m flask --app main run --debug
 
 # Another example: as above, but on port 8888 with the DB stored in the current
 # working directory at ./data/pro.db
-SESH_PRO_BACKEND_DB_PATH=./data/pro.db python -m flask --app main run --debug --port 8888
+SESH_PRO_BACKEND_DB_URL=sqlite:///data/pro.db python -m flask --app main run --debug --port 8888
 
 # Run the tests (with printing test names and test output to stdout enabled)
 python -m pytest test.py --verbose --capture=no
@@ -358,7 +355,7 @@ python -m pytest test.py --verbose --capture=no
 #
 # Process name prefix (--procname-prefix) assigns a human readable name as the
 # process name in the kernel.
-SESH_PRO_BACKEND_DB_PATH=./data/pro.db \
+SESH_PRO_BACKEND_DB_URL=sqlite:///data/pro.db \
   uwsgi \
   --http 127.0.0.1:8000 \
   --master \

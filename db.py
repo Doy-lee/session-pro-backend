@@ -70,6 +70,12 @@ def transaction_from_engine(engine: sqlalchemy.engine.Engine):
 @contextlib.contextmanager
 def open_database(database_url: str) -> collections.abc.Iterator[sqlalchemy.engine.Engine]:
     """
+    Args:
+        database_url: For SQLite:
+            - In-memory: sqlite://  or  sqlite:///:memory:
+            - Relative path: sqlite:///path/to/database.db  (3 slashes, relative to CWD)
+            - Absolute path: sqlite:////absolute/path/to/database.db  (4 slashes)
+            For PostgreSQL: postgresql://user:password@host:port/database
     Example:
         with open_database('sqlite:///my.db') as engine:
             with connection(engine) as conn:
@@ -132,6 +138,14 @@ def set_db_version(conn: sqlalchemy.engine.Connection, engine: sqlalchemy.engine
     else:
         _ = conn.execute(sqlalchemy.text(f'PRAGMA user_version = {version}'))
 
+def file_path_from_sqlite_url(db_url: str) -> str | None:
+    prefix = 'sqlite://'
+    result = None
+    if db_url.startswith(f'{prefix}/') and not db_url.startswith(f'{prefix}/:'):
+        result = db_url[len(prefix):]
+        if '?' in result:
+            result = result.split('?')[0]
+    return result
 
 def retry_on_database_locked(callback: typing.Callable[[], typing.Any], log: logging.Logger, error_prefix: str) -> None:
     # Execute a callback, retrying on SQLite database locked errors.

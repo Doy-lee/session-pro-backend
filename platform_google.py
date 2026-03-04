@@ -152,7 +152,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     sorted_msg_list: list[SortedMessage] = []
 
     # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
-    with db.open_database(base.DB_PATH) as engine:
+    with db.open_database(base.DB_URL) as engine:
         with db.connection(engine) as conn:
             with db.transaction(conn) as tx:
                 db_it: collections.abc.Iterator[backend.GoogleUnhandledNotificationIterator] = backend.google_get_unhandled_notification_iterator(tx)
@@ -245,7 +245,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                             # notification is handled or not is going to be bypassed and cause state
                             # inconsistencies.
                             def add_notification_id_to_db():
-                                with db.open_database(base.DB_PATH) as engine:
+                                with db.open_database(base.DB_URL) as engine:
                                     with db.connection(engine) as conn:
                                         with db.transaction(conn) as tx:
                                             if backend.google_notification_message_id_is_in_db_tx(tx, message_id).present == False:
@@ -293,7 +293,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                         # file to mark a message as being done or handled so we check before proceeding.
                         if attempt:
                             try:
-                                with db.open_database(base.DB_PATH) as engine:
+                                with db.open_database(base.DB_URL) as engine:
                                     with db.connection(engine) as conn:
                                         # NOTE: If we try to mutate the database and it's locked, unlike
                                         # before we just set the handled flag to false. This causes the

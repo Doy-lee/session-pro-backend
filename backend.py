@@ -502,7 +502,7 @@ def get_runtime(conn: sqlalchemy.engine.Connection) -> RuntimeRow:
         result = get_runtime_tx(tx)
     return result
 
-def db_info_string(conn: sqlalchemy.engine.Connection, db_path: str, err: base.ErrorSink) -> str:
+def db_info_string(conn: sqlalchemy.engine.Connection, db_url: str, err: base.ErrorSink) -> str:
     unredeemed_payments             = 0
     payments                        = 0
     users                           = 0
@@ -545,12 +545,13 @@ def db_info_string(conn: sqlalchemy.engine.Connection, db_path: str, err: base.E
 
     result = ''
     if len(err.msg_list) == 0:
-        if os.path.exists(db_path):
-            db_size = os.stat(db_path).st_size
+        db_file_path: str | None = db.file_path_from_sqlite_url(db_url)
+        if db_file_path and os.path.exists(db_file_path):
+            db_size = os.stat(db_file_path).st_size
         with db.transaction(conn) as tx:
             runtime: RuntimeRow = get_runtime_tx(tx)
         lines: list[str] = []
-        lines.append('  DB:                               {} ({})'.format(db_path, base.format_bytes(db_size)))
+        lines.append('  DB:                               {} ({})'.format(db_url, base.format_bytes(db_size)))
         lines.append('  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}'.format(users, revocations, payments, unredeemed_payments))
         lines.append('  U.Errors/Google/Apple Notifs.:    {}/{}/{}'.format(user_errors, google_notification_history, apple_notification_uuid_history))
         lines.append('  Gen Index:                        {}'.format(runtime.gen_index))
