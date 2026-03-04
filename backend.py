@@ -488,7 +488,7 @@ def get_runtime_tx(tx: db.SQLTransaction) -> RuntimeRow:
     if row:
         result.gen_index                                 = row[0]
         result.gen_index_salt                            = row[1]
-        backend_key: bytes                               = row[2]
+        backend_key: bytes                               = bytes(row[2])
         assert len(backend_key)                         == len(ZERO_BYTES32)
         result.backend_key                               = nacl.signing.SigningKey(backend_key)
         result.last_expire_unix_ts_ms                    = row[3]
@@ -612,7 +612,7 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
                     _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
                     _ = db.query(tx.conn, ("ALTER TABLE users ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
                     for row in db.query(tx.conn, ('SELECT master_pkey FROM users')).fetchall():
-                        master_pkey: bytes                  = row[0]
+                        master_pkey: bytes                  = bytes(row[0])
                         google_obfuscated_account_id: bytes = google_obfuscated_account_id_from_master_pkey(nacl.signing.VerifyKey(master_pkey))
                         _ = db.query(tx.conn, 'UPDATE users SET google_obfuscated_account_id = :g WHERE master_pkey = :m', g=google_obfuscated_account_id, m=master_pkey)
                 db_version += 1
@@ -763,7 +763,7 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
     for row in  rows:
         result                          = True
         id:                int          = row[0]
-        master_pkey_bytes: bytes | None = row[1]
+        master_pkey_bytes: bytes | None = bytes(row[1]) if row[1] is not None else None
         expiry_unix_ts_ms: int          = row[2]
 
         # NOTE: A payment will not have a master pkey associated with it if the user hasn't
@@ -1274,7 +1274,7 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
 
     # NOTE: Update the user's expiry to the latest known expiry
     if row and row[0]:
-        master_pkey_bytes: bytes = row[0]
+        master_pkey_bytes: bytes = bytes(row[0])
         _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
 
     if result == False:
@@ -1453,7 +1453,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
 
     master_pkey_record = typing.cast(sqlalchemy.Row[tuple[bytes]] | None, result_set.fetchone())
     if master_pkey_record and master_pkey_record[0]:
-        master_pkey   = nacl.signing.VerifyKey(master_pkey_record[0])
+        master_pkey   = nacl.signing.VerifyKey(bytes(master_pkey_record[0]))
         user: UserRow = get_user_from_sql_tx(tx, master_pkey)
         if user.found:
             auto_redeem_deadline_unix_ts_ms: int = 0
@@ -1903,7 +1903,7 @@ def expire_by_unix_ts_ms(tx: db.SQLTransaction, unix_ts_ms: int) -> set[nacl.sig
     result: set[nacl.signing.VerifyKey] = set()
     for row in result_set:
         if row[0]:
-            master_pkey = nacl.signing.VerifyKey(row[0])
+            master_pkey = nacl.signing.VerifyKey(bytes(row[0]))
             result.add(master_pkey)
     return result
 
@@ -2181,7 +2181,7 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
                  tx_id    = payment_tx.apple_tx_id)
 
         if row:
-            master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, row[0]))
+            master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, bytes(row[0])))
             _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, master_pkey)
 
     return success
