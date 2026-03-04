@@ -2016,7 +2016,7 @@ def expire_payments_revocations_and_users(conn: sqlalchemy.engine.Connection, un
             result.apple_notification_uuid_history    = apple_result.rowcount
 
             # Delete expired google notifications (but only if they have been handled)
-            google_result                      = db.query(tx.conn, '''DELETE FROM google_notification_history WHERE :ts >= expiry_unix_ts_ms AND handled = 1''', ts=unix_ts_ms)
+            google_result                      = db.query(tx.conn, '''DELETE FROM google_notification_history WHERE :ts >= expiry_unix_ts_ms AND handled = TRUE''', ts=unix_ts_ms)
             result.google_notification_history = google_result.rowcount
 
         result.already_done_by_someone_else = already_done_by_someone_else
@@ -2236,7 +2236,7 @@ def google_set_notification_handled(tx: db.SQLTransaction, message_id: int, dele
     return result
 
 def google_get_unhandled_notification_iterator(tx: db.SQLTransaction) -> collections.abc.Iterator[GoogleUnhandledNotificationIterator]:
-    result_set = db.query(tx.conn, ('SELECT message_id, payload, expiry_unix_ts_ms FROM google_notification_history WHERE handled = 0'))
+    result_set = db.query(tx.conn, ('SELECT message_id, payload, expiry_unix_ts_ms FROM google_notification_history WHERE NOT handled'))
     return typing.cast(collections.abc.Iterator[GoogleUnhandledNotificationIterator], result_set)
 
 def google_notification_message_id_is_in_db_tx(tx: db.SQLTransaction, message_id: int) -> GoogleNotificationMessageIDInDB:
@@ -2410,7 +2410,7 @@ def generate_report_rows(conn: sqlalchemy.engine.Connection, period: ReportPerio
             tx_conn           = tx.conn,
             period            = period,
             unix_ts_ms_column = "expiry_unix_ts_ms",
-            where_clause      = f"auto_renewing = 0 AND status != {base.PaymentStatus.Revoked.value}",
+            where_clause      = f"NOT auto_renewing AND status != {base.PaymentStatus.Revoked.value}",
         )
 
         active_users: dict[str, int] = fetch_active_users(tx.conn, period)
