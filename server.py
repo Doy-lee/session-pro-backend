@@ -241,6 +241,8 @@ API
           expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the Session Pro Proof identified
                              by its `gen_index_hash` should be rejected until.
           gen_index_hash:    32 byte hash of the Session Pro proof that has been revoked.
+        retry_in_s: 4 byte integer of the recommended time in seconds that the client should wait to
+                    send the request for the pro-revocation list again to avoid being throttled.
 
     Examples
       Request
@@ -253,6 +255,7 @@ API
             { "expiry_unix_ts_ms": 1758412800000, "gen_index_hash": "3ab824a62d2b6004449d44962383294a5e6e833d6ed491930fbba726a2569c68" }
           ],
           "ticket": 1,
+          "retry_in_s": 86400,
           "version": 0
         },
         "status": 0
@@ -848,12 +851,12 @@ def get_pro_revocations():
     # Parse and validate values
     if version != 0:
         err.msg_list.append(f'Unrecognised version passed: {version}')
+
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     revocation_items:  list[dict[str, str | int]] = []
-    revocation_ticket: int = 0
-    begin             = time.perf_counter()
+    revocation_ticket: int                        = 0
     with get_db(flask.current_app) as engine:
         with db.connection(engine) as conn:
             with db.transaction(conn) as tx:
@@ -871,13 +874,15 @@ def get_pro_revocations():
                             'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
                             'gen_index_hash':    gen_index_hash.hex(),
                         })
-            duration = time.perf_counter() - begin
-            flask.current_app.logger.debug(f'Get pro revocations DB operations completed in: {duration}')
-
             if len(err.msg_list):
                 return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
 
-            result = make_success_response(dict_result={'version': 0, 'ticket': revocation_ticket, 'items': revocation_items})
+            result = make_success_response(dict_result={
+                'version':    version,
+                'ticket':     revocation_ticket,
+                'items':      revocation_items,
+                'retry_in_s': base.SECONDS_IN_DAY,
+            })
             return result
 
 @flask_blueprint.route(FLASK_ROUTE_GET_PRO_DETAILS, methods=['POST'])
