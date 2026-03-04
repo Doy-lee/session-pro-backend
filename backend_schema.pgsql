@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS payments (
     google_order_id                   TEXT,
 
     refund_requested_unix_ts_ms       BIGINT  NOT     NULL DEFAULT 0,
-    google_obfuscated_account_id      BYTEA   NOT     NULL DEFAULT '\x' CHECK (octet_length(google_obfuscated_account_id) = 32),
+    google_obfuscated_account_id      BYTEA           NULL CHECK (octet_length(google_obfuscated_account_id) = 32),
     apple_app_account_token           TEXT    NOT     NULL DEFAULT ''
 );
 
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
     grace_period_duration_ms     BIGINT  NOT     NULL,
     auto_renewing                BOOLEAN NOT     NULL DEFAULT FALSE,
     refund_requested_unix_ts_ms  BIGINT  NOT     NULL DEFAULT 0,
-    google_obfuscated_account_id BYTEA   NOT     NULL DEFAULT '\x' CHECK (octet_length(google_obfuscated_account_id) = 32),
+    google_obfuscated_account_id BYTEA           NULL CHECK (octet_length(google_obfuscated_account_id) = 32),
     apple_app_account_token      TEXT    NOT     NULL DEFAULT ''
 );
 
@@ -80,11 +80,13 @@ END;
 ' LANGUAGE plpgsql;
 
 -- Triggers for revocation_ticket
+DROP TRIGGER IF EXISTS increment_revocation_ticket_after_insert ON revocations;
 CREATE TRIGGER increment_revocation_ticket_after_insert
     AFTER INSERT ON revocations
     FOR EACH ROW
     EXECUTE FUNCTION increment_revocation_ticket();
 
+DROP TRIGGER IF EXISTS increment_revocation_ticket_after_delete ON revocations;
 CREATE TRIGGER increment_revocation_ticket_after_delete
     AFTER DELETE ON revocations
     FOR EACH ROW
@@ -92,8 +94,9 @@ CREATE TRIGGER increment_revocation_ticket_after_delete
 
 -- Schema version tracking (used instead of SQLite PRAGMA user_version)
 CREATE TABLE IF NOT EXISTS schema_version (
+    id SERIAL PRIMARY KEY,
     version INTEGER NOT NULL DEFAULT 0
 );
 
--- Initialize version if not exists
+-- Initialize version if not exists (only one row allowed due to PK)
 INSERT INTO schema_version (version) VALUES (0) ON CONFLICT DO NOTHING;
