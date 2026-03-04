@@ -6,3 +6,4 @@ google-cloud-pubsub==2.31.1
 google-api-python-client==2.181.0
 pytest
 sqlalchemy==2.0.47
+psycopg2-binary

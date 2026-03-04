@@ -776,7 +776,7 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
         # NOTE: Mark all the payments as revoked
         _ = db.query(tx.conn, '''
         UPDATE payments
-        SET    status = :status, revoked_unix_ts_ms = :revoked_ts, auto_renewing = 0
+        SET    status = :status, revoked_unix_ts_ms = :revoked_ts, auto_renewing = FALSE
         WHERE  id = :id AND (status = :unredeemed OR status = :redeemed)
         ''',
             status=int(base.PaymentStatus.Revoked.value),
@@ -1231,7 +1231,7 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
         if len(sql_set_fields):
             sql_set_fields += ', '
         sql_set_fields += 'auto_renewing = :auto_renewing'
-        kwparams['auto_renewing'] = int(auto_renewing)
+        kwparams['auto_renewing'] = auto_renewing
 
     if grace_period_duration_ms is not None:
         if len(sql_set_fields):
@@ -1353,7 +1353,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   platform_refund_expiry_unix_ts_ms,
                   0,                              # non-null grace period
                   unredeemed_unix_ts_ms,
-                  1,                              # auto_renewing is enabled by default until notified otherwise by Google
+                  True,                           # auto_renewing is enabled by default until notified otherwise by Google
                   0,                              # refund request unix ts ms
                   platform_obfuscated_account_id, # google_obfuscated_account_id
                   '',                             # apple_app_account_token - empty for google
@@ -1409,9 +1409,9 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   platform_refund_expiry_unix_ts_ms,
                   0,                              # non-null grace period
                   unredeemed_unix_ts_ms,
-                  1,                              # auto_renewing is enabled by default until notified otherwise by Apple
+                  True,                           # auto_renewing is enabled by default until notified otherwise by Apple
                   0,                              # refund request unix ts ms
-                  b'',                            # google_obfuscated_account_id - empty for apple
+                  None,                           # google_obfuscated_account_id - empty for apple
                   platform_obfuscated_account_id, # apple_app_account_token
             ])})
 
@@ -2231,7 +2231,7 @@ def google_set_notification_handled(tx: db.SQLTransaction, message_id: int, dele
     if delete:
         rows = db.query(tx.conn, ('''DELETE FROM google_notification_history WHERE message_id = :message_id'''), message_id=message_id)
     else:
-        rows = db.query(tx.conn, ('''UPDATE google_notification_history SET handled = 1, payload = NULL WHERE message_id = :message_id'''), message_id=message_id)
+        rows = db.query(tx.conn, ('''UPDATE google_notification_history SET handled = TRUE, payload = NULL WHERE message_id = :message_id'''), message_id=message_id)
     result: bool = rows.rowcount >= 1
     return result
 
