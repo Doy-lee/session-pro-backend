@@ -72,12 +72,12 @@ CREATE TABLE IF NOT EXISTS user_errors (
 
 -- Trigger function for revocation_ticket
 CREATE OR REPLACE FUNCTION increment_revocation_ticket()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS '
 BEGIN
     UPDATE runtime SET revocation_ticket = revocation_ticket + 1;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+' LANGUAGE plpgsql;
 
 -- Triggers for revocation_ticket
 CREATE TRIGGER increment_revocation_ticket_after_insert
