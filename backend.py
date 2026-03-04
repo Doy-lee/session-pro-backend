@@ -586,16 +586,15 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
             else:
                 schema_path = os.path.join(os.path.dirname(__file__), 'backend_schema.sql')
 
-            # Execute schema file using executescript for SQLite, or execute each statement for PostgreSQL
+            # Execute schema file
             with open(schema_path, 'r') as f:
                 schema_sql = f.read()
 
             if db.is_postgres(result):
-                for statement in schema_sql.split(';'):
-                    statement = statement.strip()
-                    if statement:
-                        _ = db.query(tx.conn, statement)
+                # PostgreSQL: Execute entire schema as one block to handle functions with semicolons
+                _ = db.query(tx.conn, schema_sql)
             else:
+                # SQLite: Use executescript for multi-statement execution
                 tx.conn.connection.executescript(schema_sql)
 
             # NOTE: Version migration
