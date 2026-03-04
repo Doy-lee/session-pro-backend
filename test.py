@@ -830,9 +830,11 @@ def test_server_add_payment_flow(monkeypatch):
             result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
             result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
             result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+            result_retry_in_s: int = base.json_dict_require_int(d=result_json, key='retry_in_s', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_version == 0
             assert result_ticket  == 0
+            assert result_retry_in_s == base.SECONDS_IN_DAY
             curr_revocation_ticket = result_ticket
 
             # Check that the server returned an empty revocation list, we no longer revoke the old
@@ -889,9 +891,11 @@ def test_server_add_payment_flow(monkeypatch):
                 result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
                 result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
                 result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+                result_retry_in_s: int = base.json_dict_require_int(d=result_json, key='retry_in_s', err=err)
                 assert len(err.msg_list) == 0, '{err.msg_list}'
                 assert result_version == 0
                 assert result_ticket  == 1
+                assert result_retry_in_s == base.SECONDS_IN_DAY
                 curr_revocation_ticket = result_ticket
                 assert len(result_items) == 1
 
@@ -939,9 +943,11 @@ def test_server_add_payment_flow(monkeypatch):
             result_version: int = base.json_dict_require_int(d=result_json, key='version', err=err)
             result_items        = base.json_dict_require_array(d=result_json, key='items', err=err)
             result_ticket:  int = base.json_dict_require_int(d=result_json, key='ticket',  err=err)
+            result_retry_in_s: int = base.json_dict_require_int(d=result_json, key='retry_in_s', err=err)
             assert len(err.msg_list) == 0, '{err.msg_list}'
             assert result_version == 0, f'Response was: {json.dumps(response_json, indent=2)}'
             assert result_ticket  == 1, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert result_retry_in_s == base.SECONDS_IN_DAY
 
             # List should be empty because we passed in the newest revocation
             # ticket. There are no changes to the revocation list so the backend
