@@ -139,9 +139,9 @@ def set_db_version(conn: sqlalchemy.engine.Connection, engine: sqlalchemy.engine
         _ = conn.execute(sqlalchemy.text(f'PRAGMA user_version = {version}'))
 
 def file_path_from_sqlite_url(db_url: str) -> str | None:
-    prefix = 'sqlite://'
+    prefix = 'sqlite:///'
     result = None
-    if db_url.startswith(f'{prefix}/') and not db_url.startswith(f'{prefix}/:'):
+    if db_url.startswith(f'{prefix}') and not db_url.startswith(f'{prefix}/:'):
         result = db_url[len(prefix):]
         if '?' in result:
             result = result.split('?')[0]

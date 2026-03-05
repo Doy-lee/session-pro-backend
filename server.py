@@ -750,19 +750,18 @@ def add_pro_payment():
         with get_db(flask.current_app) as engine:
             backend.assert_backend_is_in_dev_mode(engine.connect())
 
-        if 'dev_plan' in get.json:
-            failed = False
-            try:
-                dev_add_pro_payment_args.plan = base.ProPlan.from_string(typing.cast(str, get.json['dev_plan']))
-            except Exception as e:
-                failed = True
-            if failed or dev_add_pro_payment_args.plan == base.ProPlan.Nil:
-                err.msg_list.append('dev_plan must be specified as "OneMonth", "ThreeMonth" or "TwelveMonth", received: {get.json["dev_plan"]}')
+        plan_key     = 'dev_plan'
+        duration_key = 'dev_duration_ms'
+        if plan_key in get.json:
+            plan_value = get.json[plan_key]
+            dev_add_pro_payment_args.plan = base.ProPlan.from_string(typing.cast(str, plan_value))
+            if dev_add_pro_payment_args.plan == None or dev_add_pro_payment_args.plan == base.ProPlan.Nil:
+                err.msg_list.append(f'{plan_key} must be specified as "OneMonth", "ThreeMonth" or "TwelveMonth", received: {plan_value}')
 
-        if 'dev_duration_ms' in get.json:
-            dev_add_pro_payment_args.duration_ms = base.json_dict_require_int(d=get.json, key='duration_ms', err=err)
-            if dev_add_pro_payment_args.duration_ms < 0 or dev_add_pro_payment_args.duration_ms > (base.SECONDS_IN_YEAR * 1000):
-                err.msg_list.append(f'dev_duration_ms must be > 0 and <= year ind duration, received: {dev_add_pro_payment_args.duration_ms/1000}s')
+        if duration_key in get.json:
+            dev_add_pro_payment_args.duration_ms = base.json_dict_require_int(d=get.json, key=duration_key, err=err)
+            if dev_add_pro_payment_args.duration_ms <= 0 or dev_add_pro_payment_args.duration_ms > (base.SECONDS_IN_YEAR * 1000):
+                err.msg_list.append(f'{duration_key} must be > 0 and <= year ind duration, received: {dev_add_pro_payment_args.duration_ms/1000}s')
 
         dev_add_pro_payment_args.auto_renewing = base.json_dict_optional_bool(d=get.json,
                                                                               key='dev_auto_renewing',

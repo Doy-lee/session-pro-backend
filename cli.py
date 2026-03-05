@@ -24,8 +24,8 @@ BRIEF_EPILOG = """
 QUICK START EXAMPLES:
   dev-payment         add       --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
   dev-payment         refund    --url <url> --provider <google|apple> [options]
-  user-error          set       <provider>:<id>=<true|false>[,...]                          (requires --config)
-  user-error          delete    <provider>:<id>[,...]                                       (requires --config)
+  user-error          set       <provider>:<payment-id>=<true|false>[,...]                  (requires --config)
+  user-error          delete    <provider>:<payment-id>[,...]                               (requires --config)
   google-notification handle    <msgid>[,...]                                               (requires --config)
   google-notification delete    <msgid>[,...]                                               (requires --config)
   google-notification list                                                                  (requires --config)
@@ -67,7 +67,7 @@ COMMAND FORMATS DETAILED:
     Required:
       --url <url>               Server URL
       --provider <google|apple> Payment provider
-      --master-key <hex>        64-char hex master private key
+      --master-pkey <hex>       64-char hex master public key
       --payment-token <token>   Google: payment token (required for Google)
       --order-id <id>           Google: order ID (required for Google)
       --tx-id <id>              Apple: transaction ID (required for Apple)
@@ -713,7 +713,6 @@ def cmd_db_info(args: argparse.Namespace) -> int:
             with db.connection(engine) as conn:
                 err = base.ErrorSink()
                 info_str = backend.db_info_string(conn=conn, db_url=config.db_url, err=err)
-
                 if err.has():
                     print(f"ERROR: Failed to get DB info: {err.msg_list}", file=sys.stderr)
                     return 1
@@ -926,23 +925,18 @@ def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    # Check if --help-full was requested
-    use_full_help = '--help-full' in sys.argv
-
     parser = argparse.ArgumentParser(
-        description='Session Pro Backend CLI - Database operations tool',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=DETAILED_EPILOG if use_full_help else BRIEF_EPILOG,
-        add_help=False  # We'll add help manually to control the position
+        description     = 'Session Pro Backend CLI',
+        formatter_class = argparse.RawDescriptionHelpFormatter,
+        epilog          = DETAILED_EPILOG if '--help-full' in sys.argv else BRIEF_EPILOG,
+        add_help        = False
     )
 
     # Global options
-    _                       = parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
-                       help='Show brief help message and exit')
-    _                       = parser.add_argument('--help-full', action='help', default=argparse.SUPPRESS,
-                       help='Show detailed help with full documentation')
-    _                       = parser.add_argument('--config', '-c', required=False, help='Path to config.ini file (required for DB operations)')
-    _                       = parser.add_argument('--dry-run', '-n', action='store_true', help='Show what would be done without executing')
+    _                       = parser.add_argument('--help',      action='help',       default=argparse.SUPPRESS, help='Show brief help message and exit')
+    _                       = parser.add_argument('--help-full', action='help',       default=argparse.SUPPRESS, help='Show detailed help with full documentation')
+    _                       = parser.add_argument('--config',                         required=False,            help='Path to config.ini file (required for DB operations)')
+    _                       = parser.add_argument('--dry-run',   action='store_true',                            help='Show what would be done without executing')
 
     subparsers              = parser.add_subparsers(dest='command', help='Available commands')
 
@@ -963,7 +957,7 @@ def main() -> int:
     dev_payment_refund      = dev_payment_subparsers.add_parser('refund',                                                    help='Mark a DEV payment as refund requested')
     _                       = dev_payment_refund.add_argument('--url',           required=True,                              help='Server URL')
     _                       = dev_payment_refund.add_argument('--provider',      required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = dev_payment_refund.add_argument('--master-key',    required=True,                              help='64-char hex master private key')
+    _                       = dev_payment_refund.add_argument('--master-pkey',   required=True,                              help='64-char hex master public key')
     _                       = dev_payment_refund.add_argument('--payment-token',                                             help='Google: payment token (required for Google)')
     _                       = dev_payment_refund.add_argument('--order-id',                                                  help='Google: order ID (required for Google)')
     _                       = dev_payment_refund.add_argument('--tx-id',                                                     help='Apple: transaction ID (required for Apple)')
@@ -971,54 +965,54 @@ def main() -> int:
     _                       = dev_payment_refund.add_argument('--version',       type=int,      default=0,                   help='Request version (default: 0)')
 
     # User error commands
-    user_error_parser       = subparsers.add_parser('user-error', help='Manage user errors')
+    user_error_parser       = subparsers.add_parser('user-error',                         help='Manage user errors')
     user_error_subparsers   = user_error_parser.add_subparsers(dest='user_error_command', help='User error subcommands')
 
-    user_error_set          = user_error_subparsers.add_parser('set', help='Set user errors (format: <provider>:<id>=true|false,...)')
-    _                       = user_error_set.add_argument('items', help='Comma-separated list of errors')
+    user_error_set          = user_error_subparsers.add_parser('set',                     help='Set user errors (format: <provider>:<payment-id>=true|false,...)')
+    _                       = user_error_set.add_argument('items',                        help='Comma-separated list of errors')
 
-    user_error_delete       = user_error_subparsers.add_parser('delete', help='Delete user errors (format: <provider>:<id>,...)')
-    _                       = user_error_delete.add_argument('items', help='Comma-separated list of payment IDs')
+    user_error_delete       = user_error_subparsers.add_parser('delete',                  help='Delete user errors (format: <provider>:<payment-id>,...)')
+    _                       = user_error_delete.add_argument('items',                     help='Comma-separated list of payment IDs')
 
     # Google notification commands
-    google_notif_parser     = subparsers.add_parser('google-notification', help='Manage the list of Google notifications received in the database')
+    google_notif_parser     = subparsers.add_parser('google-notification',                    help='Manage the list of Google notifications received in the database')
     google_notif_subparsers = google_notif_parser.add_subparsers(dest='google_notif_command', help='Google notification subcommands')
 
-    google_notif_handle     = google_notif_subparsers.add_parser('handle', help='Mark notifications as handled')
-    _                       = google_notif_handle.add_argument('items', help='Comma-separated list of message IDs')
+    google_notif_handle     = google_notif_subparsers.add_parser('handle',                    help='Mark notifications as handled')
+    _                       = google_notif_handle.add_argument('items',                       help='Comma-separated list of message IDs')
 
-    google_notif_delete     = google_notif_subparsers.add_parser('delete', help='Delete notifications')
-    _                       = google_notif_delete.add_argument('items', help='Comma-separated list of message IDs')
-    _                       = google_notif_subparsers.add_parser('list', help='List unhandled notifications')
+    google_notif_delete     = google_notif_subparsers.add_parser('delete',                    help='Delete notifications')
+    _                       = google_notif_delete.add_argument('items',                       help='Comma-separated list of message IDs')
+    _                       = google_notif_subparsers.add_parser('list',                      help='List unhandled notifications')
 
     # Revoke commands
-    revoke_parser           = subparsers.add_parser('revoke', help='Manage revocations')
+    revoke_parser           = subparsers.add_parser('revoke',                     help='Manage revocations')
     revoke_subparsers       = revoke_parser.add_subparsers(dest='revoke_command', help='Revocation subcommands')
 
-    revoke_list             = revoke_subparsers.add_parser('list', help='List revocable payments for a user')
-    _                       = revoke_list.add_argument('master_pkey', help='Master public key (64 hex chars)')
+    revoke_list             = revoke_subparsers.add_parser('list',                help='List revocable payments for a user')
+    _                       = revoke_list.add_argument('master_pkey',             help='Master public key (64 hex chars)')
 
-    revoke_delete           = revoke_subparsers.add_parser('delete', help='Delete revocation entry')
-    _                       = revoke_delete.add_argument('master_pkey', help='Master public key (64 hex chars)')
+    revoke_delete           = revoke_subparsers.add_parser('delete',              help='Delete revocation entry')
+    _                       = revoke_delete.add_argument('master_pkey',           help='Master public key (64 hex chars)')
 
-    revoke_timestamp        = revoke_subparsers.add_parser('timestamp', help='Set revocation with timestamp')
-    _                       = revoke_timestamp.add_argument('master_pkey', help='Master public key (64 hex chars)')
-    _                       = revoke_timestamp.add_argument('unix_ts_s', type=int, help='Unix timestamp in seconds')
+    revoke_timestamp        = revoke_subparsers.add_parser('timestamp',           help='Set revocation with timestamp')
+    _                       = revoke_timestamp.add_argument('master_pkey',        help='Master public key (64 hex chars)')
+    _                       = revoke_timestamp.add_argument('unix_ts_s',          type=int, help='Unix timestamp in seconds')
 
     # Report commands
-    report_parser           = subparsers.add_parser('report', help='Generate reports')
+    report_parser           = subparsers.add_parser('report',                     help='Generate reports')
     report_subparsers       = report_parser.add_subparsers(dest='report_command', help='Report subcommands')
 
-    report_generate         = report_subparsers.add_parser('generate', help='Generate a report')
-    _                       = report_generate.add_argument('period', choices=['daily', 'weekly', 'monthly'], help='Report period')
-    _                       = report_generate.add_argument('--format', choices=['human', 'csv'], default='human', help='Report format')
-    _                       = report_generate.add_argument('--count', type=int, default=7, help='Number of periods to report')
+    report_generate         = report_subparsers.add_parser('generate',                                                            help='Generate a report')
+    _                       = report_generate.add_argument('period',   choices=['daily', 'weekly',  'monthly'],                   help='Report period')
+    _                       = report_generate.add_argument('--format', choices=['human', 'csv'],                 default='human', help='Report format')
+    _                       = report_generate.add_argument('--count',  type=int,                                 default=7,       help='Number of periods to report')
 
     # DB commands
-    db_parser               = subparsers.add_parser('db', help='Database operations')
+    db_parser               = subparsers.add_parser('db',                 help='Database operations')
     db_subparsers           = db_parser.add_subparsers(dest='db_command', help='Database subcommands')
-    _                       = db_subparsers.add_parser('info', help='Show database info')
-    _                       = db_subparsers.add_parser('print', help='Print all tables')
+    _                       = db_subparsers.add_parser('info',            help='Show database info')
+    _                       = db_subparsers.add_parser('print',           help='Print all tables')
 
     args = parser.parse_args()
 

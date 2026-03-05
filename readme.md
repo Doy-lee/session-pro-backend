@@ -46,21 +46,15 @@ layer and replies a response, if any.
 
 ```
 [base]
-# Set the location to store the database of the backend to
-db_path                      = <path/to/db>
-
-# If you wish to use an in-memory database or shared in-memory database (i.e.
-# 'file::memory') this flag must be set. See:
-#
-#   https://www.sqlite.org/inmemorydb.html
-db_path_is_uri               = false
+# Database connection URL. Supports SQLite and PostgreSQL:
+#   SQLite:     sqlite:///path/to/database.db    (relative path, 3 slashes)
+#               sqlite:////absolute/path/db.db   (absolute path, 4 slashes)
+#   PostgreSQL: postgresql://user:password@host:port/database
+db_url                       = sqlite:///backend.db
 
 # Set the path where logs and rotated logs will be stored (omit this value/line to opt out of
 # logging to a file completely)
 log_path                     = <path/to/log>
-
-# Pretty print the contents of the tables in the database to standard out and exit
-print_tables                 = false
 
 # Start the server in developer mode, this is most likely only interesting if
 # you are developing locally. If the the DB hasn't been bootstrapped yet, this
@@ -243,3 +237,39 @@ SESH_PRO_BACKEND_DB_URL=sqlite:///data/pro.db \
   --worker-reload-mercy=3 \
   --procname-prefix \"SESH Pro Backend \"
 ```
+
+## Command Line Interface
+
+The `cli.py` tool provides a command-line to query and manipulate the database.
+
+```bash
+# User error management (requires --config)
+python cli.py --config config.ini user-error set "1:token123=true"
+python cli.py --config config.ini user-error delete "1:token123"
+
+# Google notification management (requires --config)
+python cli.py --config config.ini google-notification handle "12345"
+python cli.py --config config.ini google-notification delete "12345"
+python cli.py --config config.ini google-notification list
+
+# Revocation management (requires --config)
+python cli.py --config config.ini revoke list 0xabcd...
+python cli.py --config config.ini revoke delete 0xabcd...
+python cli.py --config config.ini revoke timestamp 0xabcd... 1741170600
+
+# Report generation (requires --config)
+python cli.py --config config.ini report generate daily --count 7
+python cli.py --config config.ini report generate weekly --format csv
+
+# Database inspection (requires --config)
+python cli.py --config config.ini db info
+python cli.py --config config.ini db print
+
+# Development payment operations (no --config required)
+python cli.py dev-payment add --url http://localhost:8000 --provider google --dev-plan 1M
+python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-key abcdef... --payment-token tok123 --order-id DEV.abc123
+```
+
+Run `python cli.py --help` for full command documentation. Use `--help-full` for detailed
+format specifications and examples.
+

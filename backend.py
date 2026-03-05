@@ -31,8 +31,8 @@ assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
 @dataclasses.dataclass
 class DevAddProPaymentArgs:
-    plan:         base.ProPlan = base.ProPlan.OneMonth
-    duration_ms:  int          = base.MILLISECONDS_IN_DAY
+    plan:          base.ProPlan = base.ProPlan.OneMonth
+    duration_ms:   int          = base.MILLISECONDS_IN_DAY
     auto_renewing: bool         = False
 
 class SetRevocationResult(enum.StrEnum):
@@ -559,8 +559,10 @@ def db_info_string(conn: sqlalchemy.engine.Connection, db_url: str, err: base.Er
         db_file_path: str | None = db.file_path_from_sqlite_url(db_url)
         if db_file_path and os.path.exists(db_file_path):
             db_size = os.stat(db_file_path).st_size
+
         with db.transaction(conn) as tx:
             runtime: RuntimeRow = get_runtime_tx(tx)
+
         lines: list[str] = []
         lines.append('  DB:                               {} ({})'.format(db_url, base.format_bytes(db_size)))
         lines.append('  Users/Revocs/Payments/Unredeemed: {}/{}/{}/{}'.format(users, revocations, payments, unredeemed_payments))
@@ -572,14 +574,7 @@ def db_info_string(conn: sqlalchemy.engine.Connection, db_url: str, err: base.Er
     return result
 
 def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signing.SigningKey | None = None) -> sqlalchemy.engine.Engine | None:
-    """
-    Opens a database and bootstraps/migrates schema if needed.
-    Args:
-        database_url: Full database URL (e.g., 'sqlite:///path/to/db.db' or 'postgresql://user:pass@host/db')
-                     Caller is responsible for providing the correct URL scheme.
-        backend_key: Optional backend signing key for initialization
-        err: Error sink for collecting error messages
-    """
+    """ Opens a database and bootstraps/migrates schema if needed. """
     conn:   sqlalchemy.engine.Connection | None = None
     result: sqlalchemy.engine.Engine     | None = None
     try:
@@ -632,7 +627,7 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
             if db_version == 6:
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
                 if not db.is_postgres(result):
-                    _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB NOT NULL DEFAULT X''"))
+                    _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB"))
                     _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
                 db_version += 1
                 db.set_db_version(tx.conn, result, db_version)

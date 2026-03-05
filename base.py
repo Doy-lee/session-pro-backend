@@ -97,22 +97,21 @@ class PaymentStatus(enum.IntEnum):
     Revoked    = 4
 
 class ProPlan(enum.Enum):
+    """Universal Pro Plan Identifier.
+    Enum is stored as an int in the database, existing entries must not be reordered or changed.
     """
-    Universal Pro Plan Identifier.
-    This enum is stored as an int in the database, existing entries must
-    not be reordered or changed.
-    """
-    Nil             = 0
-    OneMonth        = 1
-    ThreeMonth      = 2
-    TwelveMonth     = 3
+    Nil         = 0
+    OneMonth    = 1
+    ThreeMonth  = 2
+    TwelveMonth = 3
 
     @classmethod
     def from_string(cls, val: str):
-        try:
-            return cls[val.upper()]
-        except KeyError:
-            raise ValueError(f"'{val}' is not a valid {cls.__name__}")
+        val_lower = val.lower()
+        for it in ProPlan:
+            if it.name.lower() == val_lower:
+                return it
+        return None
 
 class LogFormatter(logging.Formatter):
     @typing_extensions.override
