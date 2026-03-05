@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
 """
-Command Line Interface for Session Pro Backend.
-
-Provides a clean CLI for database operations that were previously only available
-via awkward environment variable invocation through the Flask app.
-
-Usage:
-    python cli.py --config config.ini <command> [options] [args...]
-
-Examples:
-    python cli.py --config config.ini user-error set "1:token123=true"
-    python cli.py --config config.ini google-notification handle "12345,67890"
-    python cli.py --config config.ini revoke list 0xabcd...
-    python cli.py --config config.ini report daily --count 7
-    python cli.py --config config.ini db info
+Command Line Interface for manipulating the Session Pro Backend database like adding revocations,
+flushing historical notifications received, generating reports e.t.c
 """
 
 import argparse
@@ -33,38 +21,24 @@ import db
 
 # Epilog definitions
 BRIEF_EPILOG = """
-GLOBAL OPTIONS:
-  --config, -c       Path to config.ini file (required for DB operations)
-  --dry-run, -n      Preview what would be done without executing changes
-  --help-full        Show detailed help with full documentation
-
-COMMANDS:
+QUICK START EXAMPLES:
   dev-payment         add       --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
   dev-payment         refund    --url <url> --provider <google|apple> [options]
-  user-error          set       <provider>:<id>=<true|false>[,...]
-  user-error          delete    <provider>:<id>[,...]
-  google-notification handle    <msgid>[,...]
-  google-notification delete    <msgid>[,...]
-  google-notification list
-  revoke              list      <master_pkey_hex>
-  revoke              delete    <master_pkey_hex>
-  revoke              timestamp <master_pkey_hex> <unix_ts_s>
-  report              generate  <daily|weekly|monthly> [--format <human|csv>] [--count <n>]
-  db                  info
-  db                  print
-
-DRY RUN EXAMPLES:
-  python cli.py --config config.ini --dry-run user-error set "1:token123=true"
-  python cli.py --config config.ini --dry-run revoke delete aaaa...aaaa
+  user-error          set       <provider>:<id>=<true|false>[,...]                          (requires --config)
+  user-error          delete    <provider>:<id>[,...]                                       (requires --config)
+  google-notification handle    <msgid>[,...]                                               (requires --config)
+  google-notification delete    <msgid>[,...]                                               (requires --config)
+  google-notification list                                                                  (requires --config)
+  revoke              list      <master_pkey_hex>                                           (requires --config)
+  revoke              delete    <master_pkey_hex>                                           (requires --config)
+  revoke              timestamp <master_pkey_hex> <unix_ts_s>                               (requires --config)
+  report              generate  <daily|weekly|monthly> [--format <human|csv>] [--count <n>] (requires --config)
+  db                  info                                                                  (requires --config)
+  db                  print                                                                 (requires --config)
 """
 
 DETAILED_EPILOG = """
-GLOBAL OPTIONS:
-  --config, -c       Path to config.ini file
-  --dry-run, -n      Preview what would be done without executing changes
-  --help-full        Show detailed help with full documentation
-
-COMMAND FORMATS:
+COMMAND FORMATS DETAILED:
   dev-payment add --url <url> --provider <google|apple> [options]
     Add a development payment to a Session Pro backend server (requires backend to be running in dev mode).
 
@@ -106,7 +80,7 @@ COMMAND FORMATS:
       python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-key abcdef... --payment-token tok123 --order-id DEV.abc123
       python cli.py dev-payment refund --url http://localhost:8000 --provider apple --master-key abcdef... --tx-id DEV.xyz789
 
-  user-error set "<provider>:<payment_id>=<flag>[,...]"
+  user-error set "<provider>:<payment_id>=<flag>[,...]" (requires --config)
     A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
     in the DB on startup. This value must be of the format
 
@@ -134,14 +108,14 @@ COMMAND FORMATS:
       python cli.py --config config.ini user-error set "1:abc123token=true"
       python cli.py --config config.ini user-error set "1:token1=true,1:token2=true,2:apple1=false"
 
-  user-error delete "<provider>:<payment_id>[,...]"
+  user-error delete "<provider>:<payment_id>[,...]" (requires --config)
     Same format as 'set' but only deletes (no =true/false)
 
     Examples:
       python cli.py --config config.ini user-error delete "1:abc123token"
       python cli.py --config config.ini user-error delete "1:token1,1:token2,2:apple1"
 
-  google-notification handle "<message_id>[,...]"
+  google-notification handle "<message_id>[,...]" (requires --config)
     A ',' delimited string of message IDs to instruct the DB to mark the specified rows as handled
     from the google notification history table in the DB on startup.
 
@@ -166,13 +140,13 @@ COMMAND FORMATS:
       python cli.py --config config.ini google-notification handle "12345"
       python cli.py --config config.ini google-notification handle "12345,67890,11111"
 
-  google-notification delete "<message_id>[,...]"
+  google-notification delete "<message_id>[,...]" (requires --config)
     Same format as 'handle', but deletes the notification entirely
 
-  google-notification list
+  google-notification list (requires --config)
     Lists all unhandled notifications with message_id and expiry
 
-  revoke list <master_pkey_hex>
+  revoke list <master_pkey_hex> (requires --config)
     Shows all revocable payments for the user
 
     Options:
@@ -182,7 +156,7 @@ COMMAND FORMATS:
       python cli.py --config config.ini revoke list aaaa...aaaa
       python cli.py --config config.ini revoke list 0xaaaa...aaaa
 
-  revoke delete <master_pkey_hex>
+  revoke delete <master_pkey_hex> (requires --config)
     Removes the revocation entry for the specified master public key
 
     The current generation index associated with the pkey will be looked up and the corresponding
@@ -190,7 +164,7 @@ COMMAND FORMATS:
     the user's master public key mapping has been pruned because the user was inactive for example)
     then no action is taken.
 
-  revoke timestamp <master_pkey_hex> <unix_ts_s>
+  revoke timestamp <master_pkey_hex> <unix_ts_s> (requires --config)
     Add or update the time (or create a new revocation entry if it doesn't exist) at which the
     revocation item will be effective until.
 
@@ -204,7 +178,7 @@ COMMAND FORMATS:
     Examples:
       python cli.py --config config.ini revoke timestamp aaaa...aaaa 1741170600
 
-  report generate <period> [--format <format>] [--count <n>]
+  report generate <period> [--format <format>] [--count <n>] (requires --config)
     Generate a report of the payments for the given report type, period and optional count. The
     fields of the report are defined as follows:
 
@@ -224,10 +198,10 @@ COMMAND FORMATS:
       python cli.py --config config.ini report generate weekly --format csv --count 4
       python cli.py --config config.ini report generate monthly --count 3
 
-  db info
+  db info (requires --config)
     Shows database statistics and info
 
-  db print
+  db print (requires --config)
     Prints all tables to stdout (for debugging)
 """
 
@@ -1007,7 +981,7 @@ def main() -> int:
     _                       = user_error_delete.add_argument('items', help='Comma-separated list of payment IDs')
 
     # Google notification commands
-    google_notif_parser     = subparsers.add_parser('google-notification', help='Manage Google notifications')
+    google_notif_parser     = subparsers.add_parser('google-notification', help='Manage the list of Google notifications received in the database')
     google_notif_subparsers = google_notif_parser.add_subparsers(dest='google_notif_command', help='Google notification subcommands')
 
     google_notif_handle     = google_notif_subparsers.add_parser('handle', help='Mark notifications as handled')
