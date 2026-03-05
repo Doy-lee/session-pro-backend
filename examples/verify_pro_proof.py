@@ -82,7 +82,7 @@ if 1:
         assert len(pubkey)      == 32, "Invalid public key size"
         try:
             verify_key = VerifyKey(pubkey)
-            verify_key.verify(hash_result, signature=sig)
+            _ = verify_key.verify(hash_result, signature=sig)
             print("Signature valid: True")
         except BadSignatureError:
             print("Signature valid: False")

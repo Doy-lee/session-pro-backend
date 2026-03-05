@@ -2,14 +2,7 @@
 Main entry point for the Session Pro Backend. This runs the necessary setup code like initialising
 the DB and responding startup arguments before handing over control-flow to Flask.
 
-This application has command line options that must be specified as environment variables because
-this application runs directly as a flask app (in a dev environment) and it also can be served over
-UWSGI for a production use-case.
-
-We've designed the backend primarily for UWSGI which mounts the flask app with no possibility to
-forward command line arguments to the underlying application. Thus we cannot use argparse or flask's
-@click.options as there's no way to specify them in the UWSGI manifest hence the design decision to
-use environment variables.
+For database operations (user errors, revocations, reports, etc.), use the cli.py tool instead.
 '''
 
 import pathlib
@@ -26,7 +19,6 @@ import logging.handlers
 import configparser
 import sys
 import dataclasses
-import enum
 import traceback
 import sqlite3
 import sqlalchemy.engine
@@ -44,41 +36,6 @@ google_thread_context                                     = platform_google.Thre
 webhook_loggers: list[base.AsyncSessionWebhookLogHandler] = []
 
 @dataclasses.dataclass
-class SetUserErrorItem:
-    payment_provider: base.PaymentProvider
-    payment_id:       str
-    set_flag:         bool
-
-class SetGoogleNotificationCommand(enum.Enum):
-    Handled = 0
-    Delete  = 1
-
-@dataclasses.dataclass
-class SetGoogleNotificationItem:
-    message_id: int
-    command:    SetGoogleNotificationCommand
-
-@dataclasses.dataclass
-class GenerateReportArgs:
-    type:   backend.ReportType
-    period: backend.ReportPeriod
-    count:  int | None = None
-
-class RevokeCommand(enum.Enum):
-    Nil       = 0
-    Delete    = 1
-    List      = 2
-    Timestamp = 3
-
-@dataclasses.dataclass
-class RevokeItem:
-    parsed_bytes: bytes         = b'' # Master public key to revoke
-    command:      RevokeCommand = RevokeCommand.Nil
-    # Timestamp to assign to the revocation item at which it will be effective until. Only used
-    # if `command` is `Timestamp` otherwise ignored
-    unix_ts_s:    int           = 0
-
-@dataclasses.dataclass
 class SessionWebhook:
     enabled: bool = False
     url:     str  = ''
@@ -89,7 +46,6 @@ class ParsedArgs:
     ini_path:                            str                             = ''
     db_url:                              str                             = ''
     log_path:                            str                             = ''
-    print_tables:                        bool                            = False
     dev:                                 bool                            = False
     unsafe_logging:                      bool                            = False
 
@@ -97,12 +53,6 @@ class ParsedArgs:
     with_platform_google:                bool                            = False
 
     platform_testing_env:                bool                            = False
-
-    set_user_errors:                     str                             = ''
-    parsed_set_user_errors:              list[SetUserErrorItem]          = dataclasses.field(default_factory=list)
-
-    set_google_notification:             str                             = ''
-    parsed_set_google_notification:      list[SetGoogleNotificationItem] = dataclasses.field(default_factory=list)
 
     session_webhooks:                    list[SessionWebhook]            = dataclasses.field(default_factory=list)
 
@@ -123,12 +73,6 @@ class ParsedArgs:
     google_project_name:                 str                             = ''
     google_subscription_name:            str                             = ''
     google_subscription_product_id:      str                             = ''
-
-    generate_report_args:                str                             = ''
-    parsed_generate_report_args:         GenerateReportArgs | None       = None
-
-    revoke_args:                         str                             = ''
-    parsed_revoke_items:                 list[RevokeItem]                = dataclasses.field(default_factory=list)
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_maintenance_thread
@@ -252,168 +196,6 @@ def backend_maintenance_thread_entry_point(db_url: str):
                                 if len(monthly_report_str):
                                     it.emit_text(monthly_report_str)
 
-def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[SetUserErrorItem]:
-    """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
-    result: list[SetUserErrorItem] = []
-    if len(arg) == 0:
-        return result
-
-    for item in arg.split(','):
-        item = item.strip()
-        if ':' not in item or '=' not in item:
-            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<payment_provider>:<payment_id>=[true|false]'.")
-            return result
-        payment_provider_str, remainder = item.split(':', 1)
-        payment_id, set_flag_str        = remainder.split('=', 1)
-        payment_provider_str            = payment_provider_str.strip()
-        payment_provider                = base.PaymentProvider.Nil
-
-        try:
-            payment_provider = base.PaymentProvider(int(payment_provider_str))
-        except Exception:
-            err.msg_list.append(f'Failed to parse payment provider ({payment_provider_str}) for item {item} (arg was: {arg})')
-            return result
-
-        set_flag = False
-        if set_flag_str.lower() == 'true':
-            set_flag = True
-        elif set_flag_str.lower() == 'false':
-            set_flag = False
-        else:
-            err.msg_list.append(f'Failed to parse set flag ({set_flag_str}) for item {item} (arg was: {arg})')
-            return result
-
-        result.append(SetUserErrorItem(payment_provider=payment_provider, payment_id=payment_id, set_flag=set_flag))
-    return result
-
-def parse_set_google_notification_item_arg(arg: str, err: base.ErrorSink) -> list[SetGoogleNotificationItem]:
-    """Parse a comma-separated string of errors into a list of (payment_provider, payment_id) tuples."""
-    result: list[SetGoogleNotificationItem] = []
-    if len(arg) == 0:
-        return result
-
-    for item in arg.split(','):
-        item = item.strip()
-        if '=' not in item:
-            err.msg_list.append(f"Invalid format for delete user error: '{item}'. Expected '<message_id>=[handled|delete]'.")
-            return result
-        message_id_str, command_str = item.split('=', 1)
-
-        command = SetGoogleNotificationCommand.Handled
-        if command_str.lower() == SetGoogleNotificationCommand.Handled.name.lower():
-            command = SetGoogleNotificationCommand.Handled
-        elif command_str.lower() == SetGoogleNotificationCommand.Delete.name.lower():
-            command = SetGoogleNotificationCommand.Delete
-        else:
-            err.msg_list.append(f'Failed to parse command ({command_str}) (arg was: {arg})')
-            return result
-
-        message_id: int = 0
-        try:
-            message_id = int(message_id_str)
-        except Exception:
-            err.msg_list.append(f'Failed to parse message_id as integer ({message_id}) (arg was: {arg})')
-            return result
-
-        result.append(SetGoogleNotificationItem(message_id=message_id, command=command))
-    return result
-
-def parse_generate_report_args(arg: str, err: base.ErrorSink) -> GenerateReportArgs | None:
-    """Parse a <report type>:<report_period>[:<count>] string into the GenerateReportArgs result"""
-    result: GenerateReportArgs | None = None
-    if len(arg) == 0:
-        return result
-
-    parts = arg.split(":")
-    if len(parts) < 2:
-        err.msg_list.append(f"Failed to parse report argument, expected at least 2 arguments delimited by ':' (had {len(parts)}) (arg was: {arg})")
-        return result
-
-    parsed_type: backend.ReportType = backend.ReportType.Human
-    if parts[0].lower() == backend.ReportType.Human.name.lower():
-        parsed_type = backend.ReportType.Human
-    elif parts[0].lower() == backend.ReportType.CSV.name.lower():
-        parsed_type = backend.ReportType.CSV
-    else:
-        err.msg_list.append(f'Failed to parse report type ({parts[0]}) (arg was: {arg})')
-        return result
-
-    parsed_period: backend.ReportPeriod = backend.ReportPeriod.Daily
-    if parts[1].lower() == backend.ReportPeriod.Daily.name.lower():
-        parsed_period = backend.ReportPeriod.Daily
-    elif parts[1].lower() == backend.ReportPeriod.Weekly.name.lower():
-        parsed_period = backend.ReportPeriod.Weekly
-    elif parts[1].lower() == backend.ReportPeriod.Monthly.name.lower():
-        parsed_period = backend.ReportPeriod.Monthly
-    else:
-        err.msg_list.append(f'Failed to parse report period ({parts[1]}) (arg was: {arg})')
-        return result
-
-    parsed_count: int | None = None
-    if len(parts) >= 3:
-        try:
-            parsed_count = int(parts[2])
-        except Exception:
-            err.msg_list.append(f'Failed to parse report count ({parts[2]}) (arg was: {arg})')
-            return result
-
-    result = GenerateReportArgs(type=parsed_type, period=parsed_period, count=parsed_count)
-    return result
-
-def parse_revoke_args(arg: str, err: base.ErrorSink) -> list[RevokeItem]:
-    """
-    Parse a <master pkey hex>=[list|delete|<timestamp>],... string into the result
-    """
-    result: list[RevokeItem] = []
-    if len(arg) == 0:
-        return result
-
-    parts = arg.split(",")
-    for index, it in enumerate(parts):
-        splits = it.split("=")
-        if len(splits) != 2:
-            err.msg_list.append(f"Failed to split revoke item ({it}) by '=', should produce 2 splits, received {len(splits)} (arg was: {arg})")
-            return result
-
-        # NOTE: Extract the hex/command
-        hex     = splits[0]
-        command = splits[1]
-
-        # NOTE: Validate the hex
-        if hex.startswith("0x"):
-            hex = hex[2:]
-
-        if len(hex) != 64:
-            err.msg_list.append(f"Failed to parse hex from item #{index} ({hex}) expected 64 hex chars, received {len(hex)} (arg was: {arg})")
-            return result
-
-        hex_bytes: bytes = b''
-        try:
-            hex_bytes = bytes.fromhex(hex)
-        except Exception:
-            err.msg_list.append(f"Failed to parse hex as hex from item #{index} ({hex}) (arg was: {arg}): {traceback.format_exc()}")
-            return result
-
-        # NOTE: Validate the command
-        enum_command   = RevokeCommand.Delete
-        unix_ts_s: int = 0
-        if command.lower() == 'delete':
-            enum_command = RevokeCommand.Delete
-        elif command.lower() == 'list':
-            enum_command = RevokeCommand.List
-        else:
-            try:
-                unix_ts_s    = int(command)
-                enum_command = RevokeCommand.Timestamp
-            except Exception:
-                err.msg_list.append(f"Failed to parse timestamp from item #{index} ({command}) (arg was: {arg}): {traceback.format_exc()}")
-                return result
-
-        result.append(RevokeItem(parsed_bytes=hex_bytes, unix_ts_s=unix_ts_s, command=enum_command))
-
-    return result
-
-
 def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Parse .INI file if present and get arguments for it
     result          = ParsedArgs()
@@ -429,7 +211,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         base_section: configparser.SectionProxy    = ini_parser['base']
         result.db_url                              = base_section.get(option='db_url',                      fallback='')
         result.log_path                            = base_section.get(option='log_path',                    fallback='')
-        result.print_tables                        = base_section.getboolean(option='print_tables',         fallback=False)
         result.dev                                 = base_section.getboolean(option='dev',                  fallback=False)
         result.unsafe_logging                      = base_section.getboolean(option='unsafe_logging',       fallback=False)
 
@@ -437,12 +218,6 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         result.with_platform_google                = base_section.getboolean(option='with_platform_google', fallback=False)
 
         result.platform_testing_env                = base_section.getboolean(option='platform_testing_env', fallback=False)
-
-        result.set_user_errors                     = base_section.get(option='set_user_errors',             fallback='')
-        result.set_google_notification             = base_section.get(option='set_google_notification',     fallback='')
-
-        result.generate_report_args                = base_section.get(option='generate_report',             fallback='')
-        result.revoke_args                         = base_section.get(option='revoke',                      fallback='')
 
         webhook_index = 0
         while True:
@@ -499,23 +274,10 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     # NOTE: Get arguments from environment, they override .INI values if specified
     result.db_url                         = os.getenv('SESH_PRO_BACKEND_DB_URL',                             result.db_url)
     result.log_path                       = os.getenv('SESH_PRO_BACKEND_LOG_PATH',                           result.log_path)
-    result.print_tables                   = base.os_get_boolean_env('SESH_PRO_BACKEND_PRINT_TABLES',         result.print_tables)
     result.dev                            = base.os_get_boolean_env('SESH_PRO_BACKEND_DEV',                  result.dev)
     result.with_platform_apple            = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_APPLE',  result.with_platform_apple)
     result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_WITH_PLATFORM_GOOGLE', result.with_platform_google)
     result.with_platform_google           = base.os_get_boolean_env('SESH_PRO_BACKEND_PLATFORM_TESTING_ENV', result.with_platform_google)
-
-    result.set_user_errors                = os.getenv('SESH_PRO_BACKEND_SET_USER_ERRORS',                    result.set_user_errors)
-    result.parsed_set_user_errors         = parse_set_user_error_arg(result.set_user_errors, err)
-
-    result.set_google_notification        = os.getenv('SESH_PRO_BACKEND_SET_GOOGLE_NOTIFICATION',            result.set_google_notification)
-    result.parsed_set_google_notification = parse_set_google_notification_item_arg(result.set_google_notification, err)
-
-    result.generate_report_args           = os.getenv('SESH_PRO_BACKEND_GENERATE_REPORT',                    result.generate_report_args)
-    result.parsed_generate_report_args    = parse_generate_report_args(result.generate_report_args, err)
-
-    result.revoke_args                    = os.getenv('SESH_PRO_BACKEND_REVOKE',                             result.revoke_args)
-    result.parsed_revoke_items            = parse_revoke_args(result.revoke_args, err)
 
     if result.with_platform_apple:
         if len(result.apple_key_id) == 0:
@@ -638,124 +400,6 @@ def entry_point() -> flask.Flask:
         info_string: str = backend.db_info_string(conn=conn, db_url=parsed_args.db_url, err=err)
         if len(err.msg_list) > 0:
             log.error(f"{err.msg_list}")
-            sys.exit(1)
-
-        # NOTE: Generate a report if requested
-        if parsed_args.parsed_generate_report_args:
-            generate_report_args: GenerateReportArgs      = parsed_args.parsed_generate_report_args
-            report_rows:          list[backend.ReportRow] = backend.generate_report_rows(conn, generate_report_args.period, limit=generate_report_args.count)
-            print(backend.generate_report_str(generate_report_args.period, report_rows, generate_report_args.type))
-            sys.exit(1)
-
-        # NOTE: Do revocation commands if requested
-        if len(parsed_args.parsed_revoke_items):
-            label = ''
-            for index, it in enumerate(parsed_args.parsed_revoke_items):
-                master_pkey = nacl.signing.VerifyKey(it.parsed_bytes)
-
-                if index:
-                    label += f'\n'
-                label += f'  {index:02d} {it.parsed_bytes.hex()}={it.command.name.lower()}'
-
-                with db.transaction(conn) as tx:
-                    match it.command:
-                        case RevokeCommand.Nil: pass
-                        case RevokeCommand.List:
-                            user_and_payments: backend.GetUserAndPayments = backend.get_user_and_payments(tx=tx, master_pkey=master_pkey)
-                            eligible_count = 0
-
-                            list_label = ''
-                            for row in user_and_payments.payments_it:
-                                faux_row_id                 = 0
-                                payment: backend.PaymentRow = backend.payment_row_from_tuple((faux_row_id, *row))
-
-                                plan_label = ''
-                                match payment.plan:
-                                    case base.ProPlan.Nil:         plan_label = '??'
-                                    case base.ProPlan.OneMonth:    plan_label = '1M'
-                                    case base.ProPlan.ThreeMonth:  plan_label = '3M'
-                                    case base.ProPlan.TwelveMonth: plan_label = '12M'
-
-                                payment_id = ''
-                                match payment.payment_provider:
-                                    case base.PaymentProvider.Nil:             pass
-                                    case base.PaymentProvider.GooglePlayStore: payment_id = f'{payment.google_payment_token}-{payment.google_order_id}'
-                                    case base.PaymentProvider.iOSAppStore:     payment_id = f'{payment.apple.original_tx_id}'
-
-                                if payment.status == base.PaymentStatus.Expired or int(time.time() * 1000) >= payment.expiry_unix_ts_ms:
-                                    continue
-
-                                list_label += f'\n    {eligible_count:02d} RevokeID={payment.payment_provider.name}-{payment_id}; Status={payment.status.name}; Plan={plan_label}; Unredeemed={base.readable_unix_ts_ms(payment.unredeemed_unix_ts_ms)}; Expiry={base.readable_unix_ts_ms(payment.expiry_unix_ts_ms)};'
-                                eligible_count += 1
-
-                            label += f' ({eligible_count} revocable payments){list_label}'
-
-                        case RevokeCommand.Delete:
-                            set_result: backend.SetRevocationResult = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=True)
-                            label += f' ({set_result.value.lower()})'
-                        case RevokeCommand.Timestamp:
-                            set_result = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, expiry_unix_ts_ms=it.unix_ts_s * 1000, delete_item=False)
-                            label += f' {base.readable_unix_ts_ms(it.unix_ts_s * 1000)} ({set_result.value.lower()})'
-
-            log.info(f"Executed {len(parsed_args.parsed_revoke_items)} revocation command\n{label}")
-            sys.exit(1)
-
-        # NOTE: Delete user errors if there were some specified
-        if len(parsed_args.parsed_set_user_errors) > 0 or len(parsed_args.parsed_set_google_notification) > 0:
-            if len(parsed_args.parsed_set_user_errors) > 0:
-                count = 0
-                label = ''
-                for index, it in enumerate(parsed_args.parsed_set_user_errors):
-                    if index:
-                        label += f'\n'
-                    label += f'  {index:02d} {it.payment_provider.value}:{it.payment_id} = {it.set_flag}'
-                    if it.set_flag:
-                        error = backend.UserError(provider=it.payment_provider)
-                        if it.payment_provider == base.PaymentProvider.GooglePlayStore:
-                            error.google_payment_token = it.payment_id
-                        else:
-                            assert it.payment_provider == base.PaymentProvider.iOSAppStore
-                            error.apple_original_tx_id = it.payment_id
-
-                        if backend.has_user_error(conn=conn, payment_provider=it.payment_provider, payment_id=it.payment_id):
-                            label += f' (skipped)'
-                        else:
-                            backend.add_user_error(conn=conn, error=error, unix_ts_ms=int(time.time() * 1000))
-                            count +=1
-                            label += f' (added)'
-                    else:
-                        if backend.delete_user_errors(conn=conn, payment_provider=it.payment_provider, payment_id=it.payment_id):
-                            count +=1
-                            label += f' (deleted)'
-                        else:
-                            label += f' (skipped)'
-
-                log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} user errors from the DB\n{label}")
-
-            if len(parsed_args.parsed_set_google_notification) > 0:
-                count = 0
-                label = ''
-                for index, it in enumerate(parsed_args.parsed_set_google_notification):
-                    if index:
-                        label += f'\n'
-                    label += f'  {index:02d} {it.message_id} = {it.command.name}'
-
-                    with db.transaction(conn) as tx:
-                        delete:  bool = it.command == SetGoogleNotificationCommand.Delete
-                        updated: bool = backend.google_set_notification_handled(tx         = tx,
-                                                                                message_id = it.message_id,
-                                                                                delete     = delete)
-                        if updated:
-                            count += 1
-                        else:
-                            label += f' (skipped)'
-
-                log.info(f"Set {count}/{len(parsed_args.parsed_set_user_errors)} google notifications on the DB\n{label}")
-            sys.exit(1)
-
-        # NOTE: Handle printing of the DB to standard out if requested
-        if parsed_args.print_tables:
-            base.print_db_to_stdout(conn)
             sys.exit(1)
 
         startup_log = '\n'
