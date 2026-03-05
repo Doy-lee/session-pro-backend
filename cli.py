@@ -39,6 +39,8 @@ GLOBAL OPTIONS:
   --help-full        Show detailed help with full documentation
 
 COMMANDS:
+  dev-payment         add       --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
+  dev-payment         refund    --url <url> --provider <google|apple> [options]
   user-error          set       <provider>:<id>=<true|false>[,...]
   user-error          delete    <provider>:<id>[,...]
   google-notification handle    <msgid>[,...]
@@ -58,15 +60,75 @@ DRY RUN EXAMPLES:
 
 DETAILED_EPILOG = """
 GLOBAL OPTIONS:
-  --config, -c       Path to config.ini file (required)
+  --config, -c       Path to config.ini file
   --dry-run, -n      Preview what would be done without executing changes
   --help-full        Show detailed help with full documentation
 
 COMMAND FORMATS:
+  dev-payment add --url <url> --provider <google|apple> [options]
+    Add a development payment to a Session Pro backend server (requires backend to be running in dev mode).
+
+    Required:
+      --url <url>               Server URL (e.g., http://localhost:8000)
+      --provider <google|apple> Payment provider
+
+    Optional:
+      --master-key <hex>        64-char hex master private key (generates new if omitted)
+      --rotating-key <hex>      64-char hex rotating private key (generates new if omitted)
+      --version <int>           Request version (default: 0)
+      --dev-plan <1M|3M|12M>    Subscription plan (1M/3M/12M)
+      --dev-duration-ms <ms>    Override duration in milliseconds
+      --dev-auto-renewing       Set auto-renewing to true (default: false)
+
+    The command generates DEV.-prefixed order/tx IDs and sends them to the server.
+    Generated keys are always printed to stdout for reproducibility.
+
+    Examples:
+      python cli.py dev-payment add --url http://localhost:8000 --provider google --dev-plan 1M
+      python cli.py dev-payment add --url http://localhost:8000 --provider apple --dev-plan 3M --master-key abcdef...
+
+  dev-payment refund --url <url> --provider <google|apple> [options]
+    Mark a development payment as refund requested.
+
+    Required:
+      --url <url>               Server URL
+      --provider <google|apple> Payment provider
+      --master-key <hex>        64-char hex master private key
+      --payment-token <token>   Google: payment token (required for Google)
+      --order-id <id>           Google: order ID (required for Google)
+      --tx-id <id>              Apple: transaction ID (required for Apple)
+
+    Optional:
+      --refund-time <ms>        Unix timestamp ms for refund (default: now + 1s)
+      --version <int>           Request version (default: 0)
+
+    Examples:
+      python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-key abcdef... --payment-token tok123 --order-id DEV.abc123
+      python cli.py dev-payment refund --url http://localhost:8000 --provider apple --master-key abcdef... --tx-id DEV.xyz789
+
   user-error set "<provider>:<payment_id>=<flag>[,...]"
-    provider:     Integer (1=Google Play Store, 2=iOS App Store)
-    payment_id:   String (google_payment_token or apple_original_tx_id)
-    flag:         true to add error, false to delete
+    A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
+    in the DB on startup. This value must be of the format
+
+      "<payment_provider integer>:<payment_id>=[true|false], ..."
+
+    For example
+
+      "1:the_google_order_id=true,2:the_apple_order_id=false"
+
+    Which will add the row that has a payment provider of 1 (which corresponds to the Google Play
+    Store) and has a payment ID that matches "google_order_id" to have an error. For the next entry
+    similarly it will set the Apple row to false (e.g. delete the row from the DB)
+
+    This is intended to be used to flush errors from the DB if they are encountered during the
+    handling of payment notifications for a specific user. Platform clients may be using the error
+    table to populate UI that indicates that a user should contact support, hence clearing this
+    value may clear the error prompt for said user.
+
+    Options:
+      provider:     Integer (1=Google Play Store, 2=iOS App Store)
+      payment_id:   String (google_payment_token or apple_original_tx_id)
+      flag:         true to add error, false to delete
 
     Examples:
       python cli.py --config config.ini user-error set "1:abc123token=true"
@@ -80,7 +142,25 @@ COMMAND FORMATS:
       python cli.py --config config.ini user-error delete "1:token1,1:token2,2:apple1"
 
   google-notification handle "<message_id>[,...]"
-    message_id:   Integer (Google's notification message ID)
+    A ',' delimited string of message IDs to instruct the DB to mark the specified rows as handled
+    from the google notification history table in the DB on startup.
+
+      "8392,1234"
+
+    Which will mark the notifications with the ID 8392 and 1234 as to being handled (which stops the
+    backend from trying to process the message). Note that when you handle a message, this also
+    wipes the notification payload from the table (since the backend does not need to parse and
+    process the message anymore).
+
+    Handled notifications will get deleted at the expiry date and persist in the database just incase
+    Google redelivers the notification. Duplicated notifications are de-duped by their message ID.
+
+    This is intended to flush out bad notifications that may be invalid or no longer necessary to
+    process/impossible to process due to inconsistent DB state, otherwise, do not use unless you
+    know the intended consequences! Make a backup of the DB before proceeding!
+
+    Options:
+      message_id: Google's notification message ID (an integer)
 
     Examples:
       python cli.py --config config.ini google-notification handle "12345"
@@ -93,8 +173,10 @@ COMMAND FORMATS:
     Lists all unhandled notifications with message_id and expiry
 
   revoke list <master_pkey_hex>
-    master_pkey_hex:  64-character hex string (optionally prefixed with 0x)
     Shows all revocable payments for the user
+
+    Options:
+      master_pkey_hex:  64-character hex string (optionally prefixed with 0x)
 
     Examples:
       python cli.py --config config.ini revoke list aaaa...aaaa
@@ -103,18 +185,39 @@ COMMAND FORMATS:
   revoke delete <master_pkey_hex>
     Removes the revocation entry for the specified master public key
 
+    The current generation index associated with the pkey will be looked up and the corresponding
+    hash will be revoked. If the user is not known by the database (e.g. the user doesn't exist, or,
+    the user's master public key mapping has been pruned because the user was inactive for example)
+    then no action is taken.
+
   revoke timestamp <master_pkey_hex> <unix_ts_s>
-    master_pkey_hex:  64-character hex string
-    unix_ts_s:        Unix timestamp in seconds (not milliseconds!)
-    Sets when the revocation expires
+    Add or update the time (or create a new revocation entry if it doesn't exist) at which the
+    revocation item will be effective until.
+
+    Note that executing any revoke action increments the global generation index counter to the next
+    value. This is expected behaviour as a side effect of modifying the revocation table.
+
+    Options:
+      master_pkey_hex:  64-character hex string
+      unix_ts_s:        Unix timestamp in seconds (not milliseconds!)
 
     Examples:
       python cli.py --config config.ini revoke timestamp aaaa...aaaa 1741170600
 
   report generate <period> [--format <format>] [--count <n>]
-    period:   daily, weekly, or monthly
-    format:   human (default) or csv
-    count:    Number of periods to report (default: 7)
+    Generate a report of the payments for the given report type, period and optional count. The
+    fields of the report are defined as follows:
+
+      Active Users: Number of Session Pro payments that were still active (i.e. not expired or
+      revoked) at the end of the reporting period.
+
+      Cancelling: Number of Session Pro payments that are scheduled to expire and not be renewed in
+      that reporting period.
+
+    Options:
+      period:   daily, weekly, or monthly
+      format:   human (default) or csv
+      count:    Number of periods to report (default: 7)
 
     Examples:
       python cli.py --config config.ini report generate daily
@@ -228,6 +331,26 @@ class CLIConfig:
     log_path: str = ''
 
 
+def require_config(args: argparse.Namespace) -> CLIConfig:
+    if not args.config:
+        print("ERROR: --config is required for this command", file=sys.stderr)
+        sys.exit(1)
+
+    err = base.ErrorSink()
+    config = load_config(args.config, err)
+
+    if err.has():
+        msg = "ERROR: Failed to load config:\n  " + "\n  ".join(err.msg_list)
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+    if not config.db_url:
+        print("ERROR: No database URL configured in config file", file=sys.stderr)
+        sys.exit(1)
+
+    return config
+
+
 def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
     result = CLIConfig()
 
@@ -256,7 +379,8 @@ def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
     return result
 
 
-def cmd_user_error_set(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_user_error_set(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     items = parse_set_user_error_arg(args.items, err)
 
@@ -312,7 +436,8 @@ def cmd_user_error_set(args: argparse.Namespace, config: CLIConfig, dry_run: boo
         return 1
 
 
-def cmd_user_error_delete(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_user_error_delete(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     items = parse_payment_id_list(args.items, err)
 
@@ -354,7 +479,8 @@ def cmd_user_error_delete(args: argparse.Namespace, config: CLIConfig, dry_run: 
         return 1
 
 
-def cmd_google_notification_handle(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_google_notification_handle(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     message_ids = parse_message_id_list(args.items, err)
 
@@ -397,7 +523,8 @@ def cmd_google_notification_handle(args: argparse.Namespace, config: CLIConfig, 
         return 1
 
 
-def cmd_google_notification_delete(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_google_notification_delete(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     message_ids = parse_message_id_list(args.items, err)
 
@@ -440,7 +567,8 @@ def cmd_google_notification_delete(args: argparse.Namespace, config: CLIConfig, 
         return 1
 
 
-def cmd_google_notification_list(args: argparse.Namespace, config: CLIConfig) -> int:
+def cmd_google_notification_list(args: argparse.Namespace) -> int:
+    config = require_config(args)
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -465,7 +593,8 @@ def cmd_google_notification_list(args: argparse.Namespace, config: CLIConfig) ->
         return 1
 
 
-def cmd_revoke_list(args: argparse.Namespace, config: CLIConfig) -> int:
+def cmd_revoke_list(args: argparse.Namespace) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     master_pkey = parse_master_pkey(args.master_pkey, err)
 
@@ -516,7 +645,8 @@ def cmd_revoke_list(args: argparse.Namespace, config: CLIConfig) -> int:
         print(f"ERROR: Database error: {e}", file=sys.stderr)
         return 1
 
-def cmd_revoke_delete(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_revoke_delete(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     master_pkey = parse_master_pkey(args.master_pkey, err)
 
@@ -545,7 +675,8 @@ def cmd_revoke_delete(args: argparse.Namespace, config: CLIConfig, dry_run: bool
         return 1
 
 
-def cmd_revoke_timestamp(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
+def cmd_revoke_timestamp(args: argparse.Namespace, dry_run: bool) -> int:
+    config = require_config(args)
     err = base.ErrorSink()
     master_pkey = parse_master_pkey(args.master_pkey, err)
 
@@ -574,9 +705,8 @@ def cmd_revoke_timestamp(args: argparse.Namespace, config: CLIConfig, dry_run: b
         print(f"ERROR: Database error: {e}", file=sys.stderr)
         return 1
 
-
-def cmd_report_generate(args: argparse.Namespace, config: CLIConfig) -> int:
-    """Handle report generate command."""
+def cmd_report_generate(args: argparse.Namespace) -> int:
+    config = require_config(args)
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -602,8 +732,8 @@ def cmd_report_generate(args: argparse.Namespace, config: CLIConfig) -> int:
         return 1
 
 
-def cmd_db_info(args: argparse.Namespace, config: CLIConfig) -> int:
-    """Handle db info command."""
+def cmd_db_info(args: argparse.Namespace) -> int:
+    config = require_config(args)
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -622,8 +752,8 @@ def cmd_db_info(args: argparse.Namespace, config: CLIConfig) -> int:
         return 1
 
 
-def cmd_db_print(config: CLIConfig) -> int:
-    """Handle db print command."""
+def cmd_db_print(args: argparse.Namespace) -> int:
+    config = require_config(args)
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -632,6 +762,192 @@ def cmd_db_print(config: CLIConfig) -> int:
 
     except Exception as e:
         print(f"ERROR: Database error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_dev_payment_add(args: argparse.Namespace) -> int:
+    import hashlib
+    import json
+    import os
+    import urllib.request
+    import urllib.error
+
+    # Parse or generate master key
+    if args.master_key:
+        try:
+            master_key = nacl.signing.SigningKey(bytes.fromhex(args.master_key))
+        except Exception as e:
+            print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
+            return 1
+    else:
+        master_key = nacl.signing.SigningKey.generate()
+        print(f'Generated Master SKey: {bytes(master_key).hex()}')
+        print(f'Generated Master PKey: {bytes(master_key.verify_key).hex()}')
+
+    # Parse or generate rotating key
+    if args.rotating_key:
+        try:
+            rotating_key = nacl.signing.SigningKey(bytes.fromhex(args.rotating_key))
+        except Exception as e:
+            print(f"ERROR: Failed to parse rotating key: {e}", file=sys.stderr)
+            return 1
+    else:
+        rotating_key = nacl.signing.SigningKey.generate()
+        print(f'Generated Rotating SKey: {bytes(rotating_key).hex()}')
+        print(f'Generated Rotating PKey: {bytes(rotating_key.verify_key).hex()}')
+
+    # Determine provider enum and build payment_tx
+    if args.provider == 'google':
+        provider_enum = 1
+        google_payment_token = os.urandom(8).hex()
+        google_order_id = 'DEV.' + os.urandom(8).hex()
+
+        # Compute hash
+        hasher = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
+        hasher.update(args.version.to_bytes(length=1, byteorder='little'))
+        hasher.update(bytes(master_key.verify_key))
+        hasher.update(bytes(rotating_key.verify_key))
+        hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
+        hasher.update(google_payment_token.encode('utf-8'))
+        hasher.update(google_order_id.encode('utf-8'))
+
+        payment_tx = {'provider': provider_enum, 'google_payment_token': google_payment_token, 'google_order_id': google_order_id}
+    else:  # apple
+        provider_enum = 2
+        apple_tx_id = 'DEV.' + os.urandom(8).hex()
+
+        # Compute hash
+        hasher = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
+        hasher.update(args.version.to_bytes(length=1, byteorder='little'))
+        hasher.update(bytes(master_key.verify_key))
+        hasher.update(bytes(rotating_key.verify_key))
+        hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
+        hasher.update(apple_tx_id.encode('utf-8'))
+
+        payment_tx = {'provider': provider_enum, 'apple_tx_id': apple_tx_id}
+
+    # Build request
+    request_body = {
+        'version': args.version,
+        'master_pkey': bytes(master_key.verify_key).hex(),
+        'rotating_pkey': bytes(rotating_key.verify_key).hex(),
+        'master_sig': bytes(master_key.sign(hasher.digest()).signature).hex(),
+        'rotating_sig': bytes(rotating_key.sign(hasher.digest()).signature).hex(),
+        'payment_tx': payment_tx
+    }
+
+    # Add dev arguments
+    plan_map = {'1M': 'OneMonth', '3M': 'ThreeMonth', '12M': 'TwelveMonth'}
+    if args.dev_plan:
+        request_body['dev_plan'] = plan_map[args.dev_plan]
+    if args.dev_duration_ms is not None:
+        request_body['dev_duration_ms'] = args.dev_duration_ms
+    if args.dev_auto_renewing:
+        request_body['dev_auto_renewing'] = True
+
+    print(f'\nAdd Pro Payment via {"Google" if args.provider == "google" else "Apple"}')
+    print(f'Request:\n{json.dumps(request_body, indent=1)}')
+
+    # Send request
+    try:
+        request = urllib.request.Request(
+            f'{args.url}/add_pro_payment',
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            print(f"Response: {json.dumps(response_data, indent=1)}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Server returned {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: Failed to connect to {args.url}: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
+    import hashlib
+    import json
+    import time
+    import urllib.request
+    import urllib.error
+    
+    # Parse master key
+    try:
+        master_key = nacl.signing.SigningKey(bytes.fromhex(args.master_key))
+    except Exception as e:
+        print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
+        return 1
+
+    # Determine provider enum and payment details
+    if args.provider == 'google':
+        provider_enum = 1
+        if not args.payment_token or not args.order_id:
+            print("ERROR: --payment-token and --order-id are required for Google", file=sys.stderr)
+            return 1
+        payment_tx = {'provider': provider_enum, 'google_payment_token': args.payment_token, 'google_order_id': args.order_id}
+    else:  # apple
+        provider_enum = 2
+        if not args.tx_id:
+            print("ERROR: --tx-id is required for Apple", file=sys.stderr)
+            return 1
+        payment_tx = {'provider': provider_enum, 'apple_tx_id': args.tx_id}
+
+    # Set refund timestamp
+    if args.refund_time:
+        refund_unix_ts_ms = args.refund_time
+    else:
+        refund_unix_ts_ms = int((time.time() + 1) * 1000)
+
+    now_unix_ts_ms = int(time.time() * 1000)
+
+    # Compute hash
+    hasher = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq_')
+    hasher.update(args.version.to_bytes(length=1, byteorder='little'))
+    hasher.update(bytes(master_key.verify_key))
+    hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(refund_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
+
+    if args.provider == 'google':
+        hasher.update(args.payment_token.encode('utf-8'))
+        hasher.update(args.order_id.encode('utf-8'))
+    else:
+        hasher.update(args.tx_id.encode('utf-8'))
+
+    # Build request
+    request_body = {
+        'version': args.version,
+        'master_pkey': bytes(master_key.verify_key).hex(),
+        'master_sig': bytes(master_key.sign(hasher.digest()).signature).hex(),
+        'unix_ts_ms': now_unix_ts_ms,
+        'refund_requested_unix_ts_ms': refund_unix_ts_ms,
+        'payment_tx': payment_tx
+    }
+
+    print(f'\nSet payment refund requested via {"Google" if args.provider == "google" else "Apple"}')
+    print(f'Request:\n{json.dumps(request_body, indent=1)}')
+
+    # Send request
+    try:
+        request = urllib.request.Request(
+            f'{args.url}/set_payment_refund_requested',
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            print(f"Response: {json.dumps(response_data, indent=1)}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Server returned {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: Failed to connect to {args.url}: {e}", file=sys.stderr)
         return 1
 
 
@@ -651,10 +967,34 @@ def main() -> int:
                        help='Show brief help message and exit')
     _                       = parser.add_argument('--help-full', action='help', default=argparse.SUPPRESS,
                        help='Show detailed help with full documentation')
-    _                       = parser.add_argument('--config', '-c', required=True, help='Path to config.ini file')
+    _                       = parser.add_argument('--config', '-c', required=False, help='Path to config.ini file (required for DB operations)')
     _                       = parser.add_argument('--dry-run', '-n', action='store_true', help='Show what would be done without executing')
 
     subparsers              = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Dev payment commands (no config required)
+    dev_payment_parser      = subparsers.add_parser('dev-payment', help='Development payment operations (no --config required)')
+    dev_payment_subparsers  = dev_payment_parser.add_subparsers(dest='dev_payment_command', help='Dev payment subcommands')
+
+    dev_payment_add         = dev_payment_subparsers.add_parser('add',                                                        help='Add a DEV payment to a development server')
+    _                       = dev_payment_add.add_argument('--url',               required=True,                              help='Server URL (e.g., http://localhost:8000)')
+    _                       = dev_payment_add.add_argument('--provider',          required=True, choices=['google', 'apple'], help='Payment provider')
+    _                       = dev_payment_add.add_argument('--master-key',                                                    help='64-char hex master private key (generates new if omitted)')
+    _                       = dev_payment_add.add_argument('--rotating-key',                                                  help='64-char hex rotating private key (generates new if omitted)')
+    _                       = dev_payment_add.add_argument('--version',           type=int, default=0,                        help='Request version (default: 0)')
+    _                       = dev_payment_add.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
+    _                       = dev_payment_add.add_argument('--dev-duration-ms',   type=int,                                   help='Override duration in milliseconds')
+    _                       = dev_payment_add.add_argument('--dev-auto-renewing', action='store_true',                        help='Set auto-renewing to true (default: false)')
+
+    dev_payment_refund      = dev_payment_subparsers.add_parser('refund',                                                    help='Mark a DEV payment as refund requested')
+    _                       = dev_payment_refund.add_argument('--url',           required=True,                              help='Server URL')
+    _                       = dev_payment_refund.add_argument('--provider',      required=True, choices=['google', 'apple'], help='Payment provider')
+    _                       = dev_payment_refund.add_argument('--master-key',    required=True,                              help='64-char hex master private key')
+    _                       = dev_payment_refund.add_argument('--payment-token',                                             help='Google: payment token (required for Google)')
+    _                       = dev_payment_refund.add_argument('--order-id',                                                  help='Google: order ID (required for Google)')
+    _                       = dev_payment_refund.add_argument('--tx-id',                                                     help='Apple: transaction ID (required for Apple)')
+    _                       = dev_payment_refund.add_argument('--refund-time',   type=int,                                   help='Unix timestamp ms for refund (default: now + 1s)')
+    _                       = dev_payment_refund.add_argument('--version',       type=int,      default=0,                   help='Request version (default: 0)')
 
     # User error commands
     user_error_parser       = subparsers.add_parser('user-error', help='Manage user errors')
@@ -712,64 +1052,61 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    # Load configuration
-    err = base.ErrorSink()
-    config = load_config(args.config, err)
-
-    if err.has():
-        print(f"ERROR: Failed to load config:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
-        return 1
-
-    if len(config.db_url) == 0:
-        print("ERROR: No database URL configured in config file", file=sys.stderr)
-        return 1
-
-    # Dispatch to command handler
+    # Dispatch to command handler - commands that need config will load it themselves
     dry_run = args.dry_run
 
-    if args.command == 'user-error':
+    if args.command == 'dev-payment':
+        if args.dev_payment_command == 'add':
+            return cmd_dev_payment_add(args)
+        elif args.dev_payment_command == 'refund':
+            return cmd_dev_payment_refund(args)
+        else:
+            dev_payment_parser.print_help()
+            return 1
+
+    elif args.command == 'user-error':
         if args.user_error_command == 'set':
-            return cmd_user_error_set(args, config, dry_run)
+            return cmd_user_error_set(args, dry_run)
         elif args.user_error_command == 'delete':
-            return cmd_user_error_delete(args, config, dry_run)
+            return cmd_user_error_delete(args, dry_run)
         else:
             user_error_parser.print_help()
             return 1
 
     elif args.command == 'google-notification':
         if args.google_notif_command == 'handle':
-            return cmd_google_notification_handle(args, config, dry_run)
+            return cmd_google_notification_handle(args, dry_run)
         elif args.google_notif_command == 'delete':
-            return cmd_google_notification_delete(args, config, dry_run)
+            return cmd_google_notification_delete(args, dry_run)
         elif args.google_notif_command == 'list':
-            return cmd_google_notification_list(args, config)
+            return cmd_google_notification_list(args)
         else:
             google_notif_parser.print_help()
             return 1
 
     elif args.command == 'revoke':
         if args.revoke_command == 'list':
-            return cmd_revoke_list(args, config)
+            return cmd_revoke_list(args)
         elif args.revoke_command == 'delete':
-            return cmd_revoke_delete(args, config, dry_run)
+            return cmd_revoke_delete(args, dry_run)
         elif args.revoke_command == 'timestamp':
-            return cmd_revoke_timestamp(args, config, dry_run)
+            return cmd_revoke_timestamp(args, dry_run)
         else:
             revoke_parser.print_help()
             return 1
 
     elif args.command == 'report':
         if args.report_command == 'generate':
-            return cmd_report_generate(args, config)
+            return cmd_report_generate(args)
         else:
             report_parser.print_help()
             return 1
 
     elif args.command == 'db':
         if args.db_command == 'info':
-            return cmd_db_info(args, config)
+            return cmd_db_info(args)
         elif args.db_command == 'print':
-            return cmd_db_print(config)
+            return cmd_db_print(args)
         else:
             db_parser.print_help()
             return 1
@@ -777,7 +1114,5 @@ def main() -> int:
     else:
         parser.print_help()
         return 1
-
-
 if __name__ == '__main__':
     sys.exit(main())
