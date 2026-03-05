@@ -29,6 +29,12 @@ assert len(GENERATE_PROOF_HASH_PERSONALISATION)  == hashlib.blake2b.PERSON_SIZE
 assert len(BUILD_PROOF_HASH_PERSONALISATION)     == hashlib.blake2b.PERSON_SIZE
 assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
+@dataclasses.dataclass
+class DevAddProPaymentArgs:
+    plan:         base.ProPlan = base.ProPlan.OneMonth
+    duration_ms:  int          = base.MILLISECONDS_IN_DAY
+    auto_renewing: bool         = False
+
 class SetRevocationResult(enum.StrEnum):
     UserDoesNotExist = 'User does not exist'
     Skipped          = 'Skipped'
@@ -273,6 +279,11 @@ class AllocatedGenID:
     grace_unix_ts_ms:  int   = 0
     gen_index:         int   = 0
     gen_index_salt:    bytes = b''
+
+def assert_backend_is_in_dev_mode(conn: sqlalchemy.engine.Connection):
+    runtime_row: RuntimeRow = get_runtime(conn)
+    assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
+            "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
 
 def google_obfuscated_account_id_from_master_pkey(pkey: nacl.signing.VerifyKey) -> bytes:
     result: bytes = hashlib.sha256(bytes(pkey)).digest()
@@ -1689,7 +1700,8 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
                     payment_tx:          UserPaymentTransaction,
                     master_sig:          bytes,
                     rotating_sig:        bytes,
-                    err:                 base.ErrorSink) -> RedeemPayment:
+                    err:                 base.ErrorSink,
+                    dev_args:            DevAddProPaymentArgs) -> RedeemPayment:
     """
     unix_ts_ms: The timestamp typically accurate to the current time, used as a frame-of-reference
     to clamp the duration of the proof returned to the user to at most 1 month, also used to mask
@@ -1724,9 +1736,7 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
     # without a valid payment.
     THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool = False
     if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV.') or payment_tx.apple_tx_id.startswith('DEV.')):
-        runtime_row: RuntimeRow = get_runtime(conn)
-        assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
-                "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+        assert_backend_is_in_dev_mode(conn)
 
         # Convert the user payment transaction into the backend native representation. Note that
         # this is testing code for the unit tests so for example for Apple we just provide stub data
@@ -1758,7 +1768,7 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
 
         if not already_exists:
             THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION = True
-            expiry_unix_ts_ms = redeemed_unix_ts_ms + (30 * 60 * 1000)
+            expiry_unix_ts_ms = redeemed_unix_ts_ms + dev_args.duration_ms
 
             platform_obfuscated_account_id: bytes | str = b''
             if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
@@ -1770,19 +1780,17 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
 
             add_unredeemed_payment(conn                              = conn,
                                    payment_tx                        = internal_payment_tx,
-                                   plan                              = base.ProPlan.OneMonth,
+                                   plan                              = dev_args.plan,
                                    unredeemed_unix_ts_ms             = redeemed_unix_ts_ms,
                                    platform_refund_expiry_unix_ts_ms = 0,
                                    platform_obfuscated_account_id    = platform_obfuscated_account_id,
                                    expiry_unix_ts_ms                 = expiry_unix_ts_ms,
                                    err                               = err)
 
-            # Randomly toggle auto-renewal
-            is_fake_auto_renewing = bool(random.getrandbits(1))
             _ = update_payment_renewal_info(conn                     = conn,
                                             payment_tx               = internal_payment_tx,
-                                            grace_period_duration_ms = (60 * 1000) if is_fake_auto_renewing else 0,
-                                            auto_renewing            = is_fake_auto_renewing,
+                                            grace_period_duration_ms = (60 * 1000) if dev_args.auto_renewing else 0,
+                                            auto_renewing            = dev_args.auto_renewing,
                                             err                      = err)
 
     # Verify some of the request parameters

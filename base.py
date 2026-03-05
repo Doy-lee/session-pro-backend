@@ -107,6 +107,13 @@ class ProPlan(enum.Enum):
     ThreeMonth      = 2
     TwelveMonth     = 3
 
+    @classmethod
+    def from_string(cls, val: str):
+        try:
+            return cls[val.upper()]
+        except KeyError:
+            raise ValueError(f"'{val}' is not a valid {cls.__name__}")
+
 class LogFormatter(logging.Formatter):
     @typing_extensions.override
     def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):

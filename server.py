@@ -742,24 +742,52 @@ def add_pro_payment():
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
+    # In dev mode, we allow some additional undocumented parameters to be added to the payload for
+    # development purposes
+    dev_add_pro_payment_args = backend.DevAddProPaymentArgs()
+    if base.DEV_BACKEND_MODE:
+        # NOTE: Sanity check dev mode
+        with get_db(flask.current_app) as engine:
+            backend.assert_backend_is_in_dev_mode(engine.connect())
+
+        if 'dev_plan' in get.json:
+            failed = False
+            try:
+                dev_add_pro_payment_args.plan = base.ProPlan.from_string(typing.cast(str, get.json['dev_plan']))
+            except Exception as e:
+                failed = True
+            if failed or dev_add_pro_payment_args.plan == base.ProPlan.Nil:
+                err.msg_list.append('dev_plan must be specified as "OneMonth", "ThreeMonth" or "TwelveMonth", received: {get.json["dev_plan"]}')
+
+        if 'dev_duration_ms' in get.json:
+            dev_add_pro_payment_args.duration_ms = base.json_dict_require_int(d=get.json, key='duration_ms', err=err)
+            if dev_add_pro_payment_args.duration_ms < 0 or dev_add_pro_payment_args.duration_ms > (base.SECONDS_IN_YEAR * 1000):
+                err.msg_list.append(f'dev_duration_ms must be > 0 and <= year ind duration, received: {dev_add_pro_payment_args.duration_ms/1000}s')
+
+        dev_add_pro_payment_args.auto_renewing = base.json_dict_require_bool(d=get.json, key='auto_renewing', err=err)
+
+        if len(err.msg_list):
+            return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+
     # Submit the payment to the DB
-    redeemed_payment    = backend.RedeemPayment()
+    redeemed_payment         = backend.RedeemPayment()
     with get_db(flask.current_app) as engine:
         with db.connection(engine) as conn:
             runtime             = backend.get_runtime(conn)
             unix_ts_ms          = int(time_now() * 1000)
             redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
-            redeemed_payment = backend.add_pro_payment(conn                = conn,
-                                                       version             = version,
-                                                       signing_key         = runtime.backend_key,
-                                                       unix_ts_ms          = unix_ts_ms,
-                                                       redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                                       master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                       rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                       payment_tx          = user_payment,
-                                                       master_sig          = master_sig_bytes,
-                                                       rotating_sig        = rotating_sig_bytes,
-                                                       err                 = err)
+            redeemed_payment    = backend.add_pro_payment(conn                = conn,
+                                                          version             = version,
+                                                          signing_key         = runtime.backend_key,
+                                                          unix_ts_ms          = unix_ts_ms,
+                                                          redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                          master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                          rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                          payment_tx          = user_payment,
+                                                          master_sig          = master_sig_bytes,
+                                                          rotating_sig        = rotating_sig_bytes,
+                                                          err                 = err,
+                                                          dev_args            = dev_add_pro_payment_args)
 
             if redeemed_payment.status != backend.RedeemPaymentStatus.Success:
                 status = AddProPaymentStatus.Error

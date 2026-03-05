@@ -389,12 +389,10 @@ def entry_point() -> flask.Flask:
         sys.exit(1)
     assert engine
 
-    # NOTE: Sanity check dev mode
     with db.connection(engine) as conn:
-        runtime_row: backend.RuntimeRow = backend.get_runtime(conn)
+        # NOTE: Sanity check dev mode
         if base.DEV_BACKEND_MODE:
-            assert bytes(runtime_row.backend_key) == base.DEV_BACKEND_DETERMINISTIC_SKEY, \
-                    "Sanity check failed, developer mode was enabled but the key in the DB was not a development key. This is a special guard to prevent the user from activating developer mode in the wrong environment"
+            backend.assert_backend_is_in_dev_mode(conn)
 
         # NOTE: Dump some startup diagnostics
         info_string: str = backend.db_info_string(conn=conn, db_url=parsed_args.db_url, err=err)

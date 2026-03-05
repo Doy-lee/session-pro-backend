@@ -30,10 +30,104 @@ import base
 import backend
 import db
 
-@dataclasses.dataclass
-class CLIConfig:
-    db_url:   str = ''
-    log_path: str = ''
+
+# Epilog definitions
+BRIEF_EPILOG = """
+GLOBAL OPTIONS:
+  --config, -c       Path to config.ini file (required for DB operations)
+  --dry-run, -n      Preview what would be done without executing changes
+  --help-full        Show detailed help with full documentation
+
+COMMANDS:
+  user-error          set       <provider>:<id>=<true|false>[,...]
+  user-error          delete    <provider>:<id>[,...]
+  google-notification handle    <msgid>[,...]
+  google-notification delete    <msgid>[,...]
+  google-notification list
+  revoke              list      <master_pkey_hex>
+  revoke              delete    <master_pkey_hex>
+  revoke              timestamp <master_pkey_hex> <unix_ts_s>
+  report              generate  <daily|weekly|monthly> [--format <human|csv>] [--count <n>]
+  db                  info
+  db                  print
+
+DRY RUN EXAMPLES:
+  python cli.py --config config.ini --dry-run user-error set "1:token123=true"
+  python cli.py --config config.ini --dry-run revoke delete aaaa...aaaa
+"""
+
+DETAILED_EPILOG = """
+GLOBAL OPTIONS:
+  --config, -c       Path to config.ini file (required)
+  --dry-run, -n      Preview what would be done without executing changes
+  --help-full        Show detailed help with full documentation
+
+COMMAND FORMATS:
+  user-error set "<provider>:<payment_id>=<flag>[,...]"
+    provider:     Integer (1=Google Play Store, 2=iOS App Store)
+    payment_id:   String (google_payment_token or apple_original_tx_id)
+    flag:         true to add error, false to delete
+
+    Examples:
+      python cli.py --config config.ini user-error set "1:abc123token=true"
+      python cli.py --config config.ini user-error set "1:token1=true,1:token2=true,2:apple1=false"
+
+  user-error delete "<provider>:<payment_id>[,...]"
+    Same format as 'set' but only deletes (no =true/false)
+
+    Examples:
+      python cli.py --config config.ini user-error delete "1:abc123token"
+      python cli.py --config config.ini user-error delete "1:token1,1:token2,2:apple1"
+
+  google-notification handle "<message_id>[,...]"
+    message_id:   Integer (Google's notification message ID)
+
+    Examples:
+      python cli.py --config config.ini google-notification handle "12345"
+      python cli.py --config config.ini google-notification handle "12345,67890,11111"
+
+  google-notification delete "<message_id>[,...]"
+    Same format as 'handle', but deletes the notification entirely
+
+  google-notification list
+    Lists all unhandled notifications with message_id and expiry
+
+  revoke list <master_pkey_hex>
+    master_pkey_hex:  64-character hex string (optionally prefixed with 0x)
+    Shows all revocable payments for the user
+
+    Examples:
+      python cli.py --config config.ini revoke list aaaa...aaaa
+      python cli.py --config config.ini revoke list 0xaaaa...aaaa
+
+  revoke delete <master_pkey_hex>
+    Removes the revocation entry for the specified master public key
+
+  revoke timestamp <master_pkey_hex> <unix_ts_s>
+    master_pkey_hex:  64-character hex string
+    unix_ts_s:        Unix timestamp in seconds (not milliseconds!)
+    Sets when the revocation expires
+
+    Examples:
+      python cli.py --config config.ini revoke timestamp aaaa...aaaa 1741170600
+
+  report generate <period> [--format <format>] [--count <n>]
+    period:   daily, weekly, or monthly
+    format:   human (default) or csv
+    count:    Number of periods to report (default: 7)
+
+    Examples:
+      python cli.py --config config.ini report generate daily
+      python cli.py --config config.ini report generate weekly --format csv --count 4
+      python cli.py --config config.ini report generate monthly --count 3
+
+  db info
+    Shows database statistics and info
+
+  db print
+    Prints all tables to stdout (for debugging)
+"""
+
 
 def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[tuple[base.PaymentProvider, str, bool]]:
     """Parse a comma-separated string of errors into a list of (payment_provider, payment_id, set_flag) tuples."""
@@ -128,9 +222,13 @@ def parse_master_pkey(hex_str: str, err: base.ErrorSink) -> nacl.signing.VerifyK
         return None
 
 
+@dataclasses.dataclass
+class CLIConfig:
+    db_url:   str = ''
+    log_path: str = ''
+
 
 def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
-    """Load configuration from INI file."""
     result = CLIConfig()
 
     if not pathlib.Path(config_path).exists():
@@ -139,7 +237,7 @@ def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
 
     try:
         parser = configparser.ConfigParser()
-        parser.read(config_path)
+        _ = parser.read(config_path)
 
         if 'base' not in parser:
             err.msg_list.append(f'Config file "{config_path}" is missing [base] section')
@@ -149,7 +247,7 @@ def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
         result.db_url = base_section.get('db_url', '')
         result.log_path = base_section.get('log_path', '')
 
-        # NOTE: Allow environment variable override
+        # Allow environment variable override
         result.db_url = os.getenv('SESH_PRO_BACKEND_DB_URL', result.db_url)
 
     except Exception as e:
@@ -418,7 +516,6 @@ def cmd_revoke_list(args: argparse.Namespace, config: CLIConfig) -> int:
         print(f"ERROR: Database error: {e}", file=sys.stderr)
         return 1
 
-
 def cmd_revoke_delete(args: argparse.Namespace, config: CLIConfig, dry_run: bool) -> int:
     err = base.ErrorSink()
     master_pkey = parse_master_pkey(args.master_pkey, err)
@@ -479,6 +576,7 @@ def cmd_revoke_timestamp(args: argparse.Namespace, config: CLIConfig, dry_run: b
 
 
 def cmd_report_generate(args: argparse.Namespace, config: CLIConfig) -> int:
+    """Handle report generate command."""
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -505,6 +603,7 @@ def cmd_report_generate(args: argparse.Namespace, config: CLIConfig) -> int:
 
 
 def cmd_db_info(args: argparse.Namespace, config: CLIConfig) -> int:
+    """Handle db info command."""
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
@@ -524,114 +623,56 @@ def cmd_db_info(args: argparse.Namespace, config: CLIConfig) -> int:
 
 
 def cmd_db_print(config: CLIConfig) -> int:
+    """Handle db print command."""
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
                 base.print_db_to_stdout(conn)
                 return 0
+
     except Exception as e:
         print(f"ERROR: Database error: {e}", file=sys.stderr)
         return 1
 
 
 def main() -> int:
+    # Check if --help-full was requested
+    use_full_help = '--help-full' in sys.argv
+
     parser = argparse.ArgumentParser(
         description='Session Pro Backend CLI - Database operations tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-COMMAND FORMATS:
-
-user-error set "<provider>:<payment_id>=<flag>[,...]"
-  provider:     Integer (1=Google Play Store, 2=iOS App Store)
-  payment_id:   String (google_payment_token or apple_original_tx_id)
-  flag:         true to add error, false to delete
-
-  Examples:
-    python cli.py --config config.ini user-error set "1:abc123token=true"
-    python cli.py --config config.ini user-error set "1:token1=true,1:token2=true,2:apple1=false"
-
-user-error delete "<provider>:<payment_id>[,...]"
-  Same format as 'set' but only deletes (no =true/false)
-
-  Examples:
-    python cli.py --config config.ini user-error delete "1:abc123token"
-    python cli.py --config config.ini user-error delete "1:token1,1:token2,2:apple1"
-
-google-notification handle "<message_id>[,...]"
-  message_id:   Integer (Google's notification message ID)
-
-  Examples:
-    python cli.py --config config.ini google-notification handle "12345"
-    python cli.py --config config.ini google-notification handle "12345,67890,11111"
-
-google-notification delete "<message_id>[,...]"
-  Same format as 'handle', but deletes the notification entirely
-
-google-notification list
-  Lists all unhandled notifications with message_id and expiry
-
-revoke list <master_pkey_hex>
-  master_pkey_hex:  64-character hex string (optionally prefixed with 0x)
-  Shows all revocable payments for the user
-
-  Examples:
-    python cli.py --config config.ini revoke list aaaa...aaaa
-    python cli.py --config config.ini revoke list 0xaaaa...aaaa
-
-revoke delete <master_pkey_hex>
-  Removes the revocation entry for the specified master public key
-
-revoke timestamp <master_pkey_hex> <unix_ts_s>
-  master_pkey_hex:  64-character hex string
-  unix_ts_s:        Unix timestamp in seconds (not milliseconds!)
-  Sets when the revocation expires
-
-  Examples:
-    python cli.py --config config.ini revoke timestamp aaaa...aaaa 1741170600
-
-report generate <period> [--format <format>] [--count <n>]
-  period:   daily, weekly, or monthly
-  format:   human (default) or csv
-  count:    Number of periods to report (default: 7)
-
-  Examples:
-    python cli.py --config config.ini report generate daily
-    python cli.py --config config.ini report generate weekly --format csv --count 4
-    python cli.py --config config.ini report generate monthly --count 3
-
-db info
-  Shows database statistics and info
-
-db print
-  Prints all tables to stdout (for debugging)
-
-GLOBAL OPTIONS:
-  --config, -c    Path to config.ini file (required)
-  --dry-run, -n   Preview what would be done without executing changes
-
-DRY RUN EXAMPLES:
-  python cli.py --config config.ini --dry-run user-error set "1:token123=true"
-  python cli.py --config config.ini --dry-run revoke delete aaaa...aaaa
-        """
+        epilog=DETAILED_EPILOG if use_full_help else BRIEF_EPILOG,
+        add_help=False  # We'll add help manually to control the position
     )
 
+    # Global options
+    _                       = parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
+                       help='Show brief help message and exit')
+    _                       = parser.add_argument('--help-full', action='help', default=argparse.SUPPRESS,
+                       help='Show detailed help with full documentation')
     _                       = parser.add_argument('--config', '-c', required=True, help='Path to config.ini file')
     _                       = parser.add_argument('--dry-run', '-n', action='store_true', help='Show what would be done without executing')
+
     subparsers              = parser.add_subparsers(dest='command', help='Available commands')
 
     # User error commands
     user_error_parser       = subparsers.add_parser('user-error', help='Manage user errors')
     user_error_subparsers   = user_error_parser.add_subparsers(dest='user_error_command', help='User error subcommands')
+
     user_error_set          = user_error_subparsers.add_parser('set', help='Set user errors (format: <provider>:<id>=true|false,...)')
     _                       = user_error_set.add_argument('items', help='Comma-separated list of errors')
+
     user_error_delete       = user_error_subparsers.add_parser('delete', help='Delete user errors (format: <provider>:<id>,...)')
     _                       = user_error_delete.add_argument('items', help='Comma-separated list of payment IDs')
 
     # Google notification commands
     google_notif_parser     = subparsers.add_parser('google-notification', help='Manage Google notifications')
     google_notif_subparsers = google_notif_parser.add_subparsers(dest='google_notif_command', help='Google notification subcommands')
+
     google_notif_handle     = google_notif_subparsers.add_parser('handle', help='Mark notifications as handled')
     _                       = google_notif_handle.add_argument('items', help='Comma-separated list of message IDs')
+
     google_notif_delete     = google_notif_subparsers.add_parser('delete', help='Delete notifications')
     _                       = google_notif_delete.add_argument('items', help='Comma-separated list of message IDs')
     _                       = google_notif_subparsers.add_parser('list', help='List unhandled notifications')
@@ -639,10 +680,13 @@ DRY RUN EXAMPLES:
     # Revoke commands
     revoke_parser           = subparsers.add_parser('revoke', help='Manage revocations')
     revoke_subparsers       = revoke_parser.add_subparsers(dest='revoke_command', help='Revocation subcommands')
+
     revoke_list             = revoke_subparsers.add_parser('list', help='List revocable payments for a user')
     _                       = revoke_list.add_argument('master_pkey', help='Master public key (64 hex chars)')
+
     revoke_delete           = revoke_subparsers.add_parser('delete', help='Delete revocation entry')
     _                       = revoke_delete.add_argument('master_pkey', help='Master public key (64 hex chars)')
+
     revoke_timestamp        = revoke_subparsers.add_parser('timestamp', help='Set revocation with timestamp')
     _                       = revoke_timestamp.add_argument('master_pkey', help='Master public key (64 hex chars)')
     _                       = revoke_timestamp.add_argument('unix_ts_s', type=int, help='Unix timestamp in seconds')
@@ -650,6 +694,7 @@ DRY RUN EXAMPLES:
     # Report commands
     report_parser           = subparsers.add_parser('report', help='Generate reports')
     report_subparsers       = report_parser.add_subparsers(dest='report_command', help='Report subcommands')
+
     report_generate         = report_subparsers.add_parser('generate', help='Generate a report')
     _                       = report_generate.add_argument('period', choices=['daily', 'weekly', 'monthly'], help='Report period')
     _                       = report_generate.add_argument('--format', choices=['human', 'csv'], default='human', help='Report format')
@@ -661,7 +706,7 @@ DRY RUN EXAMPLES:
     _                       = db_subparsers.add_parser('info', help='Show database info')
     _                       = db_subparsers.add_parser('print', help='Print all tables')
 
-    args                    = parser.parse_args()
+    args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
