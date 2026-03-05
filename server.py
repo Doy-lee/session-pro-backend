@@ -764,7 +764,10 @@ def add_pro_payment():
             if dev_add_pro_payment_args.duration_ms < 0 or dev_add_pro_payment_args.duration_ms > (base.SECONDS_IN_YEAR * 1000):
                 err.msg_list.append(f'dev_duration_ms must be > 0 and <= year ind duration, received: {dev_add_pro_payment_args.duration_ms/1000}s')
 
-        dev_add_pro_payment_args.auto_renewing = base.json_dict_require_bool(d=get.json, key='auto_renewing', err=err)
+        dev_add_pro_payment_args.auto_renewing = base.json_dict_optional_bool(d=get.json,
+                                                                              key='dev_auto_renewing',
+                                                                              default=dev_add_pro_payment_args.auto_renewing,
+                                                                              err=err)
 
         if len(err.msg_list):
             return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)

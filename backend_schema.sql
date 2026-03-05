@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS payments (
     refund_requested_unix_ts_ms       INTEGER NOT NULL,
 
     -- Obfuscated account ID for Google Play subscriptions. Calculated as sha256(master_pkey)
-    google_obfuscated_account_id      BLOB NOT NULL,
+    google_obfuscated_account_id      BLOB,
 
     -- App account token for Apple subscriptions
     apple_app_account_token           STRING NOT NULL

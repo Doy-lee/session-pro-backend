@@ -496,6 +496,7 @@ def entry_point() -> flask.Flask:
         thread.start()
 
         # NOTE: Add flask to our global logger
+        runtime_row: backend.RuntimeRow = backend.get_runtime(conn)
         result: flask.Flask = server.init(testing_mode=False, database_url=parsed_args.db_url, server_x25519_skey=runtime_row.backend_key.to_curve25519_private_key())
         if 1:
             _ = result.logger.addHandler(console_logger)
