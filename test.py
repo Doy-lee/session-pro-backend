@@ -1226,11 +1226,11 @@ def test_server_add_payment_flow(monkeypatch):
 
         if 1: # Initiate a "refund" request on the payment
             set_refund_requested_version = 0
-            hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
-                                                                                master_pkey                 = master_key.verify_key,
-                                                                                unix_ts_ms                  = start_unix_ts_ms,
-                                                                                refund_requested_unix_ts_ms = start_unix_ts_ms,
-                                                                                payment_tx                  = new_add_pro_payment_tx)
+            hash_to_sign: bytes = backend.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                                 master_pkey                 = master_key.verify_key,
+                                                                                 unix_ts_ms                  = start_unix_ts_ms,
+                                                                                 refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                                 payment_tx                  = new_add_pro_payment_tx)
 
             request_body = {
                 'version':                     set_refund_requested_version,
@@ -1273,11 +1273,11 @@ def test_server_add_payment_flow(monkeypatch):
             fake_payment.google_payment_token = 'non-existent-payment-token-to-trigger-fail-response'
             fake_payment.google_order_id      = 'non-existent-order-id-to-trigger-fail-response'
 
-            hash_to_sign: bytes = server.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
-                                                                                master_pkey                 = master_key.verify_key,
-                                                                                unix_ts_ms                  = start_unix_ts_ms,
-                                                                                refund_requested_unix_ts_ms = start_unix_ts_ms,
-                                                                                payment_tx                  = fake_payment)
+            hash_to_sign: bytes = backend.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
+                                                                                 master_pkey                 = master_key.verify_key,
+                                                                                 unix_ts_ms                  = start_unix_ts_ms,
+                                                                                 refund_requested_unix_ts_ms = start_unix_ts_ms,
+                                                                                 payment_tx                  = fake_payment)
 
             request_body = {
                 'version':     set_refund_requested_version,
