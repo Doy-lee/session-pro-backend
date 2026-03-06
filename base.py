@@ -79,6 +79,7 @@ class PaymentProvider(enum.Enum):
     Nil             = 0
     GooglePlayStore = 1
     iOSAppStore     = 2
+    Rangeproof      = 3
 
 @dataclasses.dataclass
 class PaymentProviderTransaction:
@@ -88,6 +89,7 @@ class PaymentProviderTransaction:
     apple_web_line_order_tx_id: str = ''
     google_payment_token:       str = ''
     google_order_id:            str = ''
+    rangeproof_order_id:        str = ''
 
 class PaymentStatus(enum.IntEnum):
     Nil        = 0
@@ -362,6 +364,8 @@ def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
                             content.append(f'Google Play Store ({value_int})')
                         elif value_int == PaymentProvider.iOSAppStore.value:
                             content.append(f'iOS App Store ({value_int})')
+                        elif value_int == PaymentProvider.Rangeproof.value:
+                            content.append(f'Rangeproof ({value_int})')
                         else:
                             content.append(f'Unknown ({value_int})')
                     elif table_name == 'payments' and col == 'status':

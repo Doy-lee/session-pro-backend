@@ -706,6 +706,16 @@ def add_pro_payment():
         user_payment.google_order_id      = base.json_dict_require_str(d=payment_tx, key='google_order_id', err=err)
     elif user_payment.provider == base.PaymentProvider.iOSAppStore:
         user_payment.apple_tx_id = base.json_dict_require_str(d=payment_tx, key='apple_tx_id', err=err)
+    elif user_payment.provider == base.PaymentProvider.Rangeproof:
+        # TODO: For now we do not support a user claiming a payment granted by Rangeproof via the
+        # server. These grants are written directly to the DB. Clients don't have a way of manually
+        # claiming a granted payment so this route is completely disabled.
+        # user_payment.rangeproof_order_id = base.json_dict_require_str(d=payment_tx, key='rangeproof_order_id', err=err)
+        err.msg_list.append(f'Bad payment provider given')
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
+    else:
+        err.msg_list.append(f'Bad payment provider given')
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Parse other components
     master_pkey_bytes   = base.hex_to_bytes(hex=master_pkey,   label='Master public key',      hex_len=nacl.bindings.crypto_sign_PUBLICKEYBYTES * 2, err=err)
@@ -727,9 +737,11 @@ def add_pro_payment():
         duration_key = 'dev_duration_ms'
         if plan_key in get.json:
             plan_value = get.json[plan_key]
-            dev_add_pro_payment_args.plan = base.ProPlan.from_string(typing.cast(str, plan_value))
-            if dev_add_pro_payment_args.plan == None or dev_add_pro_payment_args.plan == base.ProPlan.Nil:
+            plan       = base.ProPlan.from_string(typing.cast(str, plan_value))
+            if plan == None or dev_add_pro_payment_args.plan == base.ProPlan.Nil:
                 err.msg_list.append(f'{plan_key} must be specified as "OneMonth", "ThreeMonth" or "TwelveMonth", received: {plan_value}')
+            else:
+                dev_add_pro_payment_args.plan = plan
 
         if duration_key in get.json:
             dev_add_pro_payment_args.duration_ms = base.json_dict_require_int(d=get.json, key=duration_key, err=err)
@@ -1008,6 +1020,21 @@ def get_pro_details():
                                 'apple_web_line_order_id':              payment.apple.web_line_order_tx_id,
                                 'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
                             })
+                        elif payment.payment_provider == base.PaymentProvider.Rangeproof:
+                            items.append({
+                                'status':                               int(payment.status.value),
+                                'plan':                                 int(payment.plan.value),
+                                'payment_provider':                     int(payment.payment_provider.value),
+                                'auto_renewing':                        payment.auto_renewing,
+                                'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                                'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                                'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                                'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                                'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                                'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
+                                'rangeproof_order_id':                  payment.rangeproof_order_id,
+                                'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
+                            })
 
                 # NOTE: Determine pro status of user
                 if get_user.payments_count > 0:
@@ -1069,10 +1096,20 @@ def set_payment_refund_requested():
     user_payment          = backend.UserPaymentTransaction()
     user_payment.provider = base.PaymentProvider(payment_provider)
     if user_payment.provider == base.PaymentProvider.GooglePlayStore:
-        user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
-        user_payment.google_order_id      = base.json_dict_require_str(d=payment_tx, key='google_order_id', err=err)
+        # TODO: Google does not support notifying the backend because refunds are executed
+        # out-of-band such as Google's web-portal whereas on Apple this is done in-app which means
+        # we get notified. We don't have a mechanism of figuring out if the process has started on
+        # google so for this route, we complete disable it.
+
+        # user_payment.google_payment_token = base.json_dict_require_str(d=payment_tx, key='google_payment_token', err=err)
+        # user_payment.google_order_id      = base.json_dict_require_str(d=payment_tx, key='google_order_id', err=err)
+        err.msg_list.append(f'Bad payment provider given')
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
     elif user_payment.provider == base.PaymentProvider.iOSAppStore:
         user_payment.apple_tx_id = base.json_dict_require_str(d=payment_tx, key='apple_tx_id', err=err)
+    else:
+        err.msg_list.append(f'Bad payment provider given')
+        return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
     # Validate timestamp
     timestamp_delta: float = (time_now() * 1000) - float(unix_ts_ms)

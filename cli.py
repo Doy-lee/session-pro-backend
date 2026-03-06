@@ -22,7 +22,7 @@ import db
 # Epilog definitions
 BRIEF_EPILOG = """
 QUICK START EXAMPLES:
-  server              add-pro-payment              --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
+  server              add-pro-payment              --url <url> --provider <google|apple|...> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
   server              set-payment-refund-requested --url <url> --provider <google|apple> --payment-token <token> --order-id <id>
   server              get-pro-revocations          --url <url> [--ticket <int>]
   server              get-pro-details              --url <url> --master-skey <hex> [--count <n>]
@@ -47,13 +47,13 @@ QUICK START EXAMPLES:
 
 DETAILED_EPILOG = """
 COMMAND FORMATS DETAILED:
-  server add-pro-payment --url <url> --provider <google|apple> [options]
+  server add-pro-payment --url <url> --provider <google|apple|...> [options]
     Add a development payment to a Session Pro backend server (requires backend to be running in dev mode).
     Mirrors the /add_pro_payment endpoint.
 
     Required:
       --url <url>               Server URL (e.g., http://localhost:8000)
-      --provider <google|apple> Payment provider
+      --provider                Payment provider (one of the following: google, apple, rangeproof)
 
     Optional:
       --master-skey <hex>       64-char hex master secret key (generates new if omitted)
@@ -307,6 +307,9 @@ def parse_set_user_error_arg(arg: str, err: base.ErrorSink) -> list[tuple[base.P
             err.msg_list.append(f'Failed to parse payment provider ({payment_provider_str}) for item {item}')
             return result
 
+        assert payment_provider != base.PaymentProvider.Nil,        "Nil payment provider cannot be used for errors"
+        assert payment_provider != base.PaymentProvider.Rangeproof, "Rangeproof payment provider does not support errors"
+
         set_flag = False
         if set_flag_str.lower() == 'true':
             set_flag = True
@@ -466,6 +469,7 @@ def cmd_user_error_set(args: argparse.Namespace, dry_run: bool) -> int:
                         if payment_provider == base.PaymentProvider.GooglePlayStore:
                             error.google_payment_token = payment_id
                         else:
+                            assert payment_provider == base.PaymentProvider.iOSAppStore
                             error.apple_original_tx_id = payment_id
 
                         if backend.has_user_error(conn=conn, payment_provider=payment_provider, payment_id=payment_id):
@@ -684,6 +688,7 @@ def cmd_revoke_list(args: argparse.Namespace) -> int:
                             case base.PaymentProvider.Nil:             pass
                             case base.PaymentProvider.GooglePlayStore: payment_id = f'{payment.google_payment_token}-{payment.google_order_id}'
                             case base.PaymentProvider.iOSAppStore:     payment_id = f'{payment.apple.original_tx_id}'
+                            case base.PaymentProvider.Rangeproof:      payment_id = f'{payment.rangeproof_order_id}'
 
                         if payment.status == base.PaymentStatus.Expired or int(time.time() * 1000) >= payment.expiry_unix_ts_ms:
                             continue
@@ -849,42 +854,41 @@ def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
 
     # Determine provider enum and build payment_tx
     if args.provider == 'google':
-        provider_enum = 1
-        google_payment_token = os.urandom(8).hex()
-        google_order_id = 'DEV.' + os.urandom(8).hex()
-
         payment_tx_obj = backend.UserPaymentTransaction(
-            provider=base.PaymentProvider.GooglePlayStore,
-            google_payment_token=google_payment_token,
-            google_order_id=google_order_id
+            provider             = base.PaymentProvider.GooglePlayStore,
+            google_payment_token = os.urandom(8).hex(),
+            google_order_id      = 'DEV.' + os.urandom(8).hex()
         )
-        payment_tx = {'provider': provider_enum, 'google_payment_token': google_payment_token, 'google_order_id': google_order_id}
-    else:  # apple
-        provider_enum = 2
-        apple_tx_id = 'DEV.' + os.urandom(8).hex()
-
+    elif args.provider == 'apple':
         payment_tx_obj = backend.UserPaymentTransaction(
-            provider=base.PaymentProvider.iOSAppStore,
-            apple_tx_id=apple_tx_id
+            provider    = base.PaymentProvider.iOSAppStore,
+            apple_tx_id = 'DEV.' + os.urandom(8).hex()
         )
-        payment_tx = {'provider': provider_enum, 'apple_tx_id': apple_tx_id}
+    elif args.provider == 'rangeproof':
+        payment_tx_obj      = backend.UserPaymentTransaction(
+            provider            = base.PaymentProvider.Rangeproof,
+            rangeproof_order_id = 'DEV.' + os.urandom(8).hex()
+        )
+    else:
+        print(f"ERROR: Unsupported payment provider: {args.provider}", file=sys.stderr)
+        return 1
 
     # Compute hash using backend function
     hash_bytes = backend.make_add_pro_payment_hash(
-        version=args.version,
-        master_pkey=master_skey.verify_key,
-        rotating_pkey=rotating_skey.verify_key,
-        payment_tx=payment_tx_obj
+        version       = args.version,
+        master_pkey   = master_skey.verify_key,
+        rotating_pkey = rotating_skey.verify_key,
+        payment_tx    = payment_tx_obj
     )
 
     # Build request
     request_body = {
-        'version': args.version,
-        'master_pkey': bytes(master_skey.verify_key).hex(),
+        'version':       args.version,
+        'master_pkey':   bytes(master_skey.verify_key).hex(),
         'rotating_pkey': bytes(rotating_skey.verify_key).hex(),
-        'master_sig': bytes(master_skey.sign(hash_bytes).signature).hex(),
-        'rotating_sig': bytes(rotating_skey.sign(hash_bytes).signature).hex(),
-        'payment_tx': payment_tx
+        'master_sig':    bytes(master_skey.sign(hash_bytes).signature).hex(),
+        'rotating_sig':  bytes(rotating_skey.sign(hash_bytes).signature).hex(),
+        'payment_tx':    payment_tx
     }
 
     # Add dev arguments
@@ -920,7 +924,6 @@ def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
 
 
 def cmd_server_set_payment_refund_requested(args: argparse.Namespace) -> int:
-    import hashlib
     import json
     import time
     import urllib.request
@@ -961,9 +964,13 @@ def cmd_server_set_payment_refund_requested(args: argparse.Namespace) -> int:
         payment_tx.provider             = base.PaymentProvider.GooglePlayStore
         payment_tx.google_payment_token = args.payment_token
         payment_tx.google_order_id      = args.order_id
-    else:
+    elif args.provider == 'apple':
         payment_tx.provider    = base.PaymentProvider.iOSAppStore
         payment_tx.apple_tx_id = args.tx_id
+    else:
+        print(f"ERROR: Unsupported payment provider: {args.provider}", file=sys.stderr)
+        return 1
+
     hash_bytes: bytes = backend.make_set_payment_refund_requested_hash(args.version, master_skey.verify_key, now_unix_ts_ms, refund_unix_ts_ms, payment_tx)
 
     # Build request
@@ -1174,15 +1181,15 @@ def main() -> int:
     server_subparsers       = server_parser.add_subparsers(dest='server_command', help='Server endpoint subcommands')
 
     # add-pro-payment endpoint
-    server_add_pro_payment  = server_subparsers.add_parser('add-pro-payment',                                                        help='Add a pro payment. Mirrors /add_pro_payment')
-    _                       = server_add_pro_payment.add_argument('--url',               required=True,                              help='Server URL (e.g., http://localhost:8000)')
-    _                       = server_add_pro_payment.add_argument('--provider',          required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = server_add_pro_payment.add_argument('--master-skey',                                                   help='64-char hex master secret key (generates new if omitted)')
-    _                       = server_add_pro_payment.add_argument('--rotating-skey',                                                 help='64-char hex rotating secret key (generates new if omitted)')
-    _                       = server_add_pro_payment.add_argument('--version',           type=int, default=0,                        help='Request version (default: 0)')
-    _                       = server_add_pro_payment.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
-    _                       = server_add_pro_payment.add_argument('--dev-duration-ms',   type=int,                                   help='Override duration in milliseconds')
-    _                       = server_add_pro_payment.add_argument('--dev-auto-renewing', action='store_true',                        help='Set auto-renewing to true (default: false)')
+    server_add_pro_payment  = server_subparsers.add_parser('add-pro-payment',                                                                      help='Add a pro payment. Mirrors /add_pro_payment')
+    _                       = server_add_pro_payment.add_argument('--url',               required=True,                                            help='Server URL (e.g., http://localhost:8000)')
+    _                       = server_add_pro_payment.add_argument('--provider',          required=True, choices=['google', 'apple', 'rangeproof'], help='Payment provider')
+    _                       = server_add_pro_payment.add_argument('--master-skey',                                                                 help='64-char hex master secret key (generates new if omitted)')
+    _                       = server_add_pro_payment.add_argument('--rotating-skey',                                                               help='64-char hex rotating secret key (generates new if omitted)')
+    _                       = server_add_pro_payment.add_argument('--version',           type=int, default=0,                                      help='Request version (default: 0)')
+    _                       = server_add_pro_payment.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'],               help='Subscription plan (1M/3M/12M)')
+    _                       = server_add_pro_payment.add_argument('--dev-duration-ms',   type=int,                                                 help='Override duration in milliseconds')
+    _                       = server_add_pro_payment.add_argument('--dev-auto-renewing', action='store_true',                                      help='Set auto-renewing to true (default: false)')
 
     # set-payment-refund-requested endpoint
     server_set_refund       = server_subparsers.add_parser('set-payment-refund-requested',                                                help='Mark payment as refund requested. Mirrors /set_payment_refund_requested')

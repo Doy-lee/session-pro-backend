@@ -63,6 +63,7 @@ class ReportRow:
     new_subs:          int
     google:            int
     apple:             int
+    rangeproof:        int
     plan_1m:           int
     plan_3m:           int
     plan_12m:          int
@@ -146,6 +147,7 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
                                                             int,          # refund_requested_unix_ts_ms
                                                             bytes,        # google_obfuscated_account_id
                                                             str,          # apple_app_account_token
+                                                            str,          # rangeproof_order_id
                                                             ]
 
 AddRevocationIterator:               typing.TypeAlias = tuple[int,          # (row) id
@@ -168,14 +170,15 @@ UserRowTuple:                        typing.TypeAlias = tuple[bytes, # master_pk
 
 @dataclasses.dataclass
 class UserError:
-    provider:                   base.PaymentProvider = base.PaymentProvider.Nil
-    apple_original_tx_id:       str = ''
-    google_payment_token:       str = ''
+    provider:             base.PaymentProvider = base.PaymentProvider.Nil
+    apple_original_tx_id: str = ''
+    google_payment_token: str = ''
 
 @dataclasses.dataclass
 class UserPaymentTransaction:
     provider:             base.PaymentProvider = base.PaymentProvider.Nil
     apple_tx_id:          str                  = ''
+    rangeproof_order_id:  str                  = ''
     google_payment_token: str                  = ''
     google_order_id:      str                  = ''
 
@@ -203,6 +206,7 @@ class PaymentRow:
     google_payment_token:               str                  = ''
     google_order_id:                    str                  = ''
     refund_requested_unix_ts_ms:        int                  = 0
+    rangeproof_order_id:                str                  = ''
     google_obfuscated_account_id:       bytes                = b''
     apple_app_account_token:            str                  = ''
 
@@ -340,8 +344,10 @@ def make_add_pro_payment_hash(version:       int,
         hasher.update(payment_tx.google_order_id.encode('utf-8'))
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         hasher.update(payment_tx.apple_tx_id.encode('utf-8'))
+    elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+        hasher.update(payment_tx.rangeproof_order_id.encode('utf-8'))
     else:
-        assert payment_tx.provider != base.PaymentProvider.Nil, "Nil not supported"
+        pass
 
     result: bytes = hasher.digest()
     return result
@@ -354,6 +360,8 @@ def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signi
     hasher.update(refund_requested_unix_ts_ms.to_bytes(length=8, byteorder='little'))
     hasher.update(payment_tx.provider.value.to_bytes(length=1, byteorder='little'))
     match payment_tx.provider:
+        case base.PaymentProvider.Rangeproof:
+            pass
         case base.PaymentProvider.Nil:
             pass
         case base.PaymentProvider.GooglePlayStore:
@@ -395,6 +403,7 @@ def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> Payment
     result.refund_requested_unix_ts_ms        = row[17]
     result.google_obfuscated_account_id       = row[18] if row[18] else b''
     result.apple_app_account_token            = row[19] if row[19] else ''
+    result.rangeproof_order_id                = row[20]
     return result
 
 def get_unredeemed_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
@@ -701,7 +710,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
     payments: list[PaymentRow] = get_payments_list(conn)
     for index, it in enumerate(payments):
         # NOTE: Check mandatory fields
-        if it.plan == base.ProPlan.Nil: 
+        if it.plan == base.ProPlan.Nil:
             err.msg_list.append(f'{it.status.name} payment #{index} plan is invalid. It should have been derived from the platform payment provider (e.g. by converting the unredeemedd plan ID to a plan)')
         if it.payment_provider == base.PaymentProvider.Nil:
             err.msg_list.append(f'{it.status.name} payment #{index} payment provider is set to {it.payment_provider.name} but it should not be. It should have been set by the platform before added to the DB')
@@ -764,7 +773,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
         if it.payment_provider == base.PaymentProvider.GooglePlayStore:
             pass
         elif len(it.google_payment_token) != 0:
-            err.msg_list.append(f'Payment #{index} speceified a google payment token: {it.google_payment_token} for a non-google platform')
+            err.msg_list.append(f'Payment #{index} specified a google payment token: {it.google_payment_token} for a non-google platform')
 
     # NOTE: Verify the users
     users: list[UserRow] = get_users_list(conn)
@@ -822,7 +831,7 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
             unredeemed=int(base.PaymentStatus.Unredeemed.value),
             redeemed=int(base.PaymentStatus.Redeemed.value))
 
-    revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.iOSAppStore, revoke_unix_ts_ms)
+    revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.Nil, revoke_unix_ts_ms)
     for it in master_pkey_dict:
         # NOTE: For each user we revoked a payment for, we have modified their 'auto_renewing' value
         # on the payment, we need to go and update their user row to track the, new, next best
@@ -895,12 +904,12 @@ def add_apple_revocation_tx(tx: db.SQLTransaction, apple_original_tx_id: str, re
            payment_provider      = :provider AND
            (status               = :unredeemed OR status = :redeemed OR status = :expired OR status = :revoked);
     ''', 
-        orig_tx=apple_original_tx_id,
-        provider=int(base.PaymentProvider.iOSAppStore.value),
-        unredeemed=int(base.PaymentStatus.Unredeemed.value),
-        redeemed=int(base.PaymentStatus.Redeemed.value),
-        expired=int(base.PaymentStatus.Expired.value),
-        revoked=int(base.PaymentStatus.Revoked.value))
+        orig_tx    = apple_original_tx_id,
+        provider   = int(base.PaymentProvider.iOSAppStore.value),
+        unredeemed = int(base.PaymentStatus.Unredeemed.value),
+        redeemed   = int(base.PaymentStatus.Redeemed.value),
+        expired    = int(base.PaymentStatus.Expired.value),
+        revoked    = int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Apple payment (orig. TX ID={apple_original_tx_id}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
     rows         = rows_result.fetchall()
@@ -931,11 +940,11 @@ def add_google_revocation_tx(tx: db.SQLTransaction, google_payment_token: str, r
            (status              = :unredeemed OR status = :redeemed OR status = :expired OR status = :revoked)
     ''',
         token=google_payment_token,
-        provider=int(base.PaymentProvider.GooglePlayStore.value),
-        unredeemed=int(base.PaymentStatus.Unredeemed.value),
-        redeemed=int(base.PaymentStatus.Redeemed.value),
-        expired=int(base.PaymentStatus.Expired.value),
-        revoked=int(base.PaymentStatus.Revoked.value))
+        provider   = int(base.PaymentProvider.GooglePlayStore.value),
+        unredeemed = int(base.PaymentStatus.Unredeemed.value),
+        redeemed   = int(base.PaymentStatus.Redeemed.value),
+        expired    = int(base.PaymentStatus.Expired.value),
+        revoked    = int(base.PaymentStatus.Revoked.value))
 
     log.info(f'Revoking Google payment (token={google_payment_token}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
     rows         = rows_result.fetchall()
@@ -1026,6 +1035,21 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
               tx_id               = payment_tx.apple_tx_id,
               where_status        = int(base.PaymentStatus.Unredeemed.value),
               account_token       = apple_obfuscated_account_id_from_master_pkey(master_pkey))
+    elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+        row_result = db.query(tx.conn, f'''
+            UPDATE payments
+            SET    {set_expr}
+            WHERE payment_provider    = :provider
+              AND rangeproof_order_id = :tx_id
+              AND status              = :where_status
+        ''', # SET fields
+              master_pkey         = master_pkey_bytes,
+              status              = int(base.PaymentStatus.Redeemed.value),
+              redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+              # WHERE fields
+              provider            = int(payment_tx.provider.value),
+              rangeproof_order_id = payment_tx.rangeproof_order_id,
+              where_status        = int(base.PaymentStatus.Unredeemed.value))
     else:
         err.msg_list.append('Payment to register specifies an unknown payment provider')
         return result
@@ -1098,6 +1122,19 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
                  tx_id       = payment_tx.apple_tx_id,
                  status      = int(base.PaymentStatus.Unredeemed.value),
                  master_pkey = master_pkey_bytes)
+        elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+            row_result = db.query(tx.conn, '''
+                SELECT COUNT(*)
+                FROM   payments
+                WHERE  payment_provider    = :provider
+                  AND  rangeproof_order_id = :order_id
+                  AND  status              > :status
+                  AND  master_pkey         = :master_pkey
+            ''', provider    = int(payment_tx.provider.value),
+                 order_id    = payment_tx.rangeproof_order_id,
+                 status      = int(base.PaymentStatus.Unredeemed.value),
+                 master_pkey = master_pkey_bytes)
+
         first_row = row_result.fetchone()
         if first_row and first_row[0] > 0:
             err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
@@ -1125,6 +1162,9 @@ def verify_payment_provider_tx(payment_tx: base.PaymentProviderTransaction, err:
                 err.msg_list.append(f'Apple TX ID was not set')
             if len(payment_tx.apple_original_tx_id) == 0:
                 err.msg_list.append(f'Apple original TX ID was not set')
+        case base.PaymentProvider.Rangeproof:
+            if len(payment_tx.rangeproof_order_id) == 0:
+                err.msg_list.append(f'Rangeproof order ID was not set')
         case base.PaymentProvider.Nil:
             err.msg_list.append(f'Payment provider was set invalidly to nil')
 
@@ -1136,7 +1176,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
     # registered for it yet (e.g. the user has not associated a master public key with the payment
     # yet by redeeming it).
     result_set = db.query(tx.conn, ('''
-        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id, revoked_unix_ts_ms
+        SELECT    expiry_unix_ts_ms, grace_period_duration_ms, auto_renewing, status, refund_requested_unix_ts_ms, payment_provider, apple_original_tx_id, google_order_id, rangeproof_order_id, revoked_unix_ts_ms
         FROM      payments
         WHERE     master_pkey = :master_pkey AND (status = :status1 OR status = :status2 OR status = :status3)
         ORDER BY  id DESC
@@ -1146,13 +1186,14 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
           status2     = int(base.PaymentStatus.Revoked.value),
           status3     = int(base.PaymentStatus.Expired.value),)
 
-    used_google_order_ids:  list[str] = []
-    used_apple_orig_tx_ids: set[int]  = set()
+    used_google_order_ids:     list[str] = []
+    used_apple_orig_tx_ids:    set[int]  = set()
+    used_rangeproof_order_ids: set[str]  = set()
 
     # NOTE: Determine the user's latest expiry by enumerating all the payments and calculating
     # the expiry time (inclusive of the grace period if applicable)
     result      = LookupUserExpiryUnixTsMs()
-    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str, int]], result_set.fetchall())
+    rows        = typing.cast(list[tuple[int, int, int, int, int, int, int, str, str, int]], result_set.fetchall())
     for row in rows:
         expiry_unix_ts_ms:           int = row[0]
         grace_period_duration_ms:    int = row[1]
@@ -1162,7 +1203,8 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
         payment_provider:            int = row[5]
         apple_original_tx_id:        int = row[6]
         google_order_id:             str = row[7]
-        revoked_unix_ts_ms:          int = row[8]
+        rangeproof_order_id:         str = row[8]
+        revoked_unix_ts_ms:          int = row[9]
 
         # NOTE: Consecutive subscription payments are added to the DB under _roughly_ the same
         # transaction ID (this differs between platforms). We only want to consider that latest
@@ -1195,6 +1237,11 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
                 seen_before = True
             else:
                 used_apple_orig_tx_ids.add(apple_original_tx_id)
+        elif payment_provider == base.PaymentProvider.Rangeproof.value:
+            if rangeproof_order_id in used_rangeproof_order_ids:
+                seen_before = True
+            else:
+                used_rangeproof_order_ids.add(rangeproof_order_id)
         else:
             log.warning(f"Unrecognised payment provider in {row} for {bytes(master_pkey).hex()}: {payment_provider}")
             continue
@@ -1277,6 +1324,8 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
         kwparams['grace_period_duration_ms'] = grace_period_duration_ms
 
     # NOTE: Execute the statement
+    # TODO: Improve this switch statement by writing to kwparams then have 1 single db.query()
+    # statement that expands those parameters.
     result_set: sqlalchemy.engine.Result[typing.Any] | None = None
     match payment_tx.provider:
         case base.PaymentProvider.Nil:
@@ -1288,8 +1337,8 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
                 SET       {sql_set_fields}
                 WHERE     google_payment_token = :token AND google_order_id = :order_id
                 RETURNING master_pkey
-            ''', token=payment_tx.google_payment_token,
-                 order_id=payment_tx.google_order_id,
+            ''', token    = payment_tx.google_payment_token,
+                 order_id = payment_tx.google_order_id,
                  **kwparams)
 
         case base.PaymentProvider.iOSAppStore:
@@ -1298,10 +1347,20 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
                 SET       {sql_set_fields}
                 WHERE     apple_original_tx_id = :orig_tx_id AND apple_tx_id = :tx_id AND apple_web_line_order_tx_id = :line_order_tx_id
                 RETURNING master_pkey
-            ''', orig_tx_id=payment_tx.apple_original_tx_id,
-                 tx_id=payment_tx.apple_tx_id,
-                 line_order_tx_id=payment_tx.apple_web_line_order_tx_id,
+            ''', orig_tx_id       = payment_tx.apple_original_tx_id,
+                 tx_id            = payment_tx.apple_tx_id,
+                 line_order_tx_id = payment_tx.apple_web_line_order_tx_id,
                  **kwparams)
+
+        case base.PaymentProvider.Rangeproof:
+            result_set = db.query(tx.conn, f'''
+                UPDATE    payments
+                SET       {sql_set_fields}
+                WHERE     rangeproof_order_id = :rangeproof_order_id
+                RETURNING master_pkey
+            ''', rangeproof_order_id = payment_tx.rangeproof_order_id,
+                 **kwparams)
+
 
     # NOTE: Having `RETURNING master_pkey` seems to break rowcount and returns 0 even on
     # row modification. We use fetchone instead
@@ -1315,7 +1374,13 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
         _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, nacl.signing.VerifyKey(master_pkey_bytes))
 
     if result == False:
-        payment_id = payment_tx.google_order_id if payment_tx.provider == base.PaymentProvider.GooglePlayStore else payment_tx.apple_tx_id
+        payment_id = ''
+        if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+            payment_id = payment_tx.google_order_id
+        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
+            payment_id = payment_tx.apple_tx_id
+        else:
+            payment_id = payment_tx.rangeproof_order_id
         err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
     return result
 
@@ -1427,10 +1492,9 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                                       'unredeemed_unix_ts_ms',
                                       'auto_renewing',
                                       'refund_requested_unix_ts_ms',
-                                      'google_obfuscated_account_id',
                                       'apple_app_account_token']
-            stmt_fields: str       = ', '.join(fields)
-            stmt_values: str       = ', '.join([':' + f for f in fields])
+            stmt_fields: str = ', '.join(fields)
+            stmt_values: str = ', '.join([':' + f for f in fields])
 
             _ = db.query(tx.conn, f'''
                 INSERT INTO payments ({stmt_fields})
@@ -1448,8 +1512,46 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   unredeemed_unix_ts_ms,
                   True,                           # auto_renewing is enabled by default until notified otherwise by Apple
                   0,                              # refund request unix ts ms
-                  None,                           # google_obfuscated_account_id - empty for apple
                   platform_obfuscated_account_id, # apple_app_account_token
+            ])})
+    elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+        # NOTE: Insert into the table, IFF, the rangeproof order id doesn't already exist somewhere else.
+        result_set = db.query(tx.conn, '''
+                SELECT 1
+                FROM payments
+                WHERE payment_provider = :provider AND rangeproof_order_id = :rangeproof_order_id
+        ''', provider            = int(payment_tx.provider.value),
+             rangeproof_order_id = payment_tx.rangeproof_order_id)
+
+        record = result_set.fetchone()
+        if not record:
+            fields:      list[str] = ['plan',
+                                      'payment_provider',
+                                      'rangeproof_order_id',
+                                      'status',
+                                      'expiry_unix_ts_ms',
+                                      'platform_refund_expiry_unix_ts_ms',
+                                      'grace_period_duration_ms',
+                                      'unredeemed_unix_ts_ms',
+                                      'auto_renewing',
+                                      'refund_requested_unix_ts_ms']
+            stmt_fields: str       = ', '.join(fields)
+            stmt_values: str       = ', '.join([':' + f for f in fields])
+
+            _ = db.query(tx.conn, f'''
+                INSERT INTO payments ({stmt_fields})
+                VALUES ({stmt_values})
+            ''', {f: v for f, v in zip(fields, [
+                  int(plan.value),
+                  int(payment_tx.provider.value),
+                  payment_tx.rangeproof_order_id,
+                  int(base.PaymentStatus.Unredeemed.value),
+                  expiry_unix_ts_ms,
+                  platform_refund_expiry_unix_ts_ms,
+                  0,                    # non-null grace period
+                  unredeemed_unix_ts_ms,
+                  True,                 # auto_renewing is enabled by default until notified otherwise by Apple
+                  0,                    # refund request unix ts ms
             ])})
 
     # NOTE: Find the latest master pkey associated with the common payment identifier (google payment
@@ -1478,8 +1580,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
             ORDER BY id DESC
             LIMIT    1
         '''), {'provider': int(payment_tx.provider.value), 'token': payment_tx.google_payment_token})
-    else:
-        assert payment_tx.provider == base.PaymentProvider.iOSAppStore
+    elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
         result_set = db.query(tx.conn, ('''
             SELECT   master_pkey
             FROM     payments
@@ -1487,66 +1588,74 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
             ORDER BY id DESC
             LIMIT    1
         '''), {'provider': int(payment_tx.provider.value), 'orig_tx_id': payment_tx.apple_original_tx_id})
+    elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+        # TODO: There is currently no auto-redeeming for Rangeproof payments. These are currently
+        # granted to a user directly by creating a voucher payment attributed under their master pro
+        # public key. It would be possible to incorporate some UI in the clients to allow redeeming
+        # via an order ID. Rangeproof would then give the user the order ID that they have to redeem
+        # in their client.
+        pass
 
-    master_pkey_record = typing.cast(sqlalchemy.Row[tuple[bytes]] | None, result_set.fetchone())
-    if master_pkey_record and master_pkey_record[0]:
-        master_pkey   = nacl.signing.VerifyKey(bytes(master_pkey_record[0]))
-        user: UserRow = get_user_from_sql_tx(tx, master_pkey)
-        if user.found:
-            auto_redeem_deadline_unix_ts_ms: int = 0
+    if result_set:
+        master_pkey_record = typing.cast(sqlalchemy.Row[tuple[bytes]] | None, result_set.fetchone())
+        if master_pkey_record and master_pkey_record[0]:
+            master_pkey   = nacl.signing.VerifyKey(bytes(master_pkey_record[0]))
+            user: UserRow = get_user_from_sql_tx(tx, master_pkey)
+            if user.found:
+                auto_redeem_deadline_unix_ts_ms: int = 0
 
-            # TODO: Handle the situation when a user cancels
-            if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-                # NOTE: Account hold as described by google
-                #
-                #   > [...] we’re increasing the default account hold duration on December 1, 2025.
-                #   > Starting on this date, by default account hold durations will be automatically
-                #   > calculated. Initially, the calculation will be 60 days minus any grace period
-                #   > duration, but we may change these calculations in the future to further
-                #   > improve recovery performance
-                #
-                # Source: https://support.google.com/googleplay/android-developer/answer/16631229
-                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
-                if user.auto_renewing:
-                    auto_redeem_deadline_unix_ts_ms += 60 * base.MILLISECONDS_IN_DAY - user.grace_period_duration_ms
-            else:
-                assert payment_tx.provider == base.PaymentProvider.iOSAppStore
-                # NOTE: We don't currently configure a grace period/account hold period for Apple
-                # hnote the grace and account hold concept is merged together in Apple).
-                auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
-                if user.auto_renewing:
-                    auto_redeem_deadline_unix_ts_ms += user.grace_period_duration_ms
+                # TODO: Handle the situation when a user cancels
+                if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+                    # NOTE: Account hold as described by google
+                    #
+                    #   > [...] we’re increasing the default account hold duration on December 1, 2025.
+                    #   > Starting on this date, by default account hold durations will be automatically
+                    #   > calculated. Initially, the calculation will be 60 days minus any grace period
+                    #   > duration, but we may change these calculations in the future to further
+                    #   > improve recovery performance
+                    #
+                    # Source: https://support.google.com/googleplay/android-developer/answer/16631229
+                    auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
+                    if user.auto_renewing:
+                        auto_redeem_deadline_unix_ts_ms += 60 * base.MILLISECONDS_IN_DAY - user.grace_period_duration_ms
+                else:
+                    assert payment_tx.provider == base.PaymentProvider.iOSAppStore
+                    # NOTE: We don't currently configure a grace period/account hold period for Apple
+                    # hnote the grace and account hold concept is merged together in Apple).
+                    auto_redeem_deadline_unix_ts_ms = user.expiry_unix_ts_ms
+                    if user.auto_renewing:
+                        auto_redeem_deadline_unix_ts_ms += user.grace_period_duration_ms
 
-            # NOTE: Unredeemed unix timestamp represents now (as this is the timestamp we are marking
-            # the payment as having been registered), so we compare (now) to the deadline. If we are
-            # before the deadline we are eligible to auto-redeem this payment and assign it to the
-            # previous known master public key.
-            if unredeemed_unix_ts_ms <= auto_redeem_deadline_unix_ts_ms:
-                add_pro_payment_user_tx                      = UserPaymentTransaction()
-                add_pro_payment_user_tx.provider             = payment_tx.provider
-                add_pro_payment_user_tx.apple_tx_id          = payment_tx.apple_tx_id
-                add_pro_payment_user_tx.google_payment_token = payment_tx.google_payment_token
-                add_pro_payment_user_tx.google_order_id      = payment_tx.google_order_id
+                # NOTE: Unredeemed unix timestamp represents now (as this is the timestamp we are marking
+                # the payment as having been registered), so we compare (now) to the deadline. If we are
+                # before the deadline we are eligible to auto-redeem this payment and assign it to the
+                # previous known master public key.
+                if unredeemed_unix_ts_ms <= auto_redeem_deadline_unix_ts_ms:
+                    add_pro_payment_user_tx                      = UserPaymentTransaction()
+                    add_pro_payment_user_tx.provider             = payment_tx.provider
+                    add_pro_payment_user_tx.apple_tx_id          = payment_tx.apple_tx_id
+                    add_pro_payment_user_tx.google_payment_token = payment_tx.google_payment_token
+                    add_pro_payment_user_tx.google_order_id      = payment_tx.google_order_id
 
-                # NOTE: We use a temp error sink as we don't mind if auto-redeeming failed the user
-                # can always try manually by claiming the payment themselves. If this errors
-                # returning that to the platform layers (google and apple) can stall them
-                # unnecessarily.
-                #
-                # For internal logging though however, we can report this
-                tmp_err = base.ErrorSink()
-                _ = redeem_payment_tx(tx                  = tx,
-                                      master_pkey         = master_pkey,
-                                      rotating_pkey       = None,
-                                      signing_key         = None,
-                                      unix_ts_ms          = unredeemed_unix_ts_ms,
-                                      redeemed_unix_ts_ms = convert_unix_ts_ms_to_redeemed_unix_ts_ms(unredeemed_unix_ts_ms),
-                                      payment_tx          = add_pro_payment_user_tx,
-                                      err                 = tmp_err)
+                    # NOTE: We use a temp error sink as we don't mind if auto-redeeming failed the user
+                    # can always try manually by claiming the payment themselves. If this errors
+                    # returning that to the platform layers (google and apple) can stall them
+                    # unnecessarily.
+                    #
+                    # For internal logging though however, we can report this
+                    tmp_err = base.ErrorSink()
+                    _ = redeem_payment_tx(tx                  = tx,
+                                          master_pkey         = master_pkey,
+                                          rotating_pkey       = None,
+                                          signing_key         = None,
+                                          unix_ts_ms          = unredeemed_unix_ts_ms,
+                                          redeemed_unix_ts_ms = convert_unix_ts_ms_to_redeemed_unix_ts_ms(unredeemed_unix_ts_ms),
+                                          payment_tx          = add_pro_payment_user_tx,
+                                          err                 = tmp_err)
 
-                if tmp_err.has():
-                    err_str = '\n'.join(tmp_err.msg_list)
-                    log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
+                    if tmp_err.has():
+                        err_str = '\n'.join(tmp_err.msg_list)
+                        log.error(f'Failed to auto-redeem a payment we witnessed from. (auto_redeem_deadline={base.readable_unix_ts_ms(auto_redeem_deadline_unix_ts_ms)}) {err_str}')
 
 def add_unredeemed_payment(conn:                              sqlalchemy.engine.Connection,
                            payment_tx:                        base.PaymentProviderTransaction,
@@ -1761,7 +1870,7 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
     # would allow someone to register arbitrary Session Pro subscriptions
     # without a valid payment.
     THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool = False
-    if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV.') or payment_tx.apple_tx_id.startswith('DEV.')):
+    if base.DEV_BACKEND_MODE and (payment_tx.google_order_id.startswith('DEV.') or payment_tx.apple_tx_id.startswith('DEV.') or payment_tx.rangeproof_order_id.startswith('DEV.')):
         assert_backend_is_in_dev_mode(conn)
 
         # Convert the user payment transaction into the backend native representation. Note that
@@ -1779,14 +1888,19 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
             internal_payment_tx.apple_tx_id                 = payment_tx.apple_tx_id
             internal_payment_tx.apple_web_line_order_tx_id  = ''
             internal_payment_tx.apple_original_tx_id        = payment_tx.apple_tx_id
+        elif internal_payment_tx.provider == base.PaymentProvider.Rangeproof:
+            internal_payment_tx.rangeproof_order_id         = payment_tx.rangeproof_order_id
 
         already_exists = False
         for it in get_unredeemed_payments_list(conn):
             if internal_payment_tx.provider == base.PaymentProvider.GooglePlayStore:
                 if it.google_payment_token == payment_tx.google_payment_token and it.google_order_id == payment_tx.google_order_id:
                     already_exists = True
-            else:
+            elif internal_payment_tx.provider == base.PaymentProvider.iOSAppStore:
                 if it.apple.tx_id == payment_tx.apple_tx_id:
+                    already_exists = True
+            elif internal_payment_tx.provider == base.PaymentProvider.Rangeproof:
+                if it.rangeproof_order_id == payment_tx.rangeproof_order_id:
                     already_exists = True
 
             if already_exists:
@@ -1801,6 +1915,8 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
                 platform_obfuscated_account_id = google_obfuscated_account_id_from_master_pkey(master_pkey)
             elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
                 platform_obfuscated_account_id = apple_obfuscated_account_id_from_master_pkey(master_pkey)
+            elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+                pass
             else:
                 assert False, "Invalid code path"
 
@@ -1947,6 +2063,8 @@ def round_unix_ts_ms_to_next_day_with_platform_testing_support(payment_provider:
     for a day, for example in Google 1 day is 10s. We handle that explicitly here."""
     if base.PLATFORM_TESTING_ENV:
         match payment_provider:
+            case base.PaymentProvider.Rangeproof:
+                result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
             case base.PaymentProvider.Nil:
                 result_unix_ts_ms = base.round_unix_ts_ms_to_next_day(unix_ts_ms)
             case base.PaymentProvider.GooglePlayStore:
@@ -2059,6 +2177,8 @@ def expire_payments_revocations_and_users(conn: sqlalchemy.engine.Connection, un
 
 def add_user_error_tx(tx: db.SQLTransaction, error: UserError, unix_ts_ms: int):
     match error.provider:
+        case base.PaymentProvider.Rangeproof:
+            pass
         case base.PaymentProvider.Nil:
             pass
         case base.PaymentProvider.GooglePlayStore:
@@ -2067,14 +2187,12 @@ def add_user_error_tx(tx: db.SQLTransaction, error: UserError, unix_ts_ms: int):
                  provider=int(error.provider.value),
                  payment_id=error.google_payment_token,
                  ts=unix_ts_ms)
-
         case base.PaymentProvider.iOSAppStore:
             assert len(error.apple_original_tx_id) > 0
             _ = db.query(tx.conn, '''INSERT INTO user_errors (payment_provider, payment_id, unix_ts_ms) VALUES (:provider, :payment_id, :ts) ON CONFLICT DO NOTHING''',
                  provider=int(error.provider.value),
                  payment_id=error.apple_original_tx_id,
                  ts=unix_ts_ms)
-
 
 def add_user_error(conn: sqlalchemy.engine.Connection, error: UserError, unix_ts_ms: int):
     assert error.provider != base.PaymentProvider.Nil
@@ -2090,6 +2208,7 @@ def has_user_error_tx(tx: db.SQLTransaction, payment_provider: base.PaymentProvi
     return result
 
 def has_user_error_from_master_pkey_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> bool:
+    # NOTE: Rangeproof payments cannot have user errors
     row = db.query_one(tx.conn, (f'''
 SELECT EXISTS (
     SELECT 1
@@ -2157,7 +2276,19 @@ def get_payment_tx(tx:          db.SQLTransaction,
         if record:
             row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
             result = payment_row_from_tuple(tuple(row))
- 
+    elif payment_tx.provider == base.PaymentProvider.Rangeproof:
+        result_set = db.query(tx.conn, '''
+                SELECT *
+                FROM payments
+                WHERE payment_provider = :provider AND rangeproof_order_id = :rangeproof_order_id
+        ''', provider             = int(payment_tx.provider.value),
+              rangeproof_order_id = payment_tx.rangeproof_order_id)
+
+        record = result_set.fetchone()
+        if record:
+            row    = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
+            result = payment_row_from_tuple(tuple(row))
+
     return result
 
 def get_payment(conn: sqlalchemy.engine.Connection,
@@ -2170,6 +2301,9 @@ def get_payment(conn: sqlalchemy.engine.Connection,
 
 def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPaymentTransaction, unix_ts_ms: int) -> bool:
     rows: sqlalchemy.engine.Result[typing.Any] | None = None
+    if payment_tx.provider == base.PaymentProvider.Rangeproof or payment_tx.provider == base.PaymentProvider.Nil:
+        return False
+
     if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
         rows = db.query(tx.conn, '''
             UPDATE payments
@@ -2215,7 +2349,7 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
                  tx_id    = payment_tx.apple_tx_id)
 
         if row:
-            master_pkey = nacl.signing.VerifyKey(typing.cast(bytes, bytes(row[0])))
+            master_pkey = nacl.signing.VerifyKey(bytes(row[0]))
             _update_user_expiry_grace_and_renew_flag_from_payment_list_tx(tx, master_pkey)
 
     return success
@@ -2419,6 +2553,13 @@ def generate_report_rows(conn: sqlalchemy.engine.Connection, period: ReportPerio
             where_clause      = f"payment_provider = {base.PaymentProvider.iOSAppStore.value}",
         )
 
+        rangeproof: dict[str, int] = fetch_counts(
+            tx_conn           = tx.conn,
+            period            = period,
+            unix_ts_ms_column = "unredeemed_unix_ts_ms",
+            where_clause      = f"payment_provider = {base.PaymentProvider.Rangeproof.value}",
+        )
+
         new_subs: dict[str, int] = fetch_counts(
             tx_conn           = tx.conn,
             period            = period,
@@ -2463,6 +2604,7 @@ def generate_report_rows(conn: sqlalchemy.engine.Connection, period: ReportPerio
                 new_subs          = new_subs.get(it, 0),
                 google            = google.get(it, 0),
                 apple             = apple.get(it, 0),
+                rangeproof        = rangeproof.get(it, 0),
                 plan_1m           = plan_1m.get(it, 0),
                 plan_3m           = plan_3m.get(it, 0),
                 plan_12m          = plan_12m.get(it, 0),
@@ -2487,6 +2629,7 @@ def generate_report_str(period: ReportPeriod, data: list[ReportRow], type: Repor
         Section("New Subs",          10),
         Section("Google",            8),
         Section("Apple",             7),
+        Section("Rangeproof",        12),
         Section("Plan 1m",           10),
         Section("Plan 3m",           10),
         Section("Plan 12m",          10),
@@ -2549,6 +2692,11 @@ def generate_report_str(period: ReportPeriod, data: list[ReportRow], type: Repor
                 part_section = sections[len(human_parts)]
                 padding      = part_section.width
                 align        = '<' if part_section.align_left else '>'
+                human_parts.append(f"{row.rangeproof:{align}{padding}}")
+
+                part_section = sections[len(human_parts)]
+                padding      = part_section.width
+                align        = '<' if part_section.align_left else '>'
                 human_parts.append(f"{row.plan_1m:{align}{padding}}")
 
                 part_section = sections[len(human_parts)]
@@ -2591,6 +2739,7 @@ def generate_report_str(period: ReportPeriod, data: list[ReportRow], type: Repor
                     row.new_subs,
                     row.google,
                     row.apple,
+                    row.rangeproof,
                     row.plan_1m,
                     row.plan_3m,
                     row.plan_12m,
