@@ -330,7 +330,6 @@ def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
 
                             print_limit = 128
                             if len(text) > print_limit:
-                                print("woah nelly")
                                 content.append(str(text[:print_limit]) + f'...({len(value)})')
                             else:
                                 content.append(str(text))

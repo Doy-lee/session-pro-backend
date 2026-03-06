@@ -47,8 +47,8 @@ COMMAND FORMATS DETAILED:
       --provider <google|apple> Payment provider
 
     Optional:
-      --master-key <hex>        64-char hex master private key (generates new if omitted)
-      --rotating-key <hex>      64-char hex rotating private key (generates new if omitted)
+      --master-skey <hex>        64-char hex master secret key (generates new if omitted)
+      --rotating-skey <hex>      64-char hex rotating secret key (generates new if omitted)
       --version <int>           Request version (default: 0)
       --dev-plan <1M|3M|12M>    Subscription plan (1M/3M/12M)
       --dev-duration-ms <ms>    Override duration in milliseconds
@@ -59,7 +59,7 @@ COMMAND FORMATS DETAILED:
 
     Examples:
       python cli.py dev-payment add --url http://localhost:8000 --provider google --dev-plan 1M
-      python cli.py dev-payment add --url http://localhost:8000 --provider apple --dev-plan 3M --master-key abcdef...
+      python cli.py dev-payment add --url http://localhost:8000 --provider apple --dev-plan 3M --master-skey abcdef...
 
   dev-payment refund --url <url> --provider <google|apple> [options]
     Mark a development payment as refund requested.
@@ -67,7 +67,7 @@ COMMAND FORMATS DETAILED:
     Required:
       --url <url>               Server URL
       --provider <google|apple> Payment provider
-      --master-pkey <hex>       64-char hex master public key
+      --master-skey <hex>       64-char hex master secret key
       --payment-token <token>   Google: payment token (required for Google)
       --order-id <id>           Google: order ID (required for Google)
       --tx-id <id>              Apple: transaction ID (required for Apple)
@@ -77,8 +77,8 @@ COMMAND FORMATS DETAILED:
       --version <int>           Request version (default: 0)
 
     Examples:
-      python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-key abcdef... --payment-token tok123 --order-id DEV.abc123
-      python cli.py dev-payment refund --url http://localhost:8000 --provider apple --master-key abcdef... --tx-id DEV.xyz789
+      python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-skey abcdef... --payment-token tok123 --order-id DEV.abc123
+      python cli.py dev-payment refund --url http://localhost:8000 --provider apple --master-skey abcdef... --tx-id DEV.xyz789
 
   user-error set "<provider>:<payment_id>=<flag>[,...]" (requires --config)
     A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
@@ -739,35 +739,34 @@ def cmd_db_print(args: argparse.Namespace) -> int:
 
 
 def cmd_dev_payment_add(args: argparse.Namespace) -> int:
-    import hashlib
     import json
     import os
     import urllib.request
     import urllib.error
 
     # Parse or generate master key
-    if args.master_key:
+    if args.master_skey:
         try:
-            master_key = nacl.signing.SigningKey(bytes.fromhex(args.master_key))
+            master_skey = nacl.signing.SigningKey(bytes.fromhex(args.master_skey))
         except Exception as e:
             print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
             return 1
     else:
-        master_key = nacl.signing.SigningKey.generate()
-        print(f'Generated Master SKey: {bytes(master_key).hex()}')
-        print(f'Generated Master PKey: {bytes(master_key.verify_key).hex()}')
+        master_skey = nacl.signing.SigningKey.generate()
+        print(f'Generated Master SKey: {bytes(master_skey).hex()}')
+        print(f'Generated Master PKey: {bytes(master_skey.verify_key).hex()}')
 
     # Parse or generate rotating key
-    if args.rotating_key:
+    if args.rotating_skey:
         try:
-            rotating_key = nacl.signing.SigningKey(bytes.fromhex(args.rotating_key))
+            rotating_skey = nacl.signing.SigningKey(bytes.fromhex(args.rotating_skey))
         except Exception as e:
             print(f"ERROR: Failed to parse rotating key: {e}", file=sys.stderr)
             return 1
     else:
-        rotating_key = nacl.signing.SigningKey.generate()
-        print(f'Generated Rotating SKey: {bytes(rotating_key).hex()}')
-        print(f'Generated Rotating PKey: {bytes(rotating_key.verify_key).hex()}')
+        rotating_skey = nacl.signing.SigningKey.generate()
+        print(f'Generated Rotating SKey: {bytes(rotating_skey).hex()}')
+        print(f'Generated Rotating PKey: {bytes(rotating_skey.verify_key).hex()}')
 
     # Determine provider enum and build payment_tx
     if args.provider == 'google':
@@ -775,37 +774,37 @@ def cmd_dev_payment_add(args: argparse.Namespace) -> int:
         google_payment_token = os.urandom(8).hex()
         google_order_id = 'DEV.' + os.urandom(8).hex()
 
-        # Compute hash
-        hasher = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
-        hasher.update(args.version.to_bytes(length=1, byteorder='little'))
-        hasher.update(bytes(master_key.verify_key))
-        hasher.update(bytes(rotating_key.verify_key))
-        hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
-        hasher.update(google_payment_token.encode('utf-8'))
-        hasher.update(google_order_id.encode('utf-8'))
-
+        payment_tx_obj = backend.UserPaymentTransaction(
+            provider=base.PaymentProvider.GooglePlayStore,
+            google_payment_token=google_payment_token,
+            google_order_id=google_order_id
+        )
         payment_tx = {'provider': provider_enum, 'google_payment_token': google_payment_token, 'google_order_id': google_order_id}
     else:  # apple
         provider_enum = 2
         apple_tx_id = 'DEV.' + os.urandom(8).hex()
 
-        # Compute hash
-        hasher = hashlib.blake2b(digest_size=32, person=b'ProAddPayment___')
-        hasher.update(args.version.to_bytes(length=1, byteorder='little'))
-        hasher.update(bytes(master_key.verify_key))
-        hasher.update(bytes(rotating_key.verify_key))
-        hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
-        hasher.update(apple_tx_id.encode('utf-8'))
-
+        payment_tx_obj = backend.UserPaymentTransaction(
+            provider=base.PaymentProvider.iOSAppStore,
+            apple_tx_id=apple_tx_id
+        )
         payment_tx = {'provider': provider_enum, 'apple_tx_id': apple_tx_id}
+
+    # Compute hash using backend function
+    hash_bytes = backend.make_add_pro_payment_hash(
+        version=args.version,
+        master_pkey=master_skey.verify_key,
+        rotating_pkey=rotating_skey.verify_key,
+        payment_tx=payment_tx_obj
+    )
 
     # Build request
     request_body = {
         'version': args.version,
-        'master_pkey': bytes(master_key.verify_key).hex(),
-        'rotating_pkey': bytes(rotating_key.verify_key).hex(),
-        'master_sig': bytes(master_key.sign(hasher.digest()).signature).hex(),
-        'rotating_sig': bytes(rotating_key.sign(hasher.digest()).signature).hex(),
+        'master_pkey': bytes(master_skey.verify_key).hex(),
+        'rotating_pkey': bytes(rotating_skey.verify_key).hex(),
+        'master_sig': bytes(master_skey.sign(hash_bytes).signature).hex(),
+        'rotating_sig': bytes(rotating_skey.sign(hash_bytes).signature).hex(),
         'payment_tx': payment_tx
     }
 
@@ -847,10 +846,10 @@ def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
     import time
     import urllib.request
     import urllib.error
-    
+
     # Parse master key
     try:
-        master_key = nacl.signing.SigningKey(bytes.fromhex(args.master_key))
+        master_skey = nacl.signing.SigningKey(bytes.fromhex(args.master_skey))
     except Exception as e:
         print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
         return 1
@@ -878,24 +877,21 @@ def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
     now_unix_ts_ms = int(time.time() * 1000)
 
     # Compute hash
-    hasher = hashlib.blake2b(digest_size=32, person=b'ProSetRefundReq_')
-    hasher.update(args.version.to_bytes(length=1, byteorder='little'))
-    hasher.update(bytes(master_key.verify_key))
-    hasher.update(now_unix_ts_ms.to_bytes(length=8, byteorder='little'))
-    hasher.update(refund_unix_ts_ms.to_bytes(length=8, byteorder='little'))
-    hasher.update(provider_enum.to_bytes(length=1, byteorder='little'))
-
+    payment_tx = backend.UserPaymentTransaction()
     if args.provider == 'google':
-        hasher.update(args.payment_token.encode('utf-8'))
-        hasher.update(args.order_id.encode('utf-8'))
+        payment_tx.provider             = base.PaymentProvider.GooglePlayStore
+        payment_tx.google_payment_token = args.payment_token
+        payment_tx.google_order_id      = args.order_id
     else:
-        hasher.update(args.tx_id.encode('utf-8'))
+        payment_tx.provider    = base.PaymentProvider.iOSAppStore
+        payment_tx.apple_tx_id = args.tx_id
+    hash_bytes: bytes = backend.make_set_payment_refund_requested_hash(args.version, master_skey.verify_key, now_unix_ts_ms, refund_unix_ts_ms, payment_tx)
 
     # Build request
     request_body = {
         'version': args.version,
-        'master_pkey': bytes(master_key.verify_key).hex(),
-        'master_sig': bytes(master_key.sign(hasher.digest()).signature).hex(),
+        'master_pkey': bytes(master_skey.verify_key).hex(),
+        'master_sig': bytes(master_skey.sign(hash_bytes).signature).hex(),
         'unix_ts_ms': now_unix_ts_ms,
         'refund_requested_unix_ts_ms': refund_unix_ts_ms,
         'payment_tx': payment_tx
@@ -947,8 +943,8 @@ def main() -> int:
     dev_payment_add         = dev_payment_subparsers.add_parser('add',                                                        help='Add a DEV payment to a development server')
     _                       = dev_payment_add.add_argument('--url',               required=True,                              help='Server URL (e.g., http://localhost:8000)')
     _                       = dev_payment_add.add_argument('--provider',          required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = dev_payment_add.add_argument('--master-key',                                                    help='64-char hex master private key (generates new if omitted)')
-    _                       = dev_payment_add.add_argument('--rotating-key',                                                  help='64-char hex rotating private key (generates new if omitted)')
+    _                       = dev_payment_add.add_argument('--master-skey',                                                   help='64-char hex master secret key (generates new if omitted)')
+    _                       = dev_payment_add.add_argument('--rotating-skey',                                                 help='64-char hex rotating secret key (generates new if omitted)')
     _                       = dev_payment_add.add_argument('--version',           type=int, default=0,                        help='Request version (default: 0)')
     _                       = dev_payment_add.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
     _                       = dev_payment_add.add_argument('--dev-duration-ms',   type=int,                                   help='Override duration in milliseconds')
@@ -957,7 +953,7 @@ def main() -> int:
     dev_payment_refund      = dev_payment_subparsers.add_parser('refund',                                                    help='Mark a DEV payment as refund requested')
     _                       = dev_payment_refund.add_argument('--url',           required=True,                              help='Server URL')
     _                       = dev_payment_refund.add_argument('--provider',      required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = dev_payment_refund.add_argument('--master-pkey',   required=True,                              help='64-char hex master public key')
+    _                       = dev_payment_refund.add_argument('--master-skey',   required=True,                              help='64-char hex master secret key')
     _                       = dev_payment_refund.add_argument('--payment-token',                                             help='Google: payment token (required for Google)')
     _                       = dev_payment_refund.add_argument('--order-id',                                                  help='Google: order ID (required for Google)')
     _                       = dev_payment_refund.add_argument('--tx-id',                                                     help='Apple: transaction ID (required for Apple)')

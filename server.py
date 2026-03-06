@@ -665,24 +665,6 @@ def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey,
     result: bytes = hasher.digest()
     return result
 
-def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, refund_requested_unix_ts_ms: int, payment_tx: backend.UserPaymentTransaction) -> bytes:
-    hasher: hashlib.blake2b = backend.make_blake2b_hasher(personalisation=SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION)
-    hasher.update(version.to_bytes(length=1, byteorder='little'))
-    hasher.update(bytes(master_pkey))
-    hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
-    hasher.update(refund_requested_unix_ts_ms.to_bytes(length=8, byteorder='little'))
-    hasher.update(payment_tx.provider.value.to_bytes(length=1, byteorder='little'))
-    match payment_tx.provider:
-        case base.PaymentProvider.Nil:
-            pass
-        case base.PaymentProvider.GooglePlayStore:
-            hasher.update(payment_tx.google_payment_token.encode())
-            hasher.update(payment_tx.google_order_id.encode())
-        case base.PaymentProvider.iOSAppStore:
-            hasher.update(payment_tx.apple_tx_id.encode())
-    result: bytes = hasher.digest()
-    return result
-
 @contextlib.contextmanager
 def get_db(flask_app: flask.Flask) -> collections.abc.Iterator[sqlalchemy.engine.Engine]:
     database_url = typing.cast(str, flask_app.config[FLASK_CONFIG_DB_URL_KEY])
@@ -1111,11 +1093,11 @@ def set_payment_refund_requested():
 
     # Validate the signature
     master_pkey_nacl      = nacl.signing.VerifyKey(master_pkey_bytes)
-    hash_to_verify: bytes = make_set_payment_refund_requested_hash(version                     = version,
-                                                                   master_pkey                 = master_pkey_nacl,
-                                                                   unix_ts_ms                  = unix_ts_ms,
-                                                                   refund_requested_unix_ts_ms = refund_requested_unix_ts_ms,
-                                                                   payment_tx                  = user_payment)
+    hash_to_verify: bytes = backend.make_set_payment_refund_requested_hash(version                     = version,
+                                                                           master_pkey                 = master_pkey_nacl,
+                                                                           unix_ts_ms                  = unix_ts_ms,
+                                                                           refund_requested_unix_ts_ms = refund_requested_unix_ts_ms,
+                                                                           payment_tx                  = user_payment)
     try:
         _ = master_pkey_nacl.verify(smessage=hash_to_verify, signature=master_sig_bytes)
     except Exception:

@@ -1,3 +1,4 @@
+"""Self-contained examples of hitting the endpoints available on the Session Pro Backend server"""
 import hashlib
 import urllib.request
 import nacl.signing

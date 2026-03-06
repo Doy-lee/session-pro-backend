@@ -24,10 +24,12 @@ BLAKE2B_DIGEST_SIZE        = 32
 log                        = logging.Logger("BACKEND")
 GENERATE_PROOF_HASH_PERSONALISATION  = b'ProGenerateProof'
 BUILD_PROOF_HASH_PERSONALISATION     = b'ProProof________'
-ADD_PRO_PAYMENT_HASH_PERSONALISATION = b'ProAddPayment___'
-assert len(GENERATE_PROOF_HASH_PERSONALISATION)  == hashlib.blake2b.PERSON_SIZE
-assert len(BUILD_PROOF_HASH_PERSONALISATION)     == hashlib.blake2b.PERSON_SIZE
-assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
+ADD_PRO_PAYMENT_HASH_PERSONALISATION                = b'ProAddPayment___'
+SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
+assert len(GENERATE_PROOF_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
+assert len(BUILD_PROOF_HASH_PERSONALISATION)                 == hashlib.blake2b.PERSON_SIZE
+assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION)             == hashlib.blake2b.PERSON_SIZE
+assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 
 @dataclasses.dataclass
 class DevAddProPaymentArgs:
@@ -339,6 +341,24 @@ def make_add_pro_payment_hash(version:       int,
     else:
         assert payment_tx.provider != base.PaymentProvider.Nil, "Nil not supported"
 
+    result: bytes = hasher.digest()
+    return result
+
+def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, refund_requested_unix_ts_ms: int, payment_tx: UserPaymentTransaction) -> bytes:
+    hasher: hashlib.blake2b = make_blake2b_hasher(personalisation=SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION)
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
+    hasher.update(bytes(master_pkey))
+    hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(refund_requested_unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(payment_tx.provider.value.to_bytes(length=1, byteorder='little'))
+    match payment_tx.provider:
+        case base.PaymentProvider.Nil:
+            pass
+        case base.PaymentProvider.GooglePlayStore:
+            hasher.update(payment_tx.google_payment_token.encode())
+            hasher.update(payment_tx.google_order_id.encode())
+        case base.PaymentProvider.iOSAppStore:
+            hasher.update(payment_tx.apple_tx_id.encode())
     result: bytes = hasher.digest()
     return result
 

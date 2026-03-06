@@ -44,13 +44,13 @@ from nacl.exceptions import BadSignatureError
 import hashlib
 import argparse
 
-parser = argparse.ArgumentParser(description='Verify the given signature signed the Session Pro Proof elements (gen-index-hash, rotating-pubkey, expiry-ts-ms)')
-_ = parser.add_argument('--version',         type=int, required=True, help='Session Pro Proof version')
-_ = parser.add_argument('--gen-index-hash',  type=str, required=True, help='32-byte gen index hash (hex)')
-_ = parser.add_argument('--rotating-pubkey', type=str, required=True, help='32-byte rotating pubkey (hex)')
-_ = parser.add_argument('--expiry-ts-ms',    type=int, required=True, help='Expiry timestamp (ms)')
-_ = parser.add_argument('--signature',       type=str,                help='64-byte Ed25519 signature (in hex) that the Pro Backend produced by signing the proof to verify')
-_ = parser.add_argument('--verify-pubkey',   type=str,                help='32-byte Ed25519 pubkey (in hex) that the Pro Backend signed the proof with')
+parser = argparse.ArgumentParser(description='Verify the given signature signed the Session Pro Proof elements (gen-index-hash, rotating-pkey, expiry-ts-ms)')
+_ = parser.add_argument('--version',        type=int, required=True, help='Proof version')
+_ = parser.add_argument('--gen-index-hash', type=str, required=True, help='32-byte gen index hash (in hex)')
+_ = parser.add_argument('--rotating-pkey',  type=str, required=True, help='32-byte Ed25519 rotating public key (in hex)')
+_ = parser.add_argument('--expiry-ts-ms',   type=int, required=True, help='Expiry timestamp (ms)')
+_ = parser.add_argument('--signature',      type=str,                help='64-byte Ed25519 signature (in hex) that the Pro Backend produced by signing the proof to verify')
+_ = parser.add_argument('--verify-pkey',    type=str,                help='32-byte Ed25519 public key (in hex) that the Pro Backend signed the proof with')
 args = parser.parse_args()
 
 # Compute hash of the proof
@@ -61,28 +61,28 @@ if 1:
     h.update(args.version.to_bytes(byteorder='little', length=1))
 
     # Strip 0x prefix if present and convert from hex
-    gen_hash = args.gen_index_hash[2:] if args.gen_index_hash.startswith('0x') else args.gen_index_hash
-    rot_pubkey = args.rotating_pubkey[2:] if args.rotating_pubkey.startswith('0x') else args.rotating_pubkey
+    gen_hash      = args.gen_index_hash[2:] if args.gen_index_hash.startswith('0x') else args.gen_index_hash
+    rotating_pkey = args.rotating_pkey[2:]  if args.rotating_pkey.startswith('0x')  else args.rotating_pkey
 
     h.update(bytes.fromhex(gen_hash))
-    h.update(bytes.fromhex(rot_pubkey))
+    h.update(bytes.fromhex(rotating_pkey))
     h.update(args.expiry_ts_ms.to_bytes(byteorder='little', length=8))
     hash_result = h.digest()
     print(f"Hash: {hash_result.hex()}")
 
-# Verify that the signature signed the proof elements (gen-index-hash, rotating-pubkey, expiry-ts-ms) in question
+# Verify that the signature signed the proof elements (gen-index-hash, rotating-pkey, expiry-ts-ms) in question
 if 1:
-    if args.signature and args.verify_pubkey:
-        sig_hex    = args.signature[2:] if args.signature.startswith('0x') else args.signature
-        pubkey_hex = args.verify_pubkey[2:] if args.verify_pubkey.startswith('0x') else args.verify_pubkey
-        sig        = bytes.fromhex(sig_hex)
-        pubkey     = bytes.fromhex(pubkey_hex)
+    if args.signature and args.verify_pkey:
+        sig_hex  = args.signature[2:]   if args.signature.startswith('0x')   else args.signature
+        pkey_hex = args.verify_pkey[2:] if args.verify_pkey.startswith('0x') else args.verify_pkey
+        sig      = bytes.fromhex(sig_hex)
+        pkey     = bytes.fromhex(pkey_hex)
         assert len(hash_result) == 32, "Hash must be 32 bytes"
         assert len(sig)         == 64, "Invalid signature size"
-        assert len(pubkey)      == 32, "Invalid public key size"
+        assert len(pkey)        == 32, "Invalid public key size"
         try:
-            verify_key = VerifyKey(pubkey)
-            _ = verify_key.verify(hash_result, signature=sig)
+            verify_key = VerifyKey(pkey)
+            _          = verify_key.verify(hash_result, signature=sig)
             print("Signature valid: True")
         except BadSignatureError:
             print("Signature valid: False")

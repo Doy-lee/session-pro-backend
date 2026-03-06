@@ -254,7 +254,8 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                    payment_tx          = add_pro_payment_tx,
                                                    master_sig          = master_key.sign(add_payment_hash).signature,
                                                    rotating_sig        = rotating_key.sign(add_payment_hash).signature,
-                                                   err                 = err)
+                                                   err                 = err,
+                                                   dev_args            = backend.DevAddProPaymentArgs())
         it.proof = redeemed_payment.proof
 
         # Verify payment was redeemed
@@ -273,7 +274,8 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                        payment_tx          = add_pro_payment_tx,
                                                        master_sig          = master_key.sign(add_payment_hash).signature,
                                                        rotating_sig        = rotating_key.sign(add_payment_hash).signature,
-                                                       err                 = err)
+                                                       err                 = err,
+                                                       dev_args            = backend.DevAddProPaymentArgs())
 
         assert err.has()
         assert redeemed_payment_2nd.status                    == backend.RedeemPaymentStatus.AlreadyRedeemed, err.msg_list
@@ -451,7 +453,8 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                                               payment_tx          = add_pro_payment_tx,
                                                                               master_sig          = auto_redeem_user_master_key.sign(add_payment_hash).signature,
                                                                               rotating_sig        = auto_redeem_user_rotating_key.sign(add_payment_hash).signature,
-                                                                              err                 = err)
+                                                                              err                 = err,
+                                                                              dev_args            = backend.DevAddProPaymentArgs())
 
             assert not err.has(), redeemed_payment
             assert redeemed_payment.status == backend.RedeemPaymentStatus.Success, redeemed_payment
