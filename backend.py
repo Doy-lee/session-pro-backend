@@ -26,10 +26,12 @@ GENERATE_PROOF_HASH_PERSONALISATION  = b'ProGenerateProof'
 BUILD_PROOF_HASH_PERSONALISATION     = b'ProProof________'
 ADD_PRO_PAYMENT_HASH_PERSONALISATION                = b'ProAddPayment___'
 SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
+GET_PRO_DETAILS_HASH_PERSONALISATION                = b'ProGetProDetReq_'
 assert len(GENERATE_PROOF_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
 assert len(BUILD_PROOF_HASH_PERSONALISATION)                 == hashlib.blake2b.PERSON_SIZE
 assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION)             == hashlib.blake2b.PERSON_SIZE
 assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
+assert len(GET_PRO_DETAILS_HASH_PERSONALISATION)             == hashlib.blake2b.PERSON_SIZE
 
 @dataclasses.dataclass
 class DevAddProPaymentArgs:
@@ -359,6 +361,15 @@ def make_set_payment_refund_requested_hash(version: int, master_pkey: nacl.signi
             hasher.update(payment_tx.google_order_id.encode())
         case base.PaymentProvider.iOSAppStore:
             hasher.update(payment_tx.apple_tx_id.encode())
+    result: bytes = hasher.digest()
+    return result
+
+def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey, unix_ts_ms: int, count: int) -> bytes:
+    hasher: hashlib.blake2b = make_blake2b_hasher(personalisation=GET_PRO_DETAILS_HASH_PERSONALISATION)
+    hasher.update(version.to_bytes(length=1, byteorder='little'))
+    hasher.update(bytes(master_pkey))
+    hasher.update(unix_ts_ms.to_bytes(length=8, byteorder='little'))
+    hasher.update(count.to_bytes(length=4, byteorder='little'))
     result: bytes = hasher.digest()
     return result
 

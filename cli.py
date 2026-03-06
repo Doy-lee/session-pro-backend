@@ -22,33 +22,42 @@ import db
 # Epilog definitions
 BRIEF_EPILOG = """
 QUICK START EXAMPLES:
-  dev-payment         add       --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
-  dev-payment         refund    --url <url> --provider <google|apple> [options]
-  user-error          set       <provider>:<payment-id>=<true|false>[,...]                  (requires --config)
-  user-error          delete    <provider>:<payment-id>[,...]                               (requires --config)
-  google-notification handle    <msgid>[,...]                                               (requires --config)
-  google-notification delete    <msgid>[,...]                                               (requires --config)
-  google-notification list                                                                  (requires --config)
-  revoke              list      <master_pkey_hex>                                           (requires --config)
-  revoke              delete    <master_pkey_hex>                                           (requires --config)
-  revoke              timestamp <master_pkey_hex> <unix_ts_s>                               (requires --config)
-  report              generate  <daily|weekly|monthly> [--format <human|csv>] [--count <n>] (requires --config)
-  db                  info                                                                  (requires --config)
-  db                  print                                                                 (requires --config)
+  server              add-pro-payment              --url <url> --provider <google|apple> [--dev-plan <1M|3M|12M>] [--dev-duration-ms ...] [--dev-auto-renewing]
+  server              set-payment-refund-requested --url <url> --provider <google|apple> --payment-token <token> --order-id <id>
+  server              get-pro-revocations          --url <url> [--ticket <int>]
+  server              get-pro-details              --url <url> --master-skey <hex> [--count <n>]
+  server              generate-pro-proof           --url <url> --master-skey <hex> --rotating-skey <hex>
+
+  user-error          set                          <provider>:<payment-id>=<true|false>[,...]                  (requires --config)
+  user-error          delete                       <provider>:<payment-id>[,...]                               (requires --config)
+
+  google-notification handle                       <msgid>[,...]                                               (requires --config)
+  google-notification delete                       <msgid>[,...]                                               (requires --config)
+  google-notification list                                                                                     (requires --config)
+
+  revoke              list                         <master_pkey_hex>                                           (requires --config)
+  revoke              delete                       <master_pkey_hex>                                           (requires --config)
+  revoke              timestamp                    <master_pkey_hex> <unix_ts_s>                               (requires --config)
+
+  report              generate                     <daily|weekly|monthly> [--format <human|csv>] [--count <n>] (requires --config)
+
+  db                  info                                                                                     (requires --config)
+  db                  print                                                                                    (requires --config)
 """
 
 DETAILED_EPILOG = """
 COMMAND FORMATS DETAILED:
-  dev-payment add --url <url> --provider <google|apple> [options]
+  server add-pro-payment --url <url> --provider <google|apple> [options]
     Add a development payment to a Session Pro backend server (requires backend to be running in dev mode).
+    Mirrors the /add_pro_payment endpoint.
 
     Required:
       --url <url>               Server URL (e.g., http://localhost:8000)
       --provider <google|apple> Payment provider
 
     Optional:
-      --master-skey <hex>        64-char hex master secret key (generates new if omitted)
-      --rotating-skey <hex>      64-char hex rotating secret key (generates new if omitted)
+      --master-skey <hex>       64-char hex master secret key (generates new if omitted)
+      --rotating-skey <hex>     64-char hex rotating secret key (generates new if omitted)
       --version <int>           Request version (default: 0)
       --dev-plan <1M|3M|12M>    Subscription plan (1M/3M/12M)
       --dev-duration-ms <ms>    Override duration in milliseconds
@@ -58,27 +67,97 @@ COMMAND FORMATS DETAILED:
     Generated keys are always printed to stdout for reproducibility.
 
     Examples:
-      python cli.py dev-payment add --url http://localhost:8000 --provider google --dev-plan 1M
-      python cli.py dev-payment add --url http://localhost:8000 --provider apple --dev-plan 3M --master-skey abcdef...
+      python cli.py server add-pro-payment --url http://localhost:8000 --provider google --dev-plan 1M
+      python cli.py server add-pro-payment --url http://localhost:8000 --provider apple --dev-plan 3M --master-skey abcdef...
 
-  dev-payment refund --url <url> --provider <google|apple> [options]
-    Mark a development payment as refund requested.
+  server set-payment-refund-requested --url <url> --provider <google|apple> --master-skey <hex> [options]
+    Mark a development payment as refund requested. Mirrors the /set_payment_refund_requested endpoint.
 
     Required:
       --url <url>               Server URL
       --provider <google|apple> Payment provider
       --master-skey <hex>       64-char hex master secret key
-      --payment-token <token>   Google: payment token (required for Google)
-      --order-id <id>           Google: order ID (required for Google)
-      --tx-id <id>              Apple: transaction ID (required for Apple)
+
+    Google Required:
+      --payment-token <token>   Google: payment token
+      --order-id <id>           Google: order ID
+
+    Apple Required:
+      --tx-id <id>              Apple: transaction ID
 
     Optional:
-      --refund-time <ms>        Unix timestamp ms for refund (default: now + 1s)
-      --version <int>           Request version (default: 0)
+      --refund-requested-unix-ts-ms <ms>  Unix timestamp ms for refund (default: now + 1s)
+      --version <int>                     Request version (default: 0)
 
     Examples:
-      python cli.py dev-payment refund --url http://localhost:8000 --provider google --master-skey abcdef... --payment-token tok123 --order-id DEV.abc123
-      python cli.py dev-payment refund --url http://localhost:8000 --provider apple --master-skey abcdef... --tx-id DEV.xyz789
+      python cli.py server set-payment-refund-requested --url http://localhost:8000 --provider google --master-skey abcdef... --payment-token tok123 --order-id DEV.abc123
+      python cli.py server set-payment-refund-requested --url http://localhost:8000 --provider apple --master-skey abcdef... --tx-id DEV.xyz789
+
+  server get-pro-revocations --url <url> [--ticket <int>]
+    Get pro revocations from the server. Mirrors the /get_pro_revocations endpoint.
+
+    Required:
+      --url <url>    Server URL (e.g., http://localhost:8000)
+
+    Optional:
+      --ticket <int>  Revocation ticket to query from (default: 0)
+      --version <int> Request version (default: 0)
+
+    Examples:
+      python cli.py server get-pro-revocations --url http://localhost:8000
+      python cli.py server get-pro-revocations --url http://localhost:8000 --ticket 100
+
+  server get-pro-details --url <url> --master-skey <hex> [--count <n>]
+    Get pro details for a user. Mirrors the /get_pro_details endpoint.
+
+    Required:
+      --url <url>         Server URL (e.g., http://localhost:8000)
+      --master-skey <hex> 64-char hex master secret key for signing
+
+    Optional:
+      --count <n>     Number of payments to retrieve (default: 10)
+      --version <int> Request version (default: 0)
+
+    Examples:
+      python cli.py server get-pro-details --url http://localhost:8000 --master-skey abcdef...
+      python cli.py server get-pro-details --url http://localhost:8000 --master-skey abcdef... --count 5
+
+  server generate-pro-proof --url <url> --master-skey <hex> --rotating-skey <hex>
+    Generate a pro proof for a pre-existing subscription. Mirrors the /generate_pro_proof endpoint.
+
+    Required:
+      --url <url>             Server URL (e.g., http://localhost:8000)
+      --master-skey <hex>     64-char hex master secret key for signing
+      --rotating-skey <hex>   64-char hex rotating secret key
+
+    Optional:
+      --version <int>         Request version (default: 0)
+
+    Examples:
+      python cli.py server generate-pro-proof --url http://localhost:8000 --master-skey abcdef... --rotating-skey fedcba...
+
+  user-error set "<provider>:<payment_id>=<flag>[,...]" (requires --config)
+    A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
+    in the DB on startup. This value must be of the format
+
+      "<payment_provider integer>:<payment_id>=[true|false], ..."
+
+    For example
+
+      "1:the_google_order_id=true,2:the_apple_order_id=false"
+
+    Which will add the row that has a payment provider of 1 (which corresponds to the Google Play
+    Store) and has a payment ID that matches "google_order_id" to have an error. For the next entry
+    similarly it will set the Apple row to false (e.g. delete the row from the DB)
+
+    This is intended to be used to flush errors from the DB if they are encountered during the
+    handling of payment notifications for a specific user. Platform clients may be using the error
+    table to populate UI that indicates that a user should contact support, hence clearing this
+    value may clear the error prompt for said user.
+
+    Examples:
+      python cli.py user-error set "1:abc123token=true"
+      python cli.py user-error set "1:token1=true,1:token2=true,2:apple1=false"
 
   user-error set "<provider>:<payment_id>=<flag>[,...]" (requires --config)
     A ',' delimited string to instruct the DB to delete the specified rows from the user errors table
@@ -738,7 +817,7 @@ def cmd_db_print(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_dev_payment_add(args: argparse.Namespace) -> int:
+def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
     import json
     import os
     import urllib.request
@@ -840,7 +919,7 @@ def cmd_dev_payment_add(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
+def cmd_server_set_payment_refund_requested(args: argparse.Namespace) -> int:
     import hashlib
     import json
     import time
@@ -869,8 +948,8 @@ def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
         payment_tx = {'provider': provider_enum, 'apple_tx_id': args.tx_id}
 
     # Set refund timestamp
-    if args.refund_time:
-        refund_unix_ts_ms = args.refund_time
+    if args.refund_requested_unix_ts_ms:
+        refund_unix_ts_ms = args.refund_requested_unix_ts_ms
     else:
         refund_unix_ts_ms = int((time.time() + 1) * 1000)
 
@@ -920,6 +999,160 @@ def cmd_dev_payment_refund(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_server_get_pro_revocations(args: argparse.Namespace) -> int:
+    """Handle query revocations command."""
+    import json
+    import urllib.request
+    import urllib.error
+
+    request_body = {
+        'version': args.version,
+        'ticket': args.ticket
+    }
+
+    print(f'\nQuery Pro Revocations (ticket: {args.ticket})')
+    print(f'Request:\n{json.dumps(request_body, indent=1)}')
+
+    # Send request
+    try:
+        request = urllib.request.Request(
+            f'{args.url}/get_pro_revocations',
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            print(f"Response: {json.dumps(response_data, indent=1)}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Server returned {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: Failed to connect to {args.url}: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_server_get_pro_details(args: argparse.Namespace) -> int:
+    """Handle query details command."""
+    import json
+    import time
+    import urllib.request
+    import urllib.error
+
+    # Parse master key
+    try:
+        master_skey = nacl.signing.SigningKey(bytes.fromhex(args.master_skey))
+    except Exception as e:
+        print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
+        return 1
+
+    unix_ts_ms = int(time.time() * 1000)
+
+    # Compute hash
+    hash_bytes = backend.make_get_pro_details_hash(
+        version=args.version,
+        master_pkey=master_skey.verify_key,
+        unix_ts_ms=unix_ts_ms,
+        count=args.count
+    )
+
+    # Build request
+    request_body = {
+        'version': args.version,
+        'master_pkey': bytes(master_skey.verify_key).hex(),
+        'master_sig': bytes(master_skey.sign(hash_bytes).signature).hex(),
+        'unix_ts_ms': unix_ts_ms,
+        'count': args.count
+    }
+
+    print(f'\nQuery Pro Details')
+    print(f'Request:\n{json.dumps(request_body, indent=1)}')
+
+    # Send request
+    try:
+        request = urllib.request.Request(
+            f'{args.url}/get_pro_details',
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            print(f"Response: {json.dumps(response_data, indent=1)}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Server returned {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: Failed to connect to {args.url}: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_server_generate_pro_proof(args: argparse.Namespace) -> int:
+    """Handle generate pro proof command."""
+    import json
+    import time
+    import urllib.request
+    import urllib.error
+
+    # Parse master key
+    try:
+        master_skey = nacl.signing.SigningKey(bytes.fromhex(args.master_skey))
+    except Exception as e:
+        print(f"ERROR: Failed to parse master key: {e}", file=sys.stderr)
+        return 1
+
+    # Parse rotating key
+    try:
+        rotating_skey = nacl.signing.SigningKey(bytes.fromhex(args.rotating_skey))
+    except Exception as e:
+        print(f"ERROR: Failed to parse rotating key: {e}", file=sys.stderr)
+        return 1
+
+    unix_ts_ms = int(time.time() * 1000)
+
+    # Compute hash
+    hash_bytes = backend.make_generate_pro_proof_hash(
+        version=args.version,
+        master_pkey=master_skey.verify_key,
+        rotating_pkey=rotating_skey.verify_key,
+        unix_ts_ms=unix_ts_ms
+    )
+
+    # Build request
+    request_body = {
+        'version': args.version,
+        'master_pkey': bytes(master_skey.verify_key).hex(),
+        'rotating_pkey': bytes(rotating_skey.verify_key).hex(),
+        'master_sig': bytes(master_skey.sign(hash_bytes).signature).hex(),
+        'rotating_sig': bytes(rotating_skey.sign(hash_bytes).signature).hex(),
+        'unix_ts_ms': unix_ts_ms
+    }
+
+    print(f'\nGenerate Pro Proof')
+    print(f'Request:\n{json.dumps(request_body, indent=1)}')
+
+    # Send request
+    try:
+        request = urllib.request.Request(
+            f'{args.url}/generate_pro_proof',
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            print(f"Response: {json.dumps(response_data, indent=1)}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Server returned {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: Failed to connect to {args.url}: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description     = 'Session Pro Backend CLI',
@@ -936,29 +1169,51 @@ def main() -> int:
 
     subparsers              = parser.add_subparsers(dest='command', help='Available commands')
 
-    # Dev payment commands (no config required)
-    dev_payment_parser      = subparsers.add_parser('dev-payment', help='Development payment operations (no --config required)')
-    dev_payment_subparsers  = dev_payment_parser.add_subparsers(dest='dev_payment_command', help='Dev payment subcommands')
+    # Server commands (no config required) - mirror HTTP endpoints
+    server_parser           = subparsers.add_parser('server', help='Server endpoint operations (no --config required)')
+    server_subparsers       = server_parser.add_subparsers(dest='server_command', help='Server endpoint subcommands')
 
-    dev_payment_add         = dev_payment_subparsers.add_parser('add',                                                        help='Add a DEV payment to a development server')
-    _                       = dev_payment_add.add_argument('--url',               required=True,                              help='Server URL (e.g., http://localhost:8000)')
-    _                       = dev_payment_add.add_argument('--provider',          required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = dev_payment_add.add_argument('--master-skey',                                                   help='64-char hex master secret key (generates new if omitted)')
-    _                       = dev_payment_add.add_argument('--rotating-skey',                                                 help='64-char hex rotating secret key (generates new if omitted)')
-    _                       = dev_payment_add.add_argument('--version',           type=int, default=0,                        help='Request version (default: 0)')
-    _                       = dev_payment_add.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
-    _                       = dev_payment_add.add_argument('--dev-duration-ms',   type=int,                                   help='Override duration in milliseconds')
-    _                       = dev_payment_add.add_argument('--dev-auto-renewing', action='store_true',                        help='Set auto-renewing to true (default: false)')
+    # add-pro-payment endpoint
+    server_add_pro_payment  = server_subparsers.add_parser('add-pro-payment',                                                        help='Add a pro payment. Mirrors /add_pro_payment')
+    _                       = server_add_pro_payment.add_argument('--url',               required=True,                              help='Server URL (e.g., http://localhost:8000)')
+    _                       = server_add_pro_payment.add_argument('--provider',          required=True, choices=['google', 'apple'], help='Payment provider')
+    _                       = server_add_pro_payment.add_argument('--master-skey',                                                   help='64-char hex master secret key (generates new if omitted)')
+    _                       = server_add_pro_payment.add_argument('--rotating-skey',                                                 help='64-char hex rotating secret key (generates new if omitted)')
+    _                       = server_add_pro_payment.add_argument('--version',           type=int, default=0,                        help='Request version (default: 0)')
+    _                       = server_add_pro_payment.add_argument('--dev-plan',                         choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
+    _                       = server_add_pro_payment.add_argument('--dev-duration-ms',   type=int,                                   help='Override duration in milliseconds')
+    _                       = server_add_pro_payment.add_argument('--dev-auto-renewing', action='store_true',                        help='Set auto-renewing to true (default: false)')
 
-    dev_payment_refund      = dev_payment_subparsers.add_parser('refund',                                                    help='Mark a DEV payment as refund requested')
-    _                       = dev_payment_refund.add_argument('--url',           required=True,                              help='Server URL')
-    _                       = dev_payment_refund.add_argument('--provider',      required=True, choices=['google', 'apple'], help='Payment provider')
-    _                       = dev_payment_refund.add_argument('--master-skey',   required=True,                              help='64-char hex master secret key')
-    _                       = dev_payment_refund.add_argument('--payment-token',                                             help='Google: payment token (required for Google)')
-    _                       = dev_payment_refund.add_argument('--order-id',                                                  help='Google: order ID (required for Google)')
-    _                       = dev_payment_refund.add_argument('--tx-id',                                                     help='Apple: transaction ID (required for Apple)')
-    _                       = dev_payment_refund.add_argument('--refund-time',   type=int,                                   help='Unix timestamp ms for refund (default: now + 1s)')
-    _                       = dev_payment_refund.add_argument('--version',       type=int,      default=0,                   help='Request version (default: 0)')
+    # set-payment-refund-requested endpoint
+    server_set_refund       = server_subparsers.add_parser('set-payment-refund-requested',                                                help='Mark payment as refund requested. Mirrors /set_payment_refund_requested')
+    _                       = server_set_refund.add_argument('--url',                         required=True,                              help='Server URL')
+    _                       = server_set_refund.add_argument('--provider',                    required=True, choices=['google', 'apple'], help='Payment provider')
+    _                       = server_set_refund.add_argument('--master-skey',                 required=True,                              help='64-char hex master secret key')
+    _                       = server_set_refund.add_argument('--payment-token',                                                           help='Google: payment token')
+    _                       = server_set_refund.add_argument('--order-id',                                                                help='Google: order ID')
+    _                       = server_set_refund.add_argument('--tx-id',                                                                   help='Apple: transaction ID')
+    _                       = server_set_refund.add_argument('--refund-requested-unix-ts-ms', type=int,                                   help='Unix timestamp ms for refund (default: now + 1s)')
+    _                       = server_set_refund.add_argument('--version',                     type=int,      default=0,                   help='Request version (default: 0)')
+
+    # get-pro-revocations endpoint
+    server_get_revocations  = server_subparsers.add_parser('get-pro-revocations',                          help='Get pro revocations. Mirrors /get_pro_revocations')
+    _                       = server_get_revocations.add_argument('--url',     required=True,              help='Server URL (e.g., http://localhost:8000)')
+    _                       = server_get_revocations.add_argument('--ticket',  type=int, default=0,        help='Revocation ticket to query from (default: 0)')
+    _                       = server_get_revocations.add_argument('--version', type=int, default=0,        help='Request version (default: 0)')
+
+    # get-pro-details endpoint
+    server_get_details      = server_subparsers.add_parser('get-pro-details',                              help='Get pro details. Mirrors /get_pro_details')
+    _                       = server_get_details.add_argument('--url',         required=True,              help='Server URL (e.g., http://localhost:8000)')
+    _                       = server_get_details.add_argument('--master-skey', required=True,              help='64-char hex master secret key for signing')
+    _                       = server_get_details.add_argument('--count',       type=int, default=10,       help='Number of payments to retrieve (default: 10)')
+    _                       = server_get_details.add_argument('--version',     type=int, default=0,        help='Request version (default: 0)')
+
+    # generate-pro-proof endpoint
+    server_gen_proof        = server_subparsers.add_parser('generate-pro-proof',                           help='Generate pro proof. Mirrors /generate_pro_proof')
+    _                       = server_gen_proof.add_argument('--url',           required=True,              help='Server URL (e.g., http://localhost:8000)')
+    _                       = server_gen_proof.add_argument('--master-skey',   required=True,              help='64-char hex master secret key')
+    _                       = server_gen_proof.add_argument('--rotating-skey', required=True,              help='64-char hex rotating secret key')
+    _                       = server_gen_proof.add_argument('--version',       type=int, default=0,        help='Request version (default: 0)')
 
     # User error commands
     user_error_parser       = subparsers.add_parser('user-error',                         help='Manage user errors')
@@ -1019,13 +1274,19 @@ def main() -> int:
     # Dispatch to command handler - commands that need config will load it themselves
     dry_run = args.dry_run
 
-    if args.command == 'dev-payment':
-        if args.dev_payment_command == 'add':
-            return cmd_dev_payment_add(args)
-        elif args.dev_payment_command == 'refund':
-            return cmd_dev_payment_refund(args)
+    if args.command == 'server':
+        if args.server_command == 'add-pro-payment':
+            return cmd_server_add_pro_payment(args)
+        elif args.server_command == 'set-payment-refund-requested':
+            return cmd_server_set_payment_refund_requested(args)
+        elif args.server_command == 'get-pro-revocations':
+            return cmd_server_get_pro_revocations(args)
+        elif args.server_command == 'get-pro-details':
+            return cmd_server_get_pro_details(args)
+        elif args.server_command == 'generate-pro-proof':
+            return cmd_server_generate_pro_proof(args)
         else:
-            dev_payment_parser.print_help()
+            server_parser.print_help()
             return 1
 
     elif args.command == 'user-error':
