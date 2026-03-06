@@ -228,7 +228,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                     ack_ids: list[str] = []
                     for index, it in enumerate(result.received_messages):
                         err                              = base.ErrorSink()
-                        message_data: base.JSONObject    = json.loads(it.message.data)  # pyright: ignore[reportAny]
+                        message_data: base.JSONObject    = json.loads(it.message.data) 
                         parse:        ParsedNotification = parse_notification(message_data, err);
                         message_id:   int                = int(it.message.message_id)
                         if err.has():
@@ -263,7 +263,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
                                                                                       expiry_unix_ts_ms = parse.event_time_ms + base.MILLISECONDS_IN_DAY * 8,
                                                                                       payload           = google.pubsub_v1.types.ReceivedMessage.to_json(it))
 
-                            db.retry_on_database_locked(add_notification_id_to_db, log, "Add Google notification ID to DB failed", err)
+                            db.retry_on_database_locked(add_notification_id_to_db, log, "Add Google notification ID to DB failed")
                             if err.has():
                                 log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
                                 continue
