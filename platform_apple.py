@@ -938,10 +938,11 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     # NOTE: Handle the notification
     err                                       = base.ErrorSink()
     decoded_notification: DecodedNotification = decoded_notification_from_apple_response_body_v2(resp, core.signed_data_verifier, err)
-    db_result                                 = server.open_db_from_flask_request_context(flask.current_app)
-    db.retry_on_database_locked(lambda: handle_notification(decoded_notification, db_result.conn, core.notification_retry_duration_ms, err),
-                                log,
-                                "Apple notification handling failed")
+    with server.get_db(flask.current_app) as engine:
+        with db.connection(engine) as conn:
+            db.retry_on_database_locked(lambda: handle_notification(decoded_notification, conn, core.notification_retry_duration_ms, err),
+                                        log,
+                                        "Apple notification handling failed")
 
     # NOTE: Handle errors
     if err.has():
@@ -952,8 +953,9 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
                 apple_original_tx_id = decoded_notification.tx_info.originalTransactionId,
             )
 
-            db = server.open_db_from_flask_request_context(flask.current_app)
-            backend.add_user_error(conn=db.conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
+            with server.get_db(flask.current_app) as engine:
+                with db.connection(engine) as conn:
+                    backend.add_user_error(conn=conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
 
         # NOTE: Log and abort request
         log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))
