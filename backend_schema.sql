@@ -1,7 +1,7 @@
 -- Session Pro Backend Database Schema
 
 CREATE TABLE IF NOT EXISTS payments (
-    id INTEGER PRIMARY KEY NOT NULL,
+    id                                INTEGER PRIMARY KEY NOT NULL,
     master_pkey                       BLOB,
     status                            INTEGER NOT NULL,
     plan                              INTEGER NOT NULL,
@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS payments (
     platform_refund_expiry_unix_ts_ms INTEGER NOT NULL,
     revoked_unix_ts_ms                INTEGER,
 
-    apple_original_tx_id              BLOB,
-    apple_tx_id                       BLOB,
-    apple_web_line_order_tx_id        BLOB,
+    apple_original_tx_id              TEXT,
+    apple_tx_id                       TEXT,
+    apple_web_line_order_tx_id        TEXT,
 
     -- Purchase token associated with a user that is shared across all payments for a given
     -- subscription. Google recommends this be the primary key for the user's subscription
@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS payments (
     -- assert the token was valid.
     google_payment_token              TEXT,
     google_order_id                   TEXT,
+
+    rangeproof_order_id               TEXT,
 
     -- On some platforms the initiation of a refund can be recorded manually by the originating
     -- device by calling the backend with the payment details to mark as having initiated a refund.
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS payments (
     google_obfuscated_account_id      BLOB,
 
     -- App account token for Apple subscriptions
-    apple_app_account_token           STRING NOT NULL
+    apple_app_account_token           TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -117,7 +119,7 @@ CREATE TABLE IF NOT EXISTS users (
     google_obfuscated_account_id BLOB NOT NULL,
 
     -- Apple's per account user token
-    apple_app_account_token STRING NOT NULL
+    apple_app_account_token TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS revocations (
@@ -154,7 +156,7 @@ CREATE TABLE IF NOT EXISTS runtime (
 -- that case, Apple will similarly retry the notification and we need to no-op in that situation as
 -- well. This is all managed in this table.
 CREATE TABLE IF NOT EXISTS apple_notification_uuid_history (
-    uuid              STRING NOT NULL,
+    uuid              TEXT NOT NULL,
     expiry_unix_ts_ms INTEGER NOT NULL
 );
 
@@ -184,7 +186,7 @@ CREATE TABLE IF NOT EXISTS google_notification_history (
 );
 
 CREATE TABLE IF NOT EXISTS user_errors (
-    payment_id       STRING  NOT NULL,
+    payment_id       TEXT    NOT NULL,
     payment_provider INTEGER NOT NULL,
     unix_ts_ms       INTEGER NOT NULL,
     UNIQUE(payment_id, payment_provider)

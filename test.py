@@ -244,7 +244,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                              rotating_pkey=rotating_key.verify_key,
                                                              payment_tx=add_pro_payment_tx)
 
-        redeemed_payment = backend.add_pro_payment(version             = version,
+        redeemed_payment = backend.verify_and_add_pro_payment(version             = version,
                                                    conn                = db_conn,
                                                    signing_key         = backend_key,
                                                    unix_ts_ms          = unix_ts_ms,
@@ -264,7 +264,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
         assert redeemed_payment.status == backend.RedeemPaymentStatus.Success
 
         # Try claiming it again, this should fail because it has already been claimed
-        redeemed_payment_2nd = backend.add_pro_payment(version             = version,
+        redeemed_payment_2nd = backend.verify_and_add_pro_payment(version             = version,
                                                        conn                = db_conn,
                                                        signing_key         = backend_key,
                                                        unix_ts_ms          = unix_ts_ms,
@@ -443,7 +443,7 @@ def test_backend_same_user_stacks_subscription_and_auto_redeem(monkeypatch):
                                                                         rotating_pkey = auto_redeem_user_rotating_key.verify_key,
                                                                         payment_tx    = add_pro_payment_tx)
 
-            redeemed_payment: backend.RedeemPayment = backend.add_pro_payment(version             = version,
+            redeemed_payment: backend.RedeemPayment = backend.verify_and_add_pro_payment(version             = version,
                                                                               conn                = db_conn,
                                                                               signing_key         = backend_key,
                                                                               unix_ts_ms          = unix_ts_ms,

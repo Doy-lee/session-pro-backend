@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS payments (
     apple_web_line_order_tx_id        TEXT,
     google_payment_token              TEXT,
     google_order_id                   TEXT,
+    rangeproof_order_id               TEXT,
 
     refund_requested_unix_ts_ms       BIGINT  NOT     NULL DEFAULT 0,
     google_obfuscated_account_id      BYTEA           NULL CHECK (octet_length(google_obfuscated_account_id) = 32),

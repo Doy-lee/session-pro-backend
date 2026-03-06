@@ -11,6 +11,7 @@ import os
 import pathlib
 import sys
 import time
+import uuid
 
 import nacl.signing
 
@@ -28,21 +29,23 @@ QUICK START EXAMPLES:
   server              get-pro-details              --url <url> --master-skey <hex> [--count <n>]
   server              generate-pro-proof           --url <url> --master-skey <hex> --rotating-skey <hex>
 
-  user-error          set                          <provider>:<payment-id>=<true|false>[,...]                  (requires --config)
-  user-error          delete                       <provider>:<payment-id>[,...]                               (requires --config)
+  voucher                                           --master-pkey <hex> --plan <1M|3M|12M> [--rotating-pkey <hex>] [--dev-duration-ms <ms>] (requires --config)
 
-  google-notification handle                       <msgid>[,...]                                               (requires --config)
-  google-notification delete                       <msgid>[,...]                                               (requires --config)
-  google-notification list                                                                                     (requires --config)
+  user-error          set                          <provider>:<payment-id>=<true|false>[,...]                                               (requires --config)
+  user-error          delete                       <provider>:<payment-id>[,...]                                                            (requires --config)
 
-  revoke              list                         <master_pkey_hex>                                           (requires --config)
-  revoke              delete                       <master_pkey_hex>                                           (requires --config)
-  revoke              timestamp                    <master_pkey_hex> <unix_ts_s>                               (requires --config)
+  google-notification handle                       <msgid>[,...]                                                                            (requires --config)
+  google-notification delete                       <msgid>[,...]                                                                            (requires --config)
+  google-notification list                                                                                                                  (requires --config)
 
-  report              generate                     <daily|weekly|monthly> [--format <human|csv>] [--count <n>] (requires --config)
+  revoke              list                         <master_pkey_hex>                                                                        (requires --config)
+  revoke              delete                       <master_pkey_hex>                                                                        (requires --config)
+  revoke              timestamp                    <master_pkey_hex> <unix_ts_s>                                                            (requires --config)
 
-  db                  info                                                                                     (requires --config)
-  db                  print                                                                                    (requires --config)
+  report              generate                     <daily|weekly|monthly> [--format <human|csv>] [--count <n>]                              (requires --config)
+
+  db                  info                                                                                                                  (requires --config)
+  db                  print                                                                                                                 (requires --config)
 """
 
 DETAILED_EPILOG = """
@@ -193,6 +196,24 @@ COMMAND FORMATS DETAILED:
     Examples:
       python cli.py --config config.ini user-error delete "1:abc123token"
       python cli.py --config config.ini user-error delete "1:token1,1:token2,2:apple1"
+
+  voucher --config <ini> --master-pkey <hex> --plan <1M|3M|12M> [--rotating-pkey <hex>] [--dev-duration-ms <ms>] (requires --config)
+    Create a Rangeproof voucher payment and auto-redeem it. This is an admin command for granting
+    promotional or complimentary Session Pro subscriptions directly in the database.
+
+    Required:
+      --config <ini>          Path to config.ini file
+      --master-pkey <hex>     64-char hex master public key of the recipient
+      --plan <1M|3M|12M>      Subscription plan duration
+
+    Optional:
+      --rotating-pkey <hex>   64-char hex rotating public key (generates new if omitted)
+      --dev-duration-ms <ms>  Override duration in milliseconds
+
+    Examples:
+      python cli.py voucher --config config.ini --master-pkey abcdef... --plan 1M
+      python cli.py voucher --config config.ini --master-pkey abcdef... --plan 3M --rotating-pkey fedcba...
+      python cli.py voucher --config config.ini --master-pkey abcdef... --plan 12M --dev-duration-ms 5000
 
   google-notification handle "<message_id>[,...]" (requires --config)
     A ',' delimited string of message IDs to instruct the DB to mark the specified rows as handled
@@ -888,7 +909,7 @@ def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
         'rotating_pkey': bytes(rotating_skey.verify_key).hex(),
         'master_sig':    bytes(master_skey.sign(hash_bytes).signature).hex(),
         'rotating_sig':  bytes(rotating_skey.sign(hash_bytes).signature).hex(),
-        'payment_tx':    payment_tx
+        'payment_tx':    payment_tx_obj
     }
 
     # Add dev arguments
@@ -1160,6 +1181,139 @@ def cmd_server_generate_pro_proof(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_voucher(args: argparse.Namespace) -> int:
+    """Handle voucher command - creates Rangeproof voucher and auto-redeems it."""
+    config = require_config(args)
+
+    # Parse master public key
+    try:
+        master_pkey_hex = args.master_pkey
+        if master_pkey_hex.startswith("0x"):
+            master_pkey_hex = master_pkey_hex[2:]
+        master_pkey = nacl.signing.VerifyKey(bytes.fromhex(master_pkey_hex))
+    except Exception as e:
+        print(f"ERROR: Failed to parse master public key: {e}", file=sys.stderr)
+        return 1
+
+    # Handle rotating key
+    rotating_skey = None
+    rotating_pkey = None
+    if args.rotating_pkey:
+        try:
+            rotating_pkey_hex = args.rotating_pkey
+            if rotating_pkey_hex.startswith("0x"):
+                rotating_pkey_hex = rotating_pkey_hex[2:]
+            rotating_pkey = nacl.signing.VerifyKey(bytes.fromhex(rotating_pkey_hex))
+        except Exception as e:
+            print(f"ERROR: Failed to parse rotating public key: {e}", file=sys.stderr)
+            return 1
+    else:
+        # Generate a throwaway rotating keypair
+        rotating_skey = nacl.signing.SigningKey.generate()
+        rotating_pkey = rotating_skey.verify_key
+        print(f'Generated Rotating SKey: {bytes(rotating_skey).hex()}')
+        print(f'Generated Rotating PKey: {bytes(rotating_pkey).hex()}')
+
+    rangeproof_order_id = str(uuid.uuid4())
+    print(f'Generated Rangeproof Order ID: {rangeproof_order_id}')
+
+    # Map plan to enum and calculate duration
+    plan_map = {'1M': base.ProPlan.OneMonth, '3M': base.ProPlan.ThreeMonth, '12M': base.ProPlan.TwelveMonth}
+    plan     = plan_map[args.plan]
+
+    # Calculate plan duration in milliseconds
+    if args.dev_duration_ms:
+        duration_ms = args.dev_duration_ms
+    else:
+        if plan == base.ProPlan.OneMonth:
+            duration_ms = 30 * base.SECONDS_IN_DAY * 1000
+        elif plan == base.ProPlan.ThreeMonth:
+            duration_ms = 90 * base.SECONDS_IN_DAY * 1000
+        else:  # TwelveMonth
+            duration_ms = 365 * base.SECONDS_IN_DAY * 1000
+
+    # Create payment transaction
+    payment_tx = base.PaymentProviderTransaction(
+        provider=base.PaymentProvider.Rangeproof,
+        rangeproof_order_id=rangeproof_order_id
+    )
+
+    try:
+        with db.open_database(config.db_url) as engine:
+            with db.connection(engine) as conn:
+                unix_ts_ms = int(time.time() * 1000)
+                expiry_unix_ts_ms = unix_ts_ms + duration_ms
+                unredeemed_unix_ts_ms = unix_ts_ms
+
+                # Step 1: Add unredeemed payment
+                print('\nStep 1: Creating unredeemed Rangeproof payment...')
+                err = base.ErrorSink()
+                backend.add_unredeemed_payment(
+                    conn=conn,
+                    payment_tx=payment_tx,
+                    plan=plan,
+                    expiry_unix_ts_ms=expiry_unix_ts_ms,
+                    unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
+                    platform_refund_expiry_unix_ts_ms=0,
+                    platform_obfuscated_account_id=b'',
+                    err=err
+                )
+
+                if err.has():
+                    print(f"ERROR: Failed to create unredeemed payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
+                    return 1
+
+                print("Success: Unredeemed payment created")
+
+                # Get the backend signing key from runtime
+                runtime_result = db.query(conn, "SELECT backend_key FROM runtime")
+                runtime_row = runtime_result.fetchone()
+                if not runtime_row:
+                    print("ERROR: Could not load runtime from database", file=sys.stderr)
+                    return 1
+                backend_key_bytes = bytes(runtime_row[0])
+                backend_key = nacl.signing.SigningKey(backend_key_bytes)
+
+                # Step 2: Redeem the payment via add_pro_payment
+                print('\nStep 2: Redeeming payment and generating pro proof...')
+                err = base.ErrorSink()
+                redeem_result = backend.add_pro_payment(
+                    conn=conn,
+                    version=0,
+                    signing_key=backend_key,
+                    unix_ts_ms=unix_ts_ms,
+                    redeemed_unix_ts_ms=unix_ts_ms,
+                    master_pkey=master_pkey,
+                    rotating_pkey=rotating_pkey,
+                    payment_tx=backend.UserPaymentTransaction(
+                        provider=base.PaymentProvider.Rangeproof,
+                        rangeproof_order_id=rangeproof_order_id
+                    ),
+                    err=err
+                )
+
+                if err.has():
+                    print(f"ERROR: Failed to redeem payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
+                    return 1
+
+                if redeem_result.status != backend.RedeemPaymentStatus.Success:
+                    print(f"ERROR: Payment redemption failed with status: {redeem_result.status}", file=sys.stderr)
+                    return 1
+
+                print("Success: Payment redeemed and pro proof generated")
+                print(f'\nProof Details:')
+                print(f'  Expiry: {base.readable_unix_ts_ms(redeem_result.proof.expiry_unix_ts_ms)}')
+                print(f'  Gen Index Hash: {redeem_result.proof.gen_index_hash.hex()}')
+
+                return 0
+
+    except Exception as e:
+        print(f"ERROR: Database error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description     = 'Session Pro Backend CLI',
@@ -1221,6 +1375,13 @@ def main() -> int:
     _                       = server_gen_proof.add_argument('--master-skey',   required=True,              help='64-char hex master secret key')
     _                       = server_gen_proof.add_argument('--rotating-skey', required=True,              help='64-char hex rotating secret key')
     _                       = server_gen_proof.add_argument('--version',       type=int, default=0,        help='Request version (default: 0)')
+
+    # Voucher command (creates Rangeproof voucher and auto-redeems it)
+    voucher_parser          = subparsers.add_parser('voucher',                                                             help='Create a Rangeproof voucher payment (requires --config)')
+    _                       = voucher_parser.add_argument('--master-pkey',     required=True,                              help='64-char hex master public key of the recipient')
+    _                       = voucher_parser.add_argument('--plan',            required=True, choices=['1M', '3M', '12M'], help='Subscription plan (1M/3M/12M)')
+    _                       = voucher_parser.add_argument('--rotating-pkey',                                               help='64-char hex rotating public key (generates new if omitted)')
+    _                       = voucher_parser.add_argument('--dev-duration-ms', type=int,                                   help='Override duration in milliseconds')
 
     # User error commands
     user_error_parser       = subparsers.add_parser('user-error',                         help='Manage user errors')
@@ -1295,6 +1456,9 @@ def main() -> int:
         else:
             server_parser.print_help()
             return 1
+
+    elif args.command == 'voucher':
+        return cmd_voucher(args)
 
     elif args.command == 'user-error':
         if args.user_error_command == 'set':

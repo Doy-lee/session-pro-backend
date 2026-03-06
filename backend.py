@@ -22,16 +22,16 @@ import sqlalchemy.engine
 ZERO_BYTES32               = bytes(32)
 BLAKE2B_DIGEST_SIZE        = 32
 log                        = logging.Logger("BACKEND")
-GENERATE_PROOF_HASH_PERSONALISATION  = b'ProGenerateProof'
-BUILD_PROOF_HASH_PERSONALISATION     = b'ProProof________'
-ADD_PRO_PAYMENT_HASH_PERSONALISATION                = b'ProAddPayment___'
-SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION   = b'ProSetRefundReq_'
-GET_PRO_DETAILS_HASH_PERSONALISATION                = b'ProGetProDetReq_'
-assert len(GENERATE_PROOF_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
-assert len(BUILD_PROOF_HASH_PERSONALISATION)                 == hashlib.blake2b.PERSON_SIZE
-assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION)             == hashlib.blake2b.PERSON_SIZE
+GENERATE_PROOF_HASH_PERSONALISATION               = b'ProGenerateProof'
+BUILD_PROOF_HASH_PERSONALISATION                  = b'ProProof________'
+ADD_PRO_PAYMENT_HASH_PERSONALISATION              = b'ProAddPayment___'
+SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION = b'ProSetRefundReq_'
+GET_PRO_DETAILS_HASH_PERSONALISATION              = b'ProGetProDetReq_'
+assert len(GENERATE_PROOF_HASH_PERSONALISATION)               == hashlib.blake2b.PERSON_SIZE
+assert len(BUILD_PROOF_HASH_PERSONALISATION)                  == hashlib.blake2b.PERSON_SIZE
+assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
 assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
-assert len(GET_PRO_DETAILS_HASH_PERSONALISATION)             == hashlib.blake2b.PERSON_SIZE
+assert len(GET_PRO_DETAILS_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
 
 @dataclasses.dataclass
 class DevAddProPaymentArgs:
@@ -128,7 +128,8 @@ class RedeemPayment:
     proof:  ProSubscriptionProof = dataclasses.field(default_factory=ProSubscriptionProof)
     status: RedeemPaymentStatus  = RedeemPaymentStatus.Nil
 
-SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # master_pkey
+SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[int,          # id
+                                                            bytes | None, # master_pkey
                                                             int,          # status
                                                             int,          # plan
                                                             int,          # payment_provider
@@ -144,10 +145,10 @@ SQLTablePaymentRowTuple:           typing.TypeAlias = tuple[bytes | None, # mast
                                                             str | None,   # apple_web_line_order_tx_id
                                                             str | None,   # google_payment_token
                                                             str | None,   # google_order_id
+                                                            str | None,   # rangeproof_order_id
                                                             int,          # refund_requested_unix_ts_ms
                                                             bytes,        # google_obfuscated_account_id
                                                             str,          # apple_app_account_token
-                                                            str,          # rangeproof_order_id
                                                             ]
 
 AddRevocationIterator:               typing.TypeAlias = tuple[int,          # (row) id
@@ -225,8 +226,8 @@ class UserRow:
 @dataclasses.dataclass
 class GetUserAndPayments:
     payments_it:    sqlalchemy.engine.Result[SQLTablePaymentRowTuple]
-    user:           UserRow                                           = dataclasses.field(default_factory=UserRow)
-    payments_count: int                                               = 0
+    user:           UserRow = dataclasses.field(default_factory=UserRow)
+    payments_count: int     = 0
 
 @dataclasses.dataclass
 class RevocationRow:
@@ -381,10 +382,10 @@ def make_get_pro_details_hash(version: int, master_pkey: nacl.signing.VerifyKey,
     result: bytes = hasher.digest()
     return result
 
-def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> PaymentRow:
+def payment_row_from_tuple(row: SQLTablePaymentRowTuple) -> PaymentRow:
     result                                    = PaymentRow()
     result.id                                 = row[0]
-    result.master_pkey                        = row[1]
+    result.master_pkey                        = bytes(row[1]) if row[1] else None
     result.status                             = base.PaymentStatus(row[2])
     result.plan                               = base.ProPlan(row[3])
     result.payment_provider                   = base.PaymentProvider(row[4])
@@ -394,16 +395,16 @@ def payment_row_from_tuple(row: tuple[int, *SQLTablePaymentRowTuple]) -> Payment
     result.expiry_unix_ts_ms                  = row[8]
     result.grace_period_duration_ms           = row[9]
     result.platform_refund_expiry_unix_ts_ms  = row[10]
-    result.revoked_unix_ts_ms                 = row[11] if row[11] else None
-    result.apple.original_tx_id               = row[12] if row[12] else ''
-    result.apple.tx_id                        = row[13] if row[13] else ''
-    result.apple.web_line_order_tx_id         = row[14] if row[14] else ''
-    result.google_payment_token               = row[15] if row[15] else ''
-    result.google_order_id                    = row[16] if row[16] else ''
-    result.refund_requested_unix_ts_ms        = row[17]
-    result.google_obfuscated_account_id       = row[18] if row[18] else b''
-    result.apple_app_account_token            = row[19] if row[19] else ''
-    result.rangeproof_order_id                = row[20]
+    result.revoked_unix_ts_ms                 = row[11]      if row[11] else None
+    result.apple.original_tx_id               = str(row[12]) if row[12] else ''
+    result.apple.tx_id                        = str(row[13]) if row[13] else ''
+    result.apple.web_line_order_tx_id         = str(row[14]) if row[14] else ''
+    result.google_payment_token               = str(row[15]) if row[15] else ''
+    result.google_order_id                    = str(row[16]) if row[16] else ''
+    result.rangeproof_order_id                = str(row[17]) if row[17] else ''
+    result.refund_requested_unix_ts_ms        = row[18]
+    result.google_obfuscated_account_id       = bytes(row[19]) if row[19] else b''
+    result.apple_app_account_token            = str(row[20])   if row[20] else ''
     return result
 
 def get_unredeemed_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
@@ -425,16 +426,8 @@ def get_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
     return result
 
 def get_user_and_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
-    select_fields = ("master_pkey, status, plan, payment_provider, auto_renewing, "
-                     "unredeemed_unix_ts_ms, redeemed_unix_ts_ms, expiry_unix_ts_ms, "
-                     "grace_period_duration_ms, platform_refund_expiry_unix_ts_ms, "
-                     "revoked_unix_ts_ms, apple_original_tx_id, apple_tx_id, "
-                     "apple_web_line_order_tx_id, google_payment_token, google_order_id, "
-                     "refund_requested_unix_ts_ms, google_obfuscated_account_id, "
-                     "apple_app_account_token")
-
-    payments_it = db.query(tx.conn, f'''
-        SELECT   {select_fields}
+    payments_it = db.query(tx.conn, '''
+        SELECT   *
         FROM     payments
         WHERE    master_pkey = :pkey
         ORDER BY unredeemed_unix_ts_ms DESC, id DESC
@@ -644,7 +637,7 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
                 tx.conn.connection.executescript(schema_sql)
 
             # NOTE: Version migration
-            target_db_version = 7
+            target_db_version = 8
             db_version = db.get_db_version(tx.conn, result)
 
             # NOTE: v0 is the nil state - DB never bootstrapped, teleport to target
@@ -669,6 +662,13 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
                 if not db.is_postgres(result):
                     _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN google_obfuscated_account_id BLOB"))
                     _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN apple_app_account_token STRING NOT NULL DEFAULT ''"))
+                db_version += 1
+                db.set_db_version(tx.conn, result, db_version)
+
+            if db_version == 7:
+                log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                # Add rangeproof_order_id column to payments table
+                _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN rangeproof_order_id TEXT"))
                 db_version += 1
                 db.set_db_version(tx.conn, result, db_version)
 
@@ -1833,10 +1833,80 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
                     master_pkey:         nacl.signing.VerifyKey,
                     rotating_pkey:       nacl.signing.VerifyKey,
                     payment_tx:          UserPaymentTransaction,
-                    master_sig:          bytes,
-                    rotating_sig:        bytes,
                     err:                 base.ErrorSink,
-                    dev_args:            DevAddProPaymentArgs) -> RedeemPayment:
+                    THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool) -> RedeemPayment:
+
+    # Note being able to pass in the creation unix timestamp is mainly for
+    # testing purposes to allow time-travel. User space should never be
+    # specifying this argument, so clients should not be specifying this time,
+    # ever, it should be generated and rounded up by the server hence the
+    # assert.
+    if not base.DEV_BACKEND_MODE:
+        assert redeemed_unix_ts_ms % (base.SECONDS_IN_DAY * 1000) == 0, \
+                "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
+
+    # All verified. Redeem the payment
+    result = RedeemPayment()
+    with db.transaction(conn) as tx:
+        result = redeem_payment_tx(tx                  = tx,
+                                   master_pkey         = master_pkey,
+                                   rotating_pkey       = rotating_pkey,
+                                   signing_key         = signing_key,
+                                   unix_ts_ms          = unix_ts_ms,
+                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                   payment_tx          = payment_tx,
+                                   err                 = err)
+
+        # NOTE: We put this _inside_ the transaction block, because, for Google Payments we ack
+        # the payment against Google's servers. If we have a network failure, this will throw an
+        # exception and we want the transaction to be reverted because, redeeming and
+        # acknowledgement must be done atomically.
+        #
+        # Ack-ing should be done after redeeming because we can't undo an ack on Google, so first we
+        # make sure we can redeem it safely before lastly notifying Google that the payment is good
+        # to go.
+        if result.status == RedeemPaymentStatus.Success and payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+            # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
+            # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
+            # the most sensible option and binds the Session client's knowledge of their own payment and
+            # that the backend acknowledges the payment in the same step which simplifies implementation
+            # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
+            # acknowledged yet so it needs to poll the server e.t.c.
+            #
+            # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
+            # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
+            # cannot be claimed and should be re-attempted.
+            if THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
+                sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
+                                                                                                                              purchase_token=payment_tx.google_payment_token,
+                                                                                                                              err=err)
+                if not sub_data:
+                    tx.cancel = True
+                    return result
+
+                if log.getEffectiveLevel() <= logging.INFO:
+                    payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
+                    log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
+
+                if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
+                    platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
+                    if len(err.msg_list) > 0:
+                        tx.cancel = True
+                        return result
+    return result
+
+def verify_and_add_pro_payment(conn:                sqlalchemy.engine.Connection,
+                               version:             int,
+                               signing_key:         nacl.signing.SigningKey,
+                               unix_ts_ms:          int,
+                               redeemed_unix_ts_ms: int,
+                               master_pkey:         nacl.signing.VerifyKey,
+                               rotating_pkey:       nacl.signing.VerifyKey,
+                               payment_tx:          UserPaymentTransaction,
+                               master_sig:          bytes,
+                               rotating_sig:        bytes,
+                               err:                 base.ErrorSink,
+                               dev_args:            DevAddProPaymentArgs) -> RedeemPayment:
     """
     unix_ts_ms: The timestamp typically accurate to the current time, used as a frame-of-reference
     to clamp the duration of the proof returned to the user to at most 1 month, also used to mask
@@ -1955,63 +2025,17 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
     if len(err.msg_list) > 0:
         return result
 
-    # Note being able to pass in the creation unix timestamp is mainly for
-    # testing purposes to allow time-travel. User space should never be
-    # specifying this argument, so clients should not be specifying this time,
-    # ever, it should be generated and rounded up by the server hence the
-    # assert.
-    if not base.DEV_BACKEND_MODE:
-        assert redeemed_unix_ts_ms % (base.SECONDS_IN_DAY * 1000) == 0, \
-                "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
-
-    # All verified. Redeem the payment
-    with db.transaction(conn) as tx:
-        result = redeem_payment_tx(tx                  = tx,
-                                   master_pkey         = master_pkey,
-                                   rotating_pkey       = rotating_pkey,
-                                   signing_key         = signing_key,
-                                   unix_ts_ms          = unix_ts_ms,
-                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                   payment_tx          = payment_tx,
-                                   err                 = err)
-
-        # NOTE: We put this _inside_ the transaction block, because, for Google Payments we ack
-        # the payment against Google's servers. If we have a network failure, this will throw an
-        # exception and we want the transaction to be reverted because, redeeming and
-        # acknowledgement must be done atomically.
-        #
-        # Ack-ing should be done after redeeming because we can't undo an ack on Google, so first we
-        # make sure we can redeem it safely before lastly notifying Google that the payment is good
-        # to go.
-        if result.status == RedeemPaymentStatus.Success and payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
-            # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
-            # the most sensible option and binds the Session client's knowledge of their own payment and
-            # that the backend acknowledges the payment in the same step which simplifies implementation
-            # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
-            # acknowledged yet so it needs to poll the server e.t.c.
-            #
-            # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
-            # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
-            # cannot be claimed and should be re-attempted.
-            if THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
-                sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
-                                                                                                                              purchase_token=payment_tx.google_payment_token,
-                                                                                                                              err=err)
-                if not sub_data:
-                    tx.cancel = True
-                    return result
-
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
-                    log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
-
-                if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
-                    platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
-                    if len(err.msg_list) > 0:
-                        tx.cancel = True
-                        return result
-
+    # Pre-verification steps complete, continue to add the payment
+    result = add_pro_payment(conn,
+                             version,
+                             signing_key,
+                             unix_ts_ms,
+                             redeemed_unix_ts_ms,
+                             master_pkey,
+                             rotating_pkey,
+                             payment_tx,
+                             err,
+                             THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION)
     return result
 
 def revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
@@ -2259,7 +2283,7 @@ def get_payment_tx(tx:          db.SQLTransaction,
 
         record = result_set.fetchone()
         if record:
-            row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
+            row = typing.cast(sqlalchemy.Row[SQLTablePaymentRowTuple], record)
             result = payment_row_from_tuple(tuple(row))
 
     elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
@@ -2274,7 +2298,7 @@ def get_payment_tx(tx:          db.SQLTransaction,
 
         record = result_set.fetchone()
         if record:
-            row = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
+            row = typing.cast(sqlalchemy.Row[SQLTablePaymentRowTuple], record)
             result = payment_row_from_tuple(tuple(row))
     elif payment_tx.provider == base.PaymentProvider.Rangeproof:
         result_set = db.query(tx.conn, '''
@@ -2286,7 +2310,7 @@ def get_payment_tx(tx:          db.SQLTransaction,
 
         record = result_set.fetchone()
         if record:
-            row    = typing.cast(sqlalchemy.Row[tuple[int, *SQLTablePaymentRowTuple]], record)
+            row    = typing.cast(sqlalchemy.Row[SQLTablePaymentRowTuple], record)
             result = payment_row_from_tuple(tuple(row))
 
     return result

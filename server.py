@@ -763,18 +763,18 @@ def add_pro_payment():
             runtime             = backend.get_runtime(conn)
             unix_ts_ms          = int(time_now() * 1000)
             redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms)
-            redeemed_payment    = backend.add_pro_payment(conn                = conn,
-                                                          version             = version,
-                                                          signing_key         = runtime.backend_key,
-                                                          unix_ts_ms          = unix_ts_ms,
-                                                          redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                                          master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
-                                                          rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
-                                                          payment_tx          = user_payment,
-                                                          master_sig          = master_sig_bytes,
-                                                          rotating_sig        = rotating_sig_bytes,
-                                                          err                 = err,
-                                                          dev_args            = dev_add_pro_payment_args)
+            redeemed_payment    = backend.verify_and_add_pro_payment(conn                = conn,
+                                                                     version             = version,
+                                                                     signing_key         = runtime.backend_key,
+                                                                     unix_ts_ms          = unix_ts_ms,
+                                                                     redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                                                     master_pkey         = nacl.signing.VerifyKey(master_pkey_bytes),
+                                                                     rotating_pkey       = nacl.signing.VerifyKey(rotating_pkey_bytes),
+                                                                     payment_tx          = user_payment,
+                                                                     master_sig          = master_sig_bytes,
+                                                                     rotating_sig        = rotating_sig_bytes,
+                                                                     err                 = err,
+                                                                     dev_args            = dev_add_pro_payment_args)
 
             if redeemed_payment.status != backend.RedeemPaymentStatus.Success:
                 status = AddProPaymentStatus.Error
@@ -975,9 +975,8 @@ def get_pro_details():
                         if len(items) >= count:
                             break
 
-                        faux_row_id                                             = 0
-                        row_tuple: tuple[int, *backend.SQLTablePaymentRowTuple] = (faux_row_id, *row)
-                        payment:   backend.PaymentRow                           = backend.payment_row_from_tuple(row_tuple)
+                        row_tuple: backend.SQLTablePaymentRowTuple = tuple(row)
+                        payment:   backend.PaymentRow              = backend.payment_row_from_tuple(row_tuple)
 
                         # NOTE: We do not return unredeemed payments. This payment token/tx IDs are
                         # confidential until the user actually registers the token themselves which they
