@@ -123,8 +123,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS revocations (
-    gen_index         INTEGER PRIMARY KEY NOT NULL,
-    expiry_unix_ts_ms INTEGER NOT NULL
+    gen_index            INTEGER PRIMARY KEY NOT NULL,
+    creation_unix_ts_ms  INTEGER NOT NULL,  -- When the revocation was created (used to calculate effective time)
+    expiry_unix_ts_ms    INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS runtime (

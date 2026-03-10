@@ -242,8 +242,9 @@ class GetUserAndPayments:
 
 @dataclasses.dataclass
 class RevocationRow:
-    gen_index:         int   = 0
-    expiry_unix_ts_ms: int   = 0
+    gen_index:            int   = 0
+    creation_unix_ts_ms:  int   = 0
+    expiry_unix_ts_ms:    int   = 0
 
 @dataclasses.dataclass
 class RevocationItem:
@@ -507,10 +508,11 @@ def get_user(conn: sqlalchemy.engine.Connection, master_pkey: nacl.signing.Verif
 def get_revocations_list(conn: sqlalchemy.engine.Connection) -> list[RevocationRow]:
     result: list[RevocationRow] = []
     with db.transaction(conn) as tx:
-        for row in db.query(tx.conn, "SELECT gen_index, expiry_unix_ts_ms FROM revocations"):
-            item                   = RevocationRow()
-            item.gen_index         = row[0]
-            item.expiry_unix_ts_ms = row[1]
+        for row in db.query(tx.conn, "SELECT gen_index, creation_unix_ts_ms, expiry_unix_ts_ms FROM revocations"):
+            item                     = RevocationRow()
+            item.gen_index           = row[0]
+            item.creation_unix_ts_ms = row[1]
+            item.expiry_unix_ts_ms   = row[2]
             result.append(item)
     return result
 
@@ -528,9 +530,9 @@ def get_revocation_ticket(conn: sqlalchemy.engine.Connection) -> int:
     row = db.query_one(conn, "SELECT revocation_ticket FROM runtime")
     return row[0] if row else 0
 
-def get_pro_revocations_iterator_tx(tx: db.SQLTransaction) -> collections.abc.Iterator[tuple[int, int]]:
-    for row in db.query(tx.conn, "SELECT gen_index, expiry_unix_ts_ms FROM revocations"):
-        yield (row[0], row[1])
+def get_pro_revocations_iterator_tx(tx: db.SQLTransaction) -> collections.abc.Iterator[tuple[int, int, int]]:
+    for row in db.query(tx.conn, "SELECT gen_index, creation_unix_ts_ms, expiry_unix_ts_ms FROM revocations"):
+        yield (row[0], row[1], row[2])
 
 def get_runtime_tx(tx: db.SQLTransaction) -> RuntimeRow:
     row = db.query_one(tx.conn, ("SELECT gen_index,"
@@ -648,7 +650,7 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
                 tx.conn.connection.executescript(schema_sql)
 
             # NOTE: Version migration
-            target_db_version = 8
+            target_db_version = 9
             db_version = db.get_db_version(tx.conn, result)
 
             # NOTE: v0 is the nil state - DB never bootstrapped, teleport to target
@@ -680,6 +682,13 @@ def bootstrap_db(database_url: str, err: base.ErrorSink, backend_key: nacl.signi
                 log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
                 # Add rangeproof_order_id column to payments table
                 _ = db.query(tx.conn, ("ALTER TABLE payments ADD COLUMN rangeproof_order_id TEXT"))
+                db_version += 1
+                db.set_db_version(tx.conn, result, db_version)
+
+            if db_version == 8:
+                log.info(f'Migrating DB version from {db_version} => {db_version + 1}')
+                # Add creation_unix_ts_ms column to revocations table
+                _ = db.query(tx.conn, ("ALTER TABLE revocations ADD COLUMN creation_unix_ts_ms INTEGER NOT NULL DEFAULT 0"))
                 db_version += 1
                 db.set_db_version(tx.conn, result, db_version)
 
@@ -836,11 +845,11 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
         SET    status = :status, revoked_unix_ts_ms = :revoked_ts, auto_renewing = FALSE
         WHERE  id = :id AND (status = :unredeemed OR status = :redeemed)
         ''',
-            status=int(base.PaymentStatus.Revoked.value),
-            revoked_ts=revoke_unix_ts_ms,
-            id=id,
-            unredeemed=int(base.PaymentStatus.Unredeemed.value),
-            redeemed=int(base.PaymentStatus.Redeemed.value))
+            status     = int(base.PaymentStatus.Revoked.value),
+            revoked_ts = revoke_unix_ts_ms,
+            id         = id,
+            unredeemed = int(base.PaymentStatus.Unredeemed.value),
+            redeemed   = int(base.PaymentStatus.Redeemed.value))
 
     revoke_unix_ts_ms_next_day = round_unix_ts_ms_to_next_day_with_platform_testing_support(base.PaymentProvider.Nil, revoke_unix_ts_ms)
     for it in master_pkey_dict:
@@ -860,11 +869,11 @@ def revoke_payments_by_id_internal_tx(tx: db.SQLTransaction, rows: typing.Any, r
         expiry_unix_ts_ms = master_pkey_dict[it]
         if expiry_unix_ts_ms > revoke_unix_ts_ms_next_day:
             master_pkey = nacl.signing.VerifyKey(it)
-            _ = revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx, master_pkey)
+            _ = revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx, master_pkey, creation_unix_ts_ms=revoke_unix_ts_ms)
 
     return result
 
-def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey, expiry_unix_ts_ms: int, delete_item: bool) -> SetRevocationResult:
+def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey, creation_unix_ts_ms: int, expiry_unix_ts_ms: int, delete_item: bool) -> SetRevocationResult:
     user:   UserRow = get_user_from_sql_tx(tx, master_pkey)
     result          = SetRevocationResult.UserDoesNotExist
     if user.found:
@@ -880,11 +889,13 @@ def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey
                 result = SetRevocationResult.Skipped
         else:
             _ = db.query(tx.conn, '''
-                INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
-                VALUES      (:index, :expiry_ts)
+                INSERT INTO revocations (gen_index, creation_unix_ts_ms, expiry_unix_ts_ms)
+                VALUES      (:index, :creation_unix_ts_ms, :expiry_unix_ts_ms)
                 ON CONFLICT (gen_index) DO UPDATE SET
-                    expiry_unix_ts_ms = excluded.expiry_unix_ts_ms
-            ''', index=user.gen_index, expiry_ts=expiry_unix_ts_ms)
+                    expiry_unix_ts_ms   = excluded.expiry_unix_ts_ms
+            ''', index       = user.gen_index,
+                 creation_unix_ts_ms = creation_unix_ts_ms,
+                 expiry_unix_ts_ms   = expiry_unix_ts_ms)
             result = SetRevocationResult.Updated if existed else SetRevocationResult.Created
     return result
 
@@ -2074,7 +2085,7 @@ def verify_and_add_pro_payment(conn:                sqlalchemy.engine.Connection
                              THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION)
     return result
 
-def revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> AllocatedGenID:
+def revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey, creation_unix_ts_ms: int) -> AllocatedGenID:
     # Revoke the generation index allocated to the master pkey. This blocks all of the proofs
     # generated by the client that were using that payment.
     _ = db.query(tx.conn, ('''
@@ -2083,10 +2094,11 @@ def revoke_master_pkey_proofs_and_allocate_new_gen_id_tx(tx: db.SQLTransaction, 
             FROM   users
             WHERE  master_pkey = :master_pkey
         )
-        INSERT INTO revocations (gen_index, expiry_unix_ts_ms)
-        SELECT      gen_index, expiry_unix_ts_ms
+        INSERT INTO revocations (gen_index, creation_unix_ts_ms, expiry_unix_ts_ms)
+        SELECT      gen_index, :creation_unix_ts_ms, expiry_unix_ts_ms
         FROM        prev_user
-    '''), master_pkey = bytes(master_pkey))
+    '''), master_pkey         = bytes(master_pkey),
+          creation_unix_ts_ms = creation_unix_ts_ms)
 
     # If the use had any left over payments that are valid to use, we can allocate them a new
     # generation ID for subsequent proofs to be generated under. Clients will notice that their

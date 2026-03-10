@@ -236,11 +236,13 @@ API
         ticket:  4 byte integer of the latest ticket for the current revocation list of the Session
                  Pro backend. If this value is the same as the request's `ticket` then the list will
                  be empty as there are no changes to the revocation list.
-        items:   Array of revocations, can be empty if there are no revocations or the request ticket
-                 is the latest ticket managed by the backend.
-          expiry_unix_ts_ms: 8 byte UNIX timestamp indicating when the Session Pro Proof identified
-                             by its `gen_index_hash` should be rejected until.
-          gen_index_hash:    32 byte hash of the Session Pro proof that has been revoked.
+         items:   Array of revocations, can be empty if there are no revocations or the request ticket
+                  is the latest ticket managed by the backend.
+          expiry_unix_ts_ms:    8 byte UNIX timestamp indicating when the Session Pro Proof identified
+                                by its `gen_index_hash` should be rejected until.
+          gen_index_hash:       32 byte hash of the Session Pro proof that has been revoked.
+          effective_unix_ts_ms: 8 byte UNIX timestamp indicating when the revocation becomes effective
+                                (i.e., clients should start rejecting proofs at this time).
         retry_in_s: 4 byte integer of the recommended time in seconds that the client should wait to
                     send the request for the pro-revocation list again to avoid being throttled.
 
@@ -252,7 +254,11 @@ API
       {
         "result": {
           "items": [
-            { "expiry_unix_ts_ms": 1758412800000, "gen_index_hash": "3ab824a62d2b6004449d44962383294a5e6e833d6ed491930fbba726a2569c68" }
+            {
+              "expiry_unix_ts_ms": 1758412800000,
+              "gen_index_hash": "3ab824a62d2b6004449d44962383294a5e6e833d6ed491930fbba726a2569c68",
+              "effective_unix_ts_ms": 1758326400000
+            }
           ],
           "ticket": 1,
           "retry_in_s": 86400,
@@ -873,6 +879,7 @@ def get_pro_revocations():
     if len(err.msg_list):
         return make_error_response(status=RESPONSE_PARSE_ERROR, errors=err.msg_list)
 
+    RETRY_IN_S = base.SECONDS_IN_DAY
     revocation_items:  list[dict[str, str | int]] = []
     revocation_ticket: int                        = 0
     with get_db(flask.current_app) as engine:
@@ -883,14 +890,19 @@ def get_pro_revocations():
                 if ticket < revocation_ticket:
                     runtime = backend.get_runtime_tx(tx)
                     for row in backend.get_pro_revocations_iterator_tx(tx):
-                        gen_index:         int   = row[0]
-                        expiry_unix_ts_ms: int   = row[1]
-                        gen_index_hash:    bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
+                        gen_index:            int   = row[0]
+                        creation_unix_ts_ms:  int   = row[1]
+                        expiry_unix_ts_ms:    int   = row[2]
+                        gen_index_hash:       bytes = backend.make_gen_index_hash(gen_index=gen_index, gen_index_salt=runtime.gen_index_salt)
                         assert gen_index < runtime.gen_index, f"lhs={gen_index}, rhs={runtime.gen_index}"
                         assert len(runtime.gen_index_salt) == hashlib.blake2b.SALT_SIZE
+
+                        expiry_unix_ts_ms         = base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms)
+                        effective_unix_ts_ms: int = min(creation_unix_ts_ms + (RETRY_IN_S * 1000), expiry_unix_ts_ms)
                         revocation_items.append({
-                            'expiry_unix_ts_ms': base.round_unix_ts_ms_to_next_day(expiry_unix_ts_ms),
-                            'gen_index_hash':    gen_index_hash.hex(),
+                            'expiry_unix_ts_ms':    expiry_unix_ts_ms,
+                            'gen_index_hash':       gen_index_hash.hex(),
+                            'effective_unix_ts_ms': effective_unix_ts_ms,
                         })
             if len(err.msg_list):
                 return make_error_response(status=RESPONSE_GENERIC_ERROR, errors=err.msg_list)
@@ -899,7 +911,7 @@ def get_pro_revocations():
                 'version':    version,
                 'ticket':     revocation_ticket,
                 'items':      revocation_items,
-                'retry_in_s': base.SECONDS_IN_DAY,
+                'retry_in_s': RETRY_IN_S,
             })
             return result
 

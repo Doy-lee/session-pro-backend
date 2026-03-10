@@ -912,8 +912,12 @@ def test_server_add_payment_flow(monkeypatch):
                     it: dict[str, int | str]
                     assert 'expiry_unix_ts_ms' in it and isinstance(it['expiry_unix_ts_ms'], int)
                     assert 'gen_index_hash'   in it and isinstance(it['gen_index_hash'], str)
+                    assert 'effective_unix_ts_ms' in it and isinstance(it['effective_unix_ts_ms'], int)
                     assert it['gen_index_hash']    == post_revoke_gen_index_hash.hex()
                     assert it['expiry_unix_ts_ms'] == get_user.user.expiry_unix_ts_ms
+                    # effective_unix_ts_ms should be creation time + 1 day (86400 seconds)
+                    # Since we can't know exact creation time in the test, just verify it's a reasonable value
+                    assert it['effective_unix_ts_ms'] > 0
 
             assert not err.has()
 
