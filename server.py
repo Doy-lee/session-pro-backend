@@ -379,6 +379,7 @@ API
                                     registered is coming from with the following mapping:
                                       1 => Google Play Store
                                       2 => Apple iOS App Store
+                                      3 => Rangeproof
           auto_renewing:            1 byte boolean representing if the user had auto-renewing
                                     enabled to repeat this payment. It additionally indicates that
                                     the user is to be granted the grace period marked on the
@@ -411,6 +412,8 @@ API
           apple_web_line_order_id:     When payment provider is Apple iOS App Store, a string which
                                        is set to the platform-specific transaction web line order ID
                                        for the subscription.
+          rangeproof_order_id:         When payment provider is Rangeproof, a string which is set to
+                                       the platform-specific order ID for the subscription.
           refund_requested_unix_ts_ms: 8 byte UNIX timestamp indicating if the user has requested a
                                        refund for this payment. This value is set to 0 if no refund
                                        has been initiated. Setting the refund request value for
@@ -1020,20 +1023,39 @@ def get_pro_details():
                                 'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
                             })
                         elif payment.payment_provider == base.PaymentProvider.Rangeproof:
-                            items.append({
-                                'status':                               int(payment.status.value),
-                                'plan':                                 int(payment.plan.value),
-                                'payment_provider':                     int(payment.payment_provider.value),
-                                'auto_renewing':                        payment.auto_renewing,
-                                'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
-                                'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
-                                'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
-                                'grace_period_duration_ms':             payment.grace_period_duration_ms,
-                                'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
-                                'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
-                                'rangeproof_order_id':                  payment.rangeproof_order_id,
-                                'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
-                            })
+                            # TODO: We patch rangeproof payments until the clients are updated to
+                            # support it, it masquerades as a google payment
+                            if base.DEV_BACKEND_MODE:
+                                items.append({
+                                    'status':                               int(payment.status.value),
+                                    'plan':                                 int(payment.plan.value),
+                                    'payment_provider':                     base.PaymentProvider.GooglePlayStore.value,
+                                    'auto_renewing':                        payment.auto_renewing,
+                                    'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                                    'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                                    'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                                    'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                                    'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                                    'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
+                                    'google_payment_token':                 'RNG.' + payment.rangeproof_order_id,
+                                    'google_order_id':                      'RNG.' +payment.rangeproof_order_id,
+                                    'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
+                                })
+                            else:
+                                items.append({
+                                    'status':                               int(payment.status.value),
+                                    'plan':                                 int(payment.plan.value),
+                                    'payment_provider':                     int(payment.payment_provider.value),
+                                    'auto_renewing':                        payment.auto_renewing,
+                                    'unredeemed_unix_ts_ms':                payment.unredeemed_unix_ts_ms,
+                                    'redeemed_unix_ts_ms':                  payment.redeemed_unix_ts_ms if payment.redeemed_unix_ts_ms else 0,
+                                    'expiry_unix_ts_ms':                    payment.expiry_unix_ts_ms,
+                                    'grace_period_duration_ms':             payment.grace_period_duration_ms,
+                                    'platform_refund_expiry_unix_ts_ms':    payment.platform_refund_expiry_unix_ts_ms,
+                                    'revoked_unix_ts_ms':                   payment.revoked_unix_ts_ms if payment.revoked_unix_ts_ms else 0,
+                                    'rangeproof_order_id':                  payment.rangeproof_order_id,
+                                    'refund_requested_unix_ts_ms':          payment.refund_requested_unix_ts_ms,
+                                })
 
                 # NOTE: Determine pro status of user
                 if get_user.payments_count > 0:
