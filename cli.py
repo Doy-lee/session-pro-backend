@@ -413,45 +413,47 @@ def require_config(args: argparse.Namespace) -> CLIConfig:
         print("ERROR: --config is required for this command", file=sys.stderr)
         sys.exit(1)
 
-    err    = base.ErrorSink()
-    config = load_config(args.config, err)
+    # NOTE: Parse the config
+    err              = base.ErrorSink()
+    result           = CLIConfig()
+    if 1:
+        config_path: str = args.config
+        if not pathlib.Path(config_path).exists():
+            err.msg_list.append(f'Config file "{config_path}" does not exist or is not readable')
+            return result
 
+        try:
+            parser = configparser.ConfigParser()
+            _ = parser.read(config_path)
+
+            if 'base' not in parser:
+                err.msg_list.append(f'Config file "{config_path}" is missing [base] section')
+            else:
+                base_section          = parser['base']
+                result.db_url         = base_section.get('db_url', '')
+                result.log_path       = base_section.get('log_path', '')
+                base.DEV_BACKEND_MODE = base_section.getboolean('dev', fallback=False)
+
+                # Allow environment variable override
+                result.db_url = os.getenv('SESH_PRO_BACKEND_DB_URL', result.db_url)
+        except Exception as e:
+            err.msg_list.append(f'Failed to parse config file: {e}')
+
+    # NOTE: Log errors
     if err.has():
         msg = "ERROR: Failed to load config:\n  " + "\n  ".join(err.msg_list)
         print(msg, file=sys.stderr)
         sys.exit(1)
 
-    if not config.db_url:
+    if not result.db_url:
         print("ERROR: No database URL configured in config file", file=sys.stderr)
         sys.exit(1)
 
-    return config
+    return result
 
 
 def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
     result = CLIConfig()
-
-    if not pathlib.Path(config_path).exists():
-        err.msg_list.append(f'Config file "{config_path}" does not exist or is not readable')
-        return result
-
-    try:
-        parser = configparser.ConfigParser()
-        _ = parser.read(config_path)
-
-        if 'base' not in parser:
-            err.msg_list.append(f'Config file "{config_path}" is missing [base] section')
-            return result
-
-        base_section    = parser['base']
-        result.db_url   = base_section.get('db_url', '')
-        result.log_path = base_section.get('log_path', '')
-
-        # Allow environment variable override
-        result.db_url = os.getenv('SESH_PRO_BACKEND_DB_URL', result.db_url)
-
-    except Exception as e:
-        err.msg_list.append(f'Failed to parse config file: {e}')
 
     return result
 
