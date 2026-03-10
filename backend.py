@@ -2392,6 +2392,7 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
     # timestamp changes for that best payment, that metadata that is cached in the user details
     # must be updated.
     if success:
+        row = None
         if payment_tx.provider == base.PaymentProvider.GooglePlayStore:
             row = db.query_one(tx.conn, '''
                 SELECT master_pkey
@@ -2400,7 +2401,7 @@ def set_refund_requested_unix_ts_ms_tx(tx: db.SQLTransaction, payment_tx: UserPa
             ''', provider = int(payment_tx.provider.value),
                  token    = payment_tx.google_payment_token,
                  order_id = payment_tx.google_order_id)
-        else:
+        elif payment_tx.provider == base.PaymentProvider.iOSAppStore:
             row = db.query_one(tx.conn, '''
                 SELECT master_pkey
                 FROM   payments

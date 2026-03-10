@@ -540,7 +540,7 @@ def test_server_add_payment_flow(monkeypatch):
         if 1: # Grab the pro status before anything has happened
             version:      int   = 0
             count:        int   = 10_000
-            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            hash_to_sign: bytes = backend.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
             request_body={'version':     version,
                           'master_pkey': bytes(master_key.verify_key).hex(),
                           'master_sig':  bytes(master_key.sign(hash_to_sign).signature).hex(),
@@ -962,7 +962,7 @@ def test_server_add_payment_flow(monkeypatch):
             version:      int   = 0
             unix_ts_ms:   int   = int(time.time() * 1000)
             count:        int   = 10_000
-            hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+            hash_to_sign: bytes = backend.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
 
             request_body={'version':     version,
                           'master_pkey': bytes(master_key.verify_key).hex(),
@@ -1003,7 +1003,7 @@ def test_server_add_payment_flow(monkeypatch):
             # Retry the request but use a too old timestamp
             if 1:
                 unix_ts_ms:   int   = int((time.time() * 1000) + (server.DEFAULT_TIMESTAMP_TOLERANCE_MS * 2))
-                hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                hash_to_sign: bytes = backend.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
                 onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                           shared_key=shared_key,
                                                           endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
@@ -1031,7 +1031,7 @@ def test_server_add_payment_flow(monkeypatch):
             if 1:
                 unix_ts_ms:    int   = int(time.time() * 1000)
                 count:         int   = 10_000
-                hash_to_sign:  bytes = server.make_get_pro_details_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                hash_to_sign:  bytes = backend.make_get_pro_details_hash(version=version, master_pkey=rotating_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
                 onion_request = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                           shared_key=shared_key,
                                                           endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
@@ -1059,7 +1059,7 @@ def test_server_add_payment_flow(monkeypatch):
             if 1:
                 unix_ts_ms:   int   = int(time.time() * 1000)
                 count:        int   = 0
-                hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+                hash_to_sign: bytes = backend.make_get_pro_details_hash(version=version, master_pkey=master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
                 onion_request       = onion_req.make_request_v4(our_x25519_pkey=our_x25519_skey.public_key,
                                                           shared_key=shared_key,
                                                           endpoint=server.FLASK_ROUTE_GET_PRO_DETAILS,
@@ -1225,12 +1225,58 @@ def test_server_add_payment_flow(monkeypatch):
             assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
         if 1: # Initiate a "refund" request on the payment
+
+            throwaway_id = os.urandom(16).hex()
+
+            # Create Apple payment, only apple payments can set refund requested
+            apple_payment_tx                            = base.PaymentProviderTransaction()
+            apple_payment_tx.provider                   = base.PaymentProvider.iOSAppStore
+            apple_payment_tx.apple_original_tx_id       = throwaway_id
+            apple_payment_tx.apple_tx_id                = throwaway_id
+            apple_payment_tx.apple_web_line_order_tx_id = throwaway_id
+
+            version              = 0
+            apple_tx             = backend.UserPaymentTransaction()
+            apple_tx.provider    = base.PaymentProvider.iOSAppStore
+            apple_tx.apple_tx_id = throwaway_id
+            backend.add_unredeemed_payment(conn                              = db_conn,
+                                           payment_tx                        = apple_payment_tx,
+                                           plan                              = base.ProPlan.OneMonth,
+                                           unredeemed_unix_ts_ms             = unix_ts_ms,
+                                           expiry_unix_ts_ms                 = unix_ts_ms + ((base.SECONDS_IN_DAY * 30) * 1000),
+                                           platform_refund_expiry_unix_ts_ms = 0,
+                                           platform_obfuscated_account_id    = '',
+                                           err                               = err)
+
+            # Register the payment
+            payment_hash_to_sign: bytes = backend.make_add_pro_payment_hash(version       = version,
+                                                                            master_pkey   = master_key.verify_key,
+                                                                            rotating_pkey = rotating_key.verify_key,
+                                                                            payment_tx    = apple_tx)
+
+            onion_request = onion_req.make_request_v4(our_x25519_pkey = our_x25519_skey.public_key,
+                                          shared_key      = shared_key,
+                                          endpoint        = server.FLASK_ROUTE_ADD_PRO_PAYMENT,
+                                          request_body    = {
+                                            'version':              version,
+                                            'master_pkey':          bytes(master_key.verify_key).hex(),
+                                            'rotating_pkey':        bytes(rotating_key.verify_key).hex(),
+                                            'master_sig':           bytes(master_key.sign(payment_hash_to_sign).signature).hex(),
+                                            'rotating_sig':         bytes(rotating_key.sign(payment_hash_to_sign).signature).hex(),
+                                            'payment_tx': {
+                                                'provider':    base.PaymentProvider.iOSAppStore.value,
+                                                'apple_tx_id': throwaway_id,
+                                            }
+                                          })
+            response: werkzeug.test.TestResponse = flask_client.post(onion_req.ROUTE_OXEN_V4_LSRPC, data=onion_request)
+
+            # Set refunded
             set_refund_requested_version = 0
             hash_to_sign: bytes = backend.make_set_payment_refund_requested_hash(version                     = set_refund_requested_version,
                                                                                  master_pkey                 = master_key.verify_key,
                                                                                  unix_ts_ms                  = start_unix_ts_ms,
                                                                                  refund_requested_unix_ts_ms = start_unix_ts_ms,
-                                                                                 payment_tx                  = new_add_pro_payment_tx)
+                                                                                 payment_tx                  = apple_tx)
 
             request_body = {
                 'version':                     set_refund_requested_version,
@@ -1239,9 +1285,10 @@ def test_server_add_payment_flow(monkeypatch):
                 'unix_ts_ms':                  start_unix_ts_ms,
                 'refund_requested_unix_ts_ms': start_unix_ts_ms,
                 'payment_tx': {
-                    'provider':             new_add_pro_payment_tx.provider.value,
-                    'google_payment_token': new_add_pro_payment_tx.google_payment_token,
-                    'google_order_id':      new_add_pro_payment_tx.google_order_id,
+                    'provider':                   base.PaymentProvider.iOSAppStore.value,
+                    'apple_original_tx_id':       throwaway_id,
+                    'apple_tx_id':                throwaway_id,
+                    'apple_web_line_order_tx_id': throwaway_id,
                 },
             }
 
@@ -1260,7 +1307,7 @@ def test_server_add_payment_flow(monkeypatch):
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse fields in the JSON
-            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' not in response_json, f'Request was: {json.dumps(request_body, indent=2)}\nResponse was: {json.dumps(response_json, indent=2)}'
             assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
             assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
             assert response_json['result']['updated'] == True,                    f'Response was: {json.dumps(response_json, indent=2)}'
@@ -1307,10 +1354,7 @@ def test_server_add_payment_flow(monkeypatch):
             assert isinstance(response_json, dict), f'Response {onion_response.body}'
 
             # Parse fields in the JSON, we expect it to fail
-            assert 'errors' not in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert response_json['status']            == server.RESPONSE_SUCCESS, f'Response was: {json.dumps(response_json, indent=2)}'
-            assert response_json['result']['version'] == 0,                       f'Response was: {json.dumps(response_json, indent=2)}'
-            assert response_json['result']['updated'] == False,                   f'Response was: {json.dumps(response_json, indent=2)}'
+            assert 'errors' in response_json, f'Response was: {json.dumps(response_json, indent=2)}'
 
 def test_onion_request_response_lifecycle():
     # Also call into and test the vendored onion request (as we are currently
@@ -3511,7 +3555,7 @@ def test_google_platform_handle_notification(monkeypatch):
     def get_pro_details(user_ctx: TestUserCtx, ctx: TestingContext, unix_ts_ms: int) -> base.JSONObject:
         version:      int   = 0
         count:        int   = 10_000
-        hash_to_sign: bytes = server.make_get_pro_details_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
+        hash_to_sign: bytes = backend.make_get_pro_details_hash(version=version, master_pkey=user_ctx.master_key.verify_key, unix_ts_ms=unix_ts_ms, count=count)
         request_body={'version':     version,
                       'master_pkey': bytes(user_ctx.master_key.verify_key).hex(),
                       'master_sig':  bytes(user_ctx.master_key.sign(hash_to_sign).signature).hex(),
