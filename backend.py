@@ -33,6 +33,17 @@ assert len(ADD_PRO_PAYMENT_HASH_PERSONALISATION)              == hashlib.blake2b
 assert len(SET_PAYMENT_REFUND_REQUESTED_HASH_PERSONALISATION) == hashlib.blake2b.PERSON_SIZE
 assert len(GET_PRO_DETAILS_HASH_PERSONALISATION)              == hashlib.blake2b.PERSON_SIZE
 
+# Explicit column order for payments table queries
+# NOTE: This must match the column order expected by payment_row_from_tuple()
+PAYMENTS_COLUMNS = (
+    "id, master_pkey, status, plan, payment_provider, auto_renewing, "
+    "unredeemed_unix_ts_ms, redeemed_unix_ts_ms, expiry_unix_ts_ms, "
+    "grace_period_duration_ms, platform_refund_expiry_unix_ts_ms, revoked_unix_ts_ms, "
+    "apple_original_tx_id, apple_tx_id, apple_web_line_order_tx_id, "
+    "google_payment_token, google_order_id, rangeproof_order_id, "
+    "refund_requested_unix_ts_ms, google_obfuscated_account_id, apple_app_account_token"
+)
+
 @dataclasses.dataclass
 class DevAddProPaymentArgs:
     plan:          base.ProPlan = base.ProPlan.OneMonth
@@ -410,7 +421,7 @@ def payment_row_from_tuple(row: SQLTablePaymentRowTuple) -> PaymentRow:
 def get_unredeemed_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
     with db.transaction(conn):
-        rows = db.query(conn, 'SELECT * FROM payments WHERE status = :status', status=int(base.PaymentStatus.Unredeemed.value))
+        rows = db.query(conn, f'SELECT {PAYMENTS_COLUMNS} FROM payments WHERE status = :status', status=int(base.PaymentStatus.Unredeemed.value))
         for row in rows:
             item = payment_row_from_tuple(tuple(row))
             result.append(item)
@@ -419,15 +430,15 @@ def get_unredeemed_payments_list(conn: sqlalchemy.engine.Connection) -> list[Pay
 def get_payments_list(conn: sqlalchemy.engine.Connection) -> list[PaymentRow]:
     result: list[PaymentRow] = []
     with db.transaction(conn):
-        rows = db.query(conn, 'SELECT * FROM payments')
+        rows = db.query(conn, f'SELECT {PAYMENTS_COLUMNS} FROM payments')
         for row in rows:
             item = payment_row_from_tuple(tuple(row))
             result.append(item)
     return result
 
 def get_user_and_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey) -> GetUserAndPayments:
-    payments_it = db.query(tx.conn, '''
-        SELECT   *
+    payments_it = db.query(tx.conn, f'''
+        SELECT   {PAYMENTS_COLUMNS}
         FROM     payments
         WHERE    master_pkey = :pkey
         ORDER BY unredeemed_unix_ts_ms DESC, id DESC
