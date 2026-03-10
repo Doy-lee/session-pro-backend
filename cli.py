@@ -413,7 +413,7 @@ def require_config(args: argparse.Namespace) -> CLIConfig:
         print("ERROR: --config is required for this command", file=sys.stderr)
         sys.exit(1)
 
-    err = base.ErrorSink()
+    err    = base.ErrorSink()
     config = load_config(args.config, err)
 
     if err.has():
@@ -443,8 +443,8 @@ def load_config(config_path: str, err: base.ErrorSink) -> CLIConfig:
             err.msg_list.append(f'Config file "{config_path}" is missing [base] section')
             return result
 
-        base_section = parser['base']
-        result.db_url = base_section.get('db_url', '')
+        base_section    = parser['base']
+        result.db_url   = base_section.get('db_url', '')
         result.log_path = base_section.get('log_path', '')
 
         # Allow environment variable override
@@ -1241,71 +1241,74 @@ def cmd_voucher(args: argparse.Namespace) -> int:
     try:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
-                unix_ts_ms = int(time.time() * 1000)
-                expiry_unix_ts_ms = unix_ts_ms + duration_ms
-                unredeemed_unix_ts_ms = unix_ts_ms
+                with db.transaction(conn) as tx:
+                    unix_ts_ms            = int(time.time() * 1000)
+                    expiry_unix_ts_ms     = unix_ts_ms + duration_ms
+                    unredeemed_unix_ts_ms = unix_ts_ms
 
-                # Step 1: Add unredeemed payment
-                print('\nStep 1: Creating unredeemed Rangeproof payment...')
-                err = base.ErrorSink()
-                backend.add_unredeemed_payment(
-                    conn=conn,
-                    payment_tx=payment_tx,
-                    plan=plan,
-                    expiry_unix_ts_ms=expiry_unix_ts_ms,
-                    unredeemed_unix_ts_ms=unredeemed_unix_ts_ms,
-                    platform_refund_expiry_unix_ts_ms=0,
-                    platform_obfuscated_account_id=b'',
-                    err=err
-                )
+                    # Step 1: Add unredeemed payment
+                    print('\nStep 1: Creating unredeemed Rangeproof payment...')
+                    err = base.ErrorSink()
+                    backend.add_unredeemed_payment_tx(
+                        tx                                = tx,
+                        payment_tx                        = payment_tx,
+                        plan                              = plan,
+                        expiry_unix_ts_ms                 = expiry_unix_ts_ms,
+                        unredeemed_unix_ts_ms             = unredeemed_unix_ts_ms,
+                        platform_refund_expiry_unix_ts_ms = 0,
+                        platform_obfuscated_account_id    = b'',
+                        err                               = err
+                    )
 
-                if err.has():
-                    print(f"ERROR: Failed to create unredeemed payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
-                    return 1
+                    if err.has():
+                        print(f"ERROR: Failed to create unredeemed payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
+                        return 1
 
-                print("Success: Unredeemed payment created")
+                    print("Success: Unredeemed payment created")
 
-                # Get the backend signing key from runtime
-                runtime_result = db.query(conn, "SELECT backend_key FROM runtime")
-                runtime_row = runtime_result.fetchone()
-                if not runtime_row:
-                    print("ERROR: Could not load runtime from database", file=sys.stderr)
-                    return 1
-                backend_key_bytes = bytes(runtime_row[0])
-                backend_key = nacl.signing.SigningKey(backend_key_bytes)
+                    # Get the backend signing key from runtime
+                    runtime_result = db.query(tx.conn, "SELECT backend_key FROM runtime")
+                    runtime_row    = runtime_result.fetchone()
+                    if not runtime_row:
+                        print("ERROR: Could not load runtime from database", file=sys.stderr)
+                        return 1
 
-                # Step 2: Redeem the payment via add_pro_payment
-                print('\nStep 2: Redeeming payment and generating pro proof...')
-                err = base.ErrorSink()
-                redeem_result = backend.add_pro_payment(
-                    conn=conn,
-                    version=0,
-                    signing_key=backend_key,
-                    unix_ts_ms=unix_ts_ms,
-                    redeemed_unix_ts_ms=unix_ts_ms,
-                    master_pkey=master_pkey,
-                    rotating_pkey=rotating_pkey,
-                    payment_tx=backend.UserPaymentTransaction(
-                        provider=base.PaymentProvider.Rangeproof,
-                        rangeproof_order_id=rangeproof_order_id
-                    ),
-                    err=err
-                )
+                    backend_key_bytes = bytes(runtime_row[0])
+                    backend_key       = nacl.signing.SigningKey(backend_key_bytes)
 
-                if err.has():
-                    print(f"ERROR: Failed to redeem payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
-                    return 1
+                    # Step 2: Redeem the payment via add_pro_payment
+                    print('\nStep 2: Redeeming payment and generating pro proof...')
+                    err = base.ErrorSink()
+                    redeem_result = backend.add_pro_payment_tx(
+                        tx                  = tx,
+                        version             = 0,
+                        signing_key         = backend_key,
+                        unix_ts_ms          = unix_ts_ms,
+                        redeemed_unix_ts_ms = backend.convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms),
+                        master_pkey         = master_pkey,
+                        rotating_pkey       = rotating_pkey,
+                        payment_tx          = backend.UserPaymentTransaction(
+                            provider            = base.PaymentProvider.Rangeproof,
+                            rangeproof_order_id = rangeproof_order_id
+                        ),
+                        err                 = err,
+                        THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION=False,
+                    )
 
-                if redeem_result.status != backend.RedeemPaymentStatus.Success:
-                    print(f"ERROR: Payment redemption failed with status: {redeem_result.status}", file=sys.stderr)
-                    return 1
+                    if err.has():
+                        print(f"ERROR: Failed to redeem payment:\n  " + "\n  ".join(err.msg_list), file=sys.stderr)
+                        return 1
 
-                print("Success: Payment redeemed and pro proof generated")
-                print(f'\nProof Details:')
-                print(f'  Expiry: {base.readable_unix_ts_ms(redeem_result.proof.expiry_unix_ts_ms)}')
-                print(f'  Gen Index Hash: {redeem_result.proof.gen_index_hash.hex()}')
+                    if redeem_result.status != backend.RedeemPaymentStatus.Success:
+                        print(f"ERROR: Payment redemption failed with status: {redeem_result.status}", file=sys.stderr)
+                        return 1
 
-                return 0
+                    print("Success: Payment redeemed and pro proof generated")
+                    print(f'\nProof Details:')
+                    print(f'  Expiry: {base.readable_unix_ts_ms(redeem_result.proof.expiry_unix_ts_ms)}')
+                    print(f'  Gen Index Hash: {redeem_result.proof.gen_index_hash.hex()}')
+
+                    return 0
 
     except Exception as e:
         print(f"ERROR: Database error: {e}", file=sys.stderr)

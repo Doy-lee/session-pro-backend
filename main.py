@@ -331,7 +331,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
 
 
 def entry_point() -> flask.Flask:
-    log_formatter = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+    log_formatter  = base.LogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
     console_logger = logging.StreamHandler()
     console_logger.setFormatter(log_formatter)
     # NOTE: Setup console logger
@@ -538,6 +538,6 @@ def entry_point() -> flask.Flask:
     return result
 
 # Flask entry point
-stop_maintenance_thread  = False
+stop_maintenance_thread   = False
 proof_expiry_thread_event = threading.Event()
 flask_app: flask.Flask    = entry_point()

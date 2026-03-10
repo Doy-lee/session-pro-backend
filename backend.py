@@ -1040,7 +1040,7 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
             UPDATE payments
             SET    {set_expr}
             WHERE payment_provider    = :provider
-              AND rangeproof_order_id = :tx_id
+              AND rangeproof_order_id = :rangeproof_order_id
               AND status              = :where_status
         ''', # SET fields
               master_pkey         = master_pkey_bytes,
@@ -1534,7 +1534,8 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                                       'grace_period_duration_ms',
                                       'unredeemed_unix_ts_ms',
                                       'auto_renewing',
-                                      'refund_requested_unix_ts_ms']
+                                      'refund_requested_unix_ts_ms',
+                                      'apple_app_account_token']
             stmt_fields: str       = ', '.join(fields)
             stmt_values: str       = ', '.join([':' + f for f in fields])
 
@@ -1552,6 +1553,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   unredeemed_unix_ts_ms,
                   True,                 # auto_renewing is enabled by default until notified otherwise by Apple
                   0,                    # refund request unix ts ms
+                  '',                   # non-null apple account token, default to ''
             ])})
 
     # NOTE: Find the latest master pkey associated with the common payment identifier (google payment
@@ -1825,16 +1827,16 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     result = len(err.msg_list) == 0
     return result
 
-def add_pro_payment(conn:                sqlalchemy.engine.Connection,
-                    version:             int,
-                    signing_key:         nacl.signing.SigningKey,
-                    unix_ts_ms:          int,
-                    redeemed_unix_ts_ms: int,
-                    master_pkey:         nacl.signing.VerifyKey,
-                    rotating_pkey:       nacl.signing.VerifyKey,
-                    payment_tx:          UserPaymentTransaction,
-                    err:                 base.ErrorSink,
-                    THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool) -> RedeemPayment:
+def add_pro_payment_tx(tx:                  db.SQLTransaction,
+                       version:             int,
+                       signing_key:         nacl.signing.SigningKey,
+                       unix_ts_ms:          int,
+                       redeemed_unix_ts_ms: int,
+                       master_pkey:         nacl.signing.VerifyKey,
+                       rotating_pkey:       nacl.signing.VerifyKey,
+                       payment_tx:          UserPaymentTransaction,
+                       err:                 base.ErrorSink,
+                       THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool) -> RedeemPayment:
 
     # Note being able to pass in the creation unix timestamp is mainly for
     # testing purposes to allow time-travel. User space should never be
@@ -1846,53 +1848,76 @@ def add_pro_payment(conn:                sqlalchemy.engine.Connection,
                 "The passed in creation (and or activated) timestamp must lie on a day boundary: {}".format(redeemed_unix_ts_ms)
 
     # All verified. Redeem the payment
-    result = RedeemPayment()
-    with db.transaction(conn) as tx:
-        result = redeem_payment_tx(tx                  = tx,
-                                   master_pkey         = master_pkey,
-                                   rotating_pkey       = rotating_pkey,
-                                   signing_key         = signing_key,
-                                   unix_ts_ms          = unix_ts_ms,
-                                   redeemed_unix_ts_ms = redeemed_unix_ts_ms,
-                                   payment_tx          = payment_tx,
-                                   err                 = err)
+    result: RedeemPayment = redeem_payment_tx(tx                  = tx,
+                                              master_pkey         = master_pkey,
+                                              rotating_pkey       = rotating_pkey,
+                                              signing_key         = signing_key,
+                                              unix_ts_ms          = unix_ts_ms,
+                                              redeemed_unix_ts_ms = redeemed_unix_ts_ms,
+                                              payment_tx          = payment_tx,
+                                              err                 = err)
 
-        # NOTE: We put this _inside_ the transaction block, because, for Google Payments we ack
-        # the payment against Google's servers. If we have a network failure, this will throw an
-        # exception and we want the transaction to be reverted because, redeeming and
-        # acknowledgement must be done atomically.
+    # NOTE: We put this _inside_ the transaction block, because, for Google Payments we ack
+    # the payment against Google's servers. If we have a network failure, this will throw an
+    # exception and we want the transaction to be reverted because, redeeming and
+    # acknowledgement must be done atomically.
+    #
+    # Ack-ing should be done after redeeming because we can't undo an ack on Google, so first we
+    # make sure we can redeem it safely before lastly notifying Google that the payment is good
+    # to go.
+    if result.status == RedeemPaymentStatus.Success and payment_tx.provider == base.PaymentProvider.GooglePlayStore:
+        # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
+        # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
+        # the most sensible option and binds the Session client's knowledge of their own payment and
+        # that the backend acknowledges the payment in the same step which simplifies implementation
+        # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
+        # acknowledged yet so it needs to poll the server e.t.c.
         #
-        # Ack-ing should be done after redeeming because we can't undo an ack on Google, so first we
-        # make sure we can redeem it safely before lastly notifying Google that the payment is good
-        # to go.
-        if result.status == RedeemPaymentStatus.Success and payment_tx.provider == base.PaymentProvider.GooglePlayStore:
-            # NOTE: For Google, we acknowledge the payment here on demand when the user claims the payment
-            # Unfortunately this leaks in platform details into the DB layer but acknowledgement on claim is
-            # the most sensible option and binds the Session client's knowledge of their own payment and
-            # that the backend acknowledges the payment in the same step which simplifies implementation
-            # greatly. It avoids race conditions such as the client acknowledging but the server hasn't
-            # acknowledged yet so it needs to poll the server e.t.c.
-            #
-            # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
-            # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
-            # cannot be claimed and should be re-attempted.
-            if THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
-                sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
-                                                                                                                              purchase_token=payment_tx.google_payment_token,
-                                                                                                                              err=err)
-                if not sub_data:
+        # Yes generating proofs for Google then blocks on the subscription acknowledge, that is
+        # unfortunate but intentional, if Google can't be contacted, we can't approve and so the payment
+        # cannot be claimed and should be re-attempted.
+        if THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION == False:
+            sub_data: platform_google_types.SubscriptionV2Data | None = platform_google_api.fetch_subscription_v2_details(package_name=platform_google_api.package_name,
+                                                                                                                          purchase_token=payment_tx.google_payment_token,
+                                                                                                                          err=err)
+            if not sub_data:
+                tx.cancel = True
+                return result
+
+            if log.getEffectiveLevel() <= logging.INFO:
+                payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
+                log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
+
+            if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
+                platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
+                if len(err.msg_list) > 0:
                     tx.cancel = True
                     return result
+    return result
 
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
-                    log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
 
-                if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
-                    platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
-                    if len(err.msg_list) > 0:
-                        tx.cancel = True
-                        return result
+def add_pro_payment(conn:                sqlalchemy.engine.Connection,
+                    version:             int,
+                    signing_key:         nacl.signing.SigningKey,
+                    unix_ts_ms:          int,
+                    redeemed_unix_ts_ms: int,
+                    master_pkey:         nacl.signing.VerifyKey,
+                    rotating_pkey:       nacl.signing.VerifyKey,
+                    payment_tx:          UserPaymentTransaction,
+                    err:                 base.ErrorSink,
+                    THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION: bool) -> RedeemPayment:
+    result = RedeemPayment()
+    with db.transaction(conn) as tx:
+        result = add_pro_payment_tx(tx,
+                                     version,
+                                     signing_key,
+                                     unix_ts_ms,
+                                     redeemed_unix_ts_ms,
+                                     master_pkey,
+                                     rotating_pkey,
+                                     payment_tx,
+                                     err,
+                                     THIS_WAS_A_DEBUG_PAYMENT_THAT_THE_DB_MADE_A_FAKE_UNCLAIMED_PAYMENT_TO_REDEEM_DO_NOT_USE_IN_PRODUCTION)
     return result
 
 def verify_and_add_pro_payment(conn:                sqlalchemy.engine.Connection,

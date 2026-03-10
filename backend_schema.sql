@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS payments (
     google_obfuscated_account_id      BLOB,
 
     -- App account token for Apple subscriptions
-    apple_app_account_token           TEXT NOT NULL
+    apple_app_account_token           TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS users (
     google_obfuscated_account_id BLOB NOT NULL,
 
     -- Apple's per account user token
-    apple_app_account_token TEXT NOT NULL
+    apple_app_account_token      TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS revocations (
