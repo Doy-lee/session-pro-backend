@@ -304,9 +304,17 @@ def print_unicode_table(rows: list[list[str]]) -> None:
 
 def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
     table_strings: list[TableStrings] = []
-    result = conn.execute(sqlalchemy.text('SELECT name FROM sqlite_master WHERE type="table";'))
-    tables = typing.cast(list[tuple[str]], result.fetchall())
-    table_names = [table[0] for table in tables]
+
+    # Detect database type and use appropriate table listing query
+    if db.is_postgres(conn.engine):
+        result = conn.execute(sqlalchemy.text("SELECT tablename FROM pg_tables WHERE schemaname='public'"))
+        tables = typing.cast(list[tuple[str]], result.fetchall())
+        table_names = [table[0] for table in tables]
+    else:
+        result = conn.execute(sqlalchemy.text('SELECT name FROM sqlite_master WHERE type="table"'))
+        tables = typing.cast(list[tuple[str]], result.fetchall())
+        table_names = [table[0] for table in tables]
+
     for table_name in table_names:
         result = conn.execute(sqlalchemy.text(f'SELECT * FROM {table_name}'))
         rows = result.fetchall()
@@ -359,7 +367,7 @@ def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
                     elif col == 'payment_provider':
                         value_int = int(value)
                         if value_int == PaymentProvider.Nil.value:
-                            content.append(f'Nil ({value_int})')
+                            content.append(f' Nil ({value_int})')
                         elif value_int == PaymentProvider.GooglePlayStore.value:
                             content.append(f'Google Play Store ({value_int})')
                         elif value_int == PaymentProvider.iOSAppStore.value:

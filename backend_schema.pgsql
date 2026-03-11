@@ -100,5 +100,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL DEFAULT 0
 );
 
--- Initialize version if not exists (only one row allowed due to PK)
-INSERT INTO schema_version (version) VALUES (0) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (id, version)
+SELECT 1, 0
+WHERE NOT EXISTS (SELECT 1 FROM schema_version);
