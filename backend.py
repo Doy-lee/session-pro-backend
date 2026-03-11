@@ -459,7 +459,7 @@ def get_user_and_payments(tx: db.SQLTransaction, master_pkey: nacl.signing.Verif
 def _user_from_row_iterator(row: UserRowTuple) -> UserRow:
     result                              = UserRow()
     result.found                        = True
-    result.master_pkey                  = row[0]
+    result.master_pkey                  = bytes(row[0])
     result.gen_index                    = row[1]
     result.expiry_unix_ts_ms            = row[2]
     result.grace_period_duration_ms     = row[3]
@@ -877,7 +877,7 @@ def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey
     user:   UserRow = get_user_from_sql_tx(tx, master_pkey)
     result          = SetRevocationResult.UserDoesNotExist
     if user.found:
-        assert user.master_pkey == bytes(master_pkey), f"{user.master_pkey.hex()} vs {bytes(master_pkey).hex()}"
+        assert user.master_pkey == bytes(master_pkey), f"user.master_pkey={user.master_pkey.hex()} vs master_pkey={bytes(master_pkey).hex()}"
         row = db.query_one(tx.conn, "SELECT EXISTS (SELECT 1 FROM revocations WHERE gen_index = :idx)", idx=user.gen_index)
         existed = row[0] if row else False
 
