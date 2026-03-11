@@ -6,7 +6,6 @@ import typing
 import collections.abc
 import datetime
 import dataclasses
-import random
 import logging
 import enum
 import csv
@@ -1573,7 +1572,7 @@ def add_unredeemed_payment_tx(tx:                                db.SQLTransacti
                   platform_refund_expiry_unix_ts_ms,
                   0,                    # non-null grace period
                   unredeemed_unix_ts_ms,
-                  True,                 # auto_renewing is enabled by default until notified otherwise by Apple
+                  False,                # auto_renewing is disabled for Rangeproof vouchers
                   0,                    # refund request unix ts ms
                   '',                   # non-null apple account token, default to ''
             ])})
