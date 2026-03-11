@@ -2205,7 +2205,7 @@ def generate_pro_proof(conn: sqlalchemy.engine.Connection,
                 payment_expiry_unix_ts_ms = get_user.user.expiry_unix_ts_ms - get_user.user.grace_period_duration_ms if get_user.user.auto_renewing else 0
                 err.msg_list.append(f'User {bytes(master_pkey).hex()} entitlement expired at {base.readable_unix_ts_ms(get_user.user.expiry_unix_ts_ms)} ({base.readable_unix_ts_ms(payment_expiry_unix_ts_ms)} + {get_user.user.grace_period_duration_ms})')
     else:
-        err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it, {bytes(get_user.user.master_pkey).hex()} {get_user.user.gen_index} {get_user.user.expiry_unix_ts_ms}')
+        err.msg_list.append(f'User {bytes(master_pkey).hex()} does not have an active payment registered for it')
 
     return result
 

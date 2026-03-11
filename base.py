@@ -331,7 +331,9 @@ def print_db_to_stdout_tx(conn: sqlalchemy.engine.Connection) -> None:
                     col = column_names[index]
                     if value is None:
                         content.append(str(value))
-                    elif isinstance(value, bytes):
+                    elif isinstance(value, bytes) or isinstance(value, memoryview):
+                        if isinstance(value, memoryview):
+                            value = bytes(value)
                         try:
                             text = value.decode('utf-8');
                             text = text.replace('\n', '')
