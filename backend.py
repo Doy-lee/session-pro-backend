@@ -2462,7 +2462,7 @@ def google_add_notification_id_tx(tx: db.SQLTransaction, message_id: int, expiry
 
     _ = db.query(tx.conn, ('''
             INSERT INTO google_notification_history (message_id, handled, payload, expiry_unix_ts_ms)
-            VALUES      (:message_id, 0, :payload, :expiry)
+            VALUES      (:message_id, FALSE, :payload, :expiry)
     '''), message_id = message_id,
           payload    = maybe_payload,
           expiry     = expiry_unix_ts_ms)
