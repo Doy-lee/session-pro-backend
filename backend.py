@@ -891,7 +891,8 @@ def set_revocation_tx(tx: db.SQLTransaction, master_pkey: nacl.signing.VerifyKey
                 INSERT INTO revocations (gen_index, creation_unix_ts_ms, expiry_unix_ts_ms)
                 VALUES      (:index, :creation_unix_ts_ms, :expiry_unix_ts_ms)
                 ON CONFLICT (gen_index) DO UPDATE SET
-                    expiry_unix_ts_ms   = excluded.expiry_unix_ts_ms
+                    expiry_unix_ts_ms   = excluded.expiry_unix_ts_ms,
+                    creation_unix_ts_ms = excluded.creation_unix_ts_ms
             ''', index       = user.gen_index,
                  creation_unix_ts_ms = creation_unix_ts_ms,
                  expiry_unix_ts_ms   = expiry_unix_ts_ms)
