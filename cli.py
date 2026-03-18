@@ -778,7 +778,7 @@ def cmd_revoke_timestamp(args: argparse.Namespace, dry_run: bool) -> int:
             with db.connection(engine) as conn:
                 with db.transaction(conn) as tx:
                     expiry_unix_ts_ms = args.expiry_unix_ts_s * 1000
-                    set_result        = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, creation_unix_ts_ms=args.creation_unix_ts_s, expiry_unix_ts_ms=expiry_unix_ts_ms, delete_item=False)
+                    set_result        = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, creation_unix_ts_ms=args.creation_unix_ts_s * 1000, expiry_unix_ts_ms=expiry_unix_ts_ms, delete_item=False)
                     print(f"Set revocation for {args.master_pkey} to {base.readable_unix_ts_ms(args.creation_unix_ts_s * 1000)} to {base.readable_unix_ts_ms(expiry_unix_ts_ms)} ({set_result.value.lower()})")
                     return 0
 
