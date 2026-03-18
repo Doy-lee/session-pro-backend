@@ -40,7 +40,7 @@ QUICK START EXAMPLES:
 
   revoke              list                         <master_pkey_hex>                                                                        (requires --config)
   revoke              delete                       <master_pkey_hex>                                                                        (requires --config)
-  revoke              timestamp                    <master_pkey_hex> <unix_ts_s>                                                            (requires --config)
+  revoke              timestamp                    [--creation-unix-ts-s <ts>] <master_pkey_hex> <unix_ts_s>                                (requires --config)
 
   report              generate                     <daily|weekly|monthly> [--format <human|csv>] [--count <n>]                              (requires --config)
 
@@ -264,7 +264,7 @@ COMMAND FORMATS DETAILED:
     the user's master public key mapping has been pruned because the user was inactive for example)
     then no action is taken.
 
-  revoke timestamp <master_pkey_hex> <unix_ts_s> (requires --config)
+  revoke timestamp [--creation-unix-ts-s <ts>] <master_pkey_hex> <unix_ts_s> (requires --config)
     Add or update the time (or create a new revocation entry if it doesn't exist) at which the
     revocation item will be effective until.
 
@@ -276,7 +276,7 @@ COMMAND FORMATS DETAILED:
       unix_ts_s:        Unix timestamp in seconds (not milliseconds!)
 
     Examples:
-      python cli.py --config config.ini revoke timestamp aaaa...aaaa 1741170600
+      python cli.py --config config.ini revoke timestamp --creation-unix-ts-s 1741170600 aaaa...aaaa 1741170720
 
   report generate <period> [--format <format>] [--count <n>] (requires --config)
     Generate a report of the payments for the given report type, period and optional count. The
@@ -777,9 +777,9 @@ def cmd_revoke_timestamp(args: argparse.Namespace, dry_run: bool) -> int:
         with db.open_database(config.db_url) as engine:
             with db.connection(engine) as conn:
                 with db.transaction(conn) as tx:
-                    expiry_unix_ts_ms = args.unix_ts_s * 1000
-                    set_result        = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, creation_unix_ts_ms=int(time.time() * 1000), expiry_unix_ts_ms=expiry_unix_ts_ms, delete_item=False)
-                    print(f"Set revocation for {args.master_pkey} to {base.readable_unix_ts_ms(expiry_unix_ts_ms)} ({set_result.value.lower()})")
+                    expiry_unix_ts_ms = args.expiry_unix_ts_s * 1000
+                    set_result        = backend.set_revocation_tx(tx=tx, master_pkey=master_pkey, creation_unix_ts_ms=args.creation_unix_ts_s, expiry_unix_ts_ms=expiry_unix_ts_ms, delete_item=False)
+                    print(f"Set revocation for {args.master_pkey} to {base.readable_unix_ts_ms(args.creation_unix_ts_s * 1000)} to {base.readable_unix_ts_ms(expiry_unix_ts_ms)} ({set_result.value.lower()})")
                     return 0
 
     except Exception as e:
@@ -1432,9 +1432,10 @@ def main() -> int:
     revoke_delete           = revoke_subparsers.add_parser('delete',              help='Delete revocation entry')
     _                       = revoke_delete.add_argument('master_pkey',           help='Master public key (64 hex chars)')
 
-    revoke_timestamp        = revoke_subparsers.add_parser('timestamp',           help='Set revocation with timestamp')
-    _                       = revoke_timestamp.add_argument('master_pkey',        help='Master public key (64 hex chars)')
-    _                       = revoke_timestamp.add_argument('unix_ts_s',          type=int, help='Unix timestamp in seconds')
+    revoke_timestamp        = revoke_subparsers.add_parser('timestamp',             help='Set revocation with timestamp')
+    _                       = revoke_timestamp.add_argument('master_pkey',          help='Master public key (64 hex chars)')
+    _                       = revoke_timestamp.add_argument('--creation-unix-ts-s', type=int, default=int(time.time()), help='Revoke creation timestamp in seconds')
+    _                       = revoke_timestamp.add_argument('expiry_unix_ts_s',     type=int,                           help='Expiry unix timestamp in seconds')
 
     # Report commands
     report_parser           = subparsers.add_parser('report',                     help='Generate reports')
