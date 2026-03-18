@@ -888,7 +888,7 @@ def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
             apple_tx_id = 'DEV.' + os.urandom(8).hex()
         )
     elif args.provider == 'rangeproof':
-        payment_tx_obj      = backend.UserPaymentTransaction(
+        payment_tx_obj = backend.UserPaymentTransaction(
             provider            = base.PaymentProvider.Rangeproof,
             rangeproof_order_id = 'DEV.' + os.urandom(8).hex()
         )
@@ -911,8 +911,21 @@ def cmd_server_add_pro_payment(args: argparse.Namespace) -> int:
         'rotating_pkey': bytes(rotating_skey.verify_key).hex(),
         'master_sig':    bytes(master_skey.sign(hash_bytes).signature).hex(),
         'rotating_sig':  bytes(rotating_skey.sign(hash_bytes).signature).hex(),
-        'payment_tx':    payment_tx_obj
+        'payment_tx':  {
+            'provider': payment_tx_obj.provider.value,
+        }
     }
+
+    if payment_tx_obj.provider == base.PaymentProvider.GooglePlayStore:
+        request_body['payment_tx']['google_payment_token']  = payment_tx_obj.google_payment_token
+        request_body['payment_tx']['google_order_id']       = payment_tx_obj.google_order_id
+    elif payment_tx_obj.provider == base.PaymentProvider.iOSAppStore:
+        request_body['payment_tx']['apple_tx_id']           = payment_tx_obj.apple_tx_id
+    elif payment_tx_obj.provider == base.PaymentProvider.Rangeproof:
+        request_body['payment_tx']['rangeproof_order_id']   = payment_tx_obj.rangeproof_order_id
+    else:
+        print(f"ERROR: Unsupported payment provider: {args.provider}", file=sys.stderr)
+        return 1
 
     # Add dev arguments
     plan_map = {'1M': 'OneMonth', '3M': 'ThreeMonth', '12M': 'TwelveMonth'}
