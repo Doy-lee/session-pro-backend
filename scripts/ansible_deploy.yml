@@ -119,7 +119,7 @@
 #
 #     domain is the website address that NGINX on the primary Session Pro Backend instance will
 #     accept requests from. The primary instance will use certbox to attain a HTTPS certificate
-#     for it
+#     for it. Omit the "https://" from the string, e.g. foobar.com instead of https://foobar.com
 #
 #     email is the email address to use for certbot to attain HTTPS certificate for said domain
 #
@@ -414,7 +414,7 @@
         template:   template0
         state:      present
 
-    - name: Create backup directories
+    - name: create backup directories
       file:
         path: "{{ item }}"
         state: directory
