@@ -84,11 +84,11 @@ class SortedMessage:
         self.curr_retry_delay_s    = min(self.curr_retry_delay_s, MAX_RETRY_DELAY_S)
         self.next_retry_unix_ts_s  = now_s + self.curr_retry_delay_s
 
-def init(project_name:            str,
-         package_name:            str,
-         subscription_name:       str,
-         subscription_product_id: str,
-         app_credentials_path:    str | None) -> ThreadContext:
+def init(cloud_project_id:                  str,
+         package_name:                      str,
+         cloud_subscription_name:           str,
+         subscription_product_id:           str,
+         app_credentials_path:              str | None) -> ThreadContext:
     # NOTE: Setup credentials global variable
     assert platform_google_api.credentials       is None and \
            platform_google_api.publisher_service is None and \
@@ -105,7 +105,7 @@ def init(project_name:            str,
 
     # NOTE: Setup thread for caller to use
     result        = ThreadContext()
-    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, project_name, subscription_name))
+    result.thread = threading.Thread(target=thread_entry_point, args=(result, app_credentials_path, cloud_project_id, cloud_subscription_name))
     return result
 
 def handle_parsed_notification(tx: db.SQLTransaction, parse: ParsedNotification, err: base.ErrorSink) -> bool:
@@ -148,7 +148,7 @@ def handle_parsed_notification(tx: db.SQLTransaction, parse: ParsedNotification,
         assert tx.cancel == True
     return result
 
-def thread_entry_point(context: ThreadContext, app_credentials_path: str, project_name: str, subscription_name: str):
+def thread_entry_point(context: ThreadContext, app_credentials_path: str, cloud_project_id: str, cloud_subscription_name: str):
     sorted_msg_list: list[SortedMessage] = []
 
     # NOTE Load unhandled messages from the DB and insert it in to the list of messages to start off
@@ -177,7 +177,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, projec
     log.info(f'Loaded {len(sorted_msg_list)} unhandled messages from the DB')
     while context.kill_thread == False:
         with pubsub_v1.SubscriberClient.from_service_account_file(app_credentials_path) as client:
-            sub_path = client.subscription_path(project=project_name, subscription=subscription_name)
+            sub_path = client.subscription_path(project=cloud_project_id, subscription=cloud_subscription_name)
             # NOTE: We have a little bit of a problem here in terms of ordering. Google
             # notifications for payments can come out of order and if we miss them, they can also be
             # replayed out of order. Unfortunately in our initial designs we intended events to be

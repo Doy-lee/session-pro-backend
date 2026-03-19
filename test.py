@@ -3465,11 +3465,11 @@ def test_platform_apple():
 
 def test_google_platform_handle_notification(monkeypatch):
     with TestingContext() as ctx:
-        _ = platform_google.init(project_name            = 'loki-5a81e',
-                                 package_name            = 'network.loki.messenger',
-                                 subscription_name       = 'session-pro-sub',
-                                 subscription_product_id = 'session_pro',
-                                 app_credentials_path    = None)
+        _ = platform_google.init(cloud_project_id                  = 'loki-5a81e',
+                                  package_name                      = 'network.loki.messenger',
+                                  cloud_subscription_name           = 'session-pro-sub',
+                                  subscription_product_id           = 'session_pro',
+                                  app_credentials_path              = None)
 
     err = base.ErrorSink()
     test_product_details = SubscriptionProductDetails(

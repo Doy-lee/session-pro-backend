@@ -43,36 +43,36 @@ class SessionWebhook:
 
 @dataclasses.dataclass
 class ParsedArgs:
-    ini_path:                            str                             = ''
-    db_url:                              str                             = ''
-    log_path:                            str                             = ''
-    dev:                                 bool                            = False
-    unsafe_logging:                      bool                            = False
+    ini_path:                                  str                             = ''
+    db_url:                                    str                             = ''
+    log_path:                                  str                             = ''
+    dev:                                       bool                            = False
+    unsafe_logging:                            bool                            = False
 
-    with_platform_apple:                 bool                            = False
-    with_platform_google:                bool                            = False
+    with_platform_apple:                       bool                            = False
+    with_platform_google:                      bool                            = False
 
-    platform_testing_env:                bool                            = False
+    platform_testing_env:                      bool                            = False
 
-    session_webhooks:                    list[SessionWebhook]            = dataclasses.field(default_factory=list)
+    session_webhooks:                          list[SessionWebhook]            = dataclasses.field(default_factory=list)
 
-    apple_key_id:                        str                             = ''
-    apple_issuer_id:                     str                             = ''
-    apple_bundle_id:                     str                             = ''
-    apple_key_path:                      str                             = ''
-    apple_root_cert_path:                str                             = ''
-    apple_root_cert_ca_g2_path:          str                             = ''
-    apple_root_cert_ca_g3_path:          str                             = ''
-    apple_key:                           bytes                           = b''
-    apple_root_certs:                    list[bytes]                     = dataclasses.field(default_factory=list)
-    apple_sandbox_env:                   bool                            = False
-    apple_production_app_id:             int | None                      = None
+    apple_key_id:                              str                             = ''
+    apple_issuer_id:                           str                             = ''
+    apple_bundle_id:                           str                             = ''
+    apple_key_path:                            str                             = ''
+    apple_root_cert_path:                      str                             = ''
+    apple_root_cert_ca_g2_path:                str                             = ''
+    apple_root_cert_ca_g3_path:                str                             = ''
+    apple_key:                                 bytes                           = b''
+    apple_root_certs:                          list[bytes]                     = dataclasses.field(default_factory=list)
+    apple_sandbox_env:                         bool                            = False
+    apple_app_id:                   int | None                      = None
 
-    google_package_name:                 str                             = ''
-    google_application_credentials_path: str                             = ''
-    google_project_name:                 str                             = ''
-    google_subscription_name:            str                             = ''
-    google_subscription_product_id:      str                             = ''
+    google_package_name:                       str                             = ''
+    google_cloud_app_credentials_path: str                             = ''
+    google_cloud_project_id:                   str                             = ''
+    google_cloud_subscription_name:            str                             = ''
+    google_subscription_product_id:            str                             = ''
 
 def signal_handler(sig: int, _frame: types.FrameType | None):
     global stop_maintenance_thread
@@ -248,26 +248,26 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
         if result.with_platform_apple:
             if 'apple' in ini_parser:
                 apple_section: configparser.SectionProxy   = ini_parser['apple']
-                result.apple_key_id                        = apple_section.get(option='key_id',                        fallback='')
-                result.apple_issuer_id                     = apple_section.get(option='issuer_id',                     fallback='')
+                result.apple_app_id                        = apple_section.getint(option='app_id')
                 result.apple_bundle_id                     = apple_section.get(option='bundle_id',                     fallback='')
+                result.apple_issuer_id                     = apple_section.get(option='issuer_id',                     fallback='')
+                result.apple_key_id                        = apple_section.get(option='key_id',                        fallback='')
                 result.apple_key_path                      = apple_section.get(option='key_path',                      fallback='')
-                result.apple_root_cert_path                = apple_section.get(option='root_cert_path',                fallback='')
                 result.apple_root_cert_ca_g2_path          = apple_section.get(option='root_cert_ca_g2_path',          fallback='')
                 result.apple_root_cert_ca_g3_path          = apple_section.get(option='root_cert_ca_g3_path',          fallback='')
+                result.apple_root_cert_path                = apple_section.get(option='root_cert_path',                fallback='')
                 result.apple_sandbox_env                   = apple_section.getboolean(option='sandbox_env',            fallback=False)
-                result.apple_production_app_id             = apple_section.getint(option='production_app_id')
             else:
                 err.msg_list.append('Platform Apple was enabled but [apple] section is missing')
 
         if result.with_platform_google:
             if 'google' in ini_parser:
-                google_section: configparser.SectionProxy  = ini_parser['google']
-                result.google_package_name                 = google_section.get(option='package_name',                 fallback='')
-                result.google_project_name                 = google_section.get(option='project_name',                 fallback='')
-                result.google_subscription_name            = google_section.get(option='subscription_name',            fallback='')
-                result.google_application_credentials_path = google_section.get(option='application_credentials_path', fallback='')
-                result.google_subscription_product_id      = google_section.get(option='subscription_product_id',      fallback='')
+                google_section: configparser.SectionProxy = ini_parser['google']
+                result.google_cloud_app_credentials_path  = google_section.get(option='cloud_app_credentials_path', fallback='')
+                result.google_cloud_project_id            = google_section.get(option='cloud_project_id',                   fallback='')
+                result.google_cloud_subscription_name     = google_section.get(option='cloud_subscription_name',            fallback='')
+                result.google_package_name                = google_section.get(option='package_name',                       fallback='')
+                result.google_subscription_product_id     = google_section.get(option='subscription_product_id',            fallback='')
             else:
                 err.msg_list.append('Platform Google was enabled but [google] section is missing')
 
@@ -296,7 +296,7 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
             err.msg_list.append('Platform Apple was enabled but root_cert_ca_g3_path was not specified')
 
         if not result.apple_sandbox_env:
-            if result.apple_production_app_id is None:
+            if result.apple_app_id is None:
                 err.msg_list.append('Platform Apple was enabled in production mode (e.g. not sandbox mode) but the production_app_id was not specified')
 
         if result.apple_sandbox_env:
@@ -318,12 +318,12 @@ def parse_args(err: base.ErrorSink) -> ParsedArgs:
     if result.with_platform_google:
         if len(result.google_package_name) == 0:
             err.msg_list.append('Platform Google was enabled but package_name was not specified')
-        if len(result.google_project_name) == 0:
-            err.msg_list.append('Platform Google was enabled but project_name was not specified')
-        if len(result.google_subscription_name) == 0:
-            err.msg_list.append('Platform Google was enabled but subscription_name was not specified')
-        if len(result.google_application_credentials_path) == 0:
-            err.msg_list.append('Platform Google was enabled but application_credentials_path was not specified')
+        if len(result.google_cloud_project_id) == 0:
+            err.msg_list.append('Platform Google was enabled but cloud_project_id was not specified')
+        if len(result.google_cloud_subscription_name) == 0:
+            err.msg_list.append('Platform Google was enabled but cloud_subscription_name was not specified')
+        if len(result.google_cloud_app_credentials_path) == 0:
+            err.msg_list.append('Platform Google was enabled but cloud_application_credentials_path was not specified')
         if len(result.google_subscription_product_id) == 0:
             err.msg_list.append('Platform Google was enabled but subscription_product_id was not specified')
 
@@ -511,7 +511,7 @@ def entry_point() -> flask.Flask:
             core: platform_apple.Core = platform_apple.init(key_id      = parsed_args.apple_key_id,
                                                             issuer_id   = parsed_args.apple_issuer_id,
                                                             bundle_id   = parsed_args.apple_bundle_id,
-                                                            app_id      = None if parsed_args.apple_sandbox_env else parsed_args.apple_production_app_id,
+                                                            app_id      = None if parsed_args.apple_sandbox_env else parsed_args.apple_app_id,
                                                             key_bytes   = parsed_args.apple_key,
                                                             root_certs  = parsed_args.apple_root_certs,
                                                             sandbox_env = parsed_args.apple_sandbox_env)
@@ -528,11 +528,11 @@ def entry_point() -> flask.Flask:
             if base.PLATFORM_TESTING_ENV:
                 base.DEFAULT_GOOGLE_GRACE_PERIOD_DURATION_MS = platform_google_api.testing_grace_period_duration_ms
             global google_thread_context
-            google_thread_context = platform_google.init(project_name            = parsed_args.google_project_name,
-                                                         package_name            = parsed_args.google_package_name,
-                                                         subscription_name       = parsed_args.google_subscription_name,
-                                                         subscription_product_id = parsed_args.google_subscription_product_id,
-                                                         app_credentials_path    = parsed_args.google_application_credentials_path)
+            google_thread_context = platform_google.init(cloud_project_id                  = parsed_args.google_cloud_project_id,
+                                                          package_name                      = parsed_args.google_package_name,
+                                                          cloud_subscription_name           = parsed_args.google_cloud_subscription_name,
+                                                          subscription_product_id           = parsed_args.google_subscription_product_id,
+                                                          app_credentials_path              = parsed_args.google_cloud_app_credentials_path)
             assert google_thread_context.thread
             google_thread_context.thread.start()
     return result

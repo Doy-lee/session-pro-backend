@@ -1,0 +1,951 @@
+# OVERVIEW:
+#   Create a hosts.yml file (I don't know how to avoid this) and put inside a yaml file named
+#   hosts.yml
+#
+#     ```yaml
+#     global:
+#       hosts:
+#         pro_backend:
+#           ansible_host: <primary_server_address>
+#           ansible_user: root
+#     ```
+#
+#   Then run the ansible-playbook like:
+#
+#       ansible-playbook -i hosts.yml playbook_pro_backend_pgsql.yml \
+#         -e replica_host=<root@secondary_server_address> \
+#         -e config_ini_path=<path/to/config.ini> \
+#         \
+#         -e apple_app_id=<string> \
+#         -e apple_bundle_id=<string> \
+#         -e apple_issuer_id=<string> \
+#         -e apple_key_id=<key_id> \
+#         -e apple_key_path=<path/to/your_apple_api_key.p8> \
+#         -e apple_sandbox=[true|false] \
+#         \
+#         -e google_cloud_app_default_credentials_path=<path/to/your_google_adc_key.json> \
+#         -e google_cloud_project_id=<string> \
+#         -e google_cloud_subscription_name=<string> \
+#         -e google_package_name=<com.your_company.app_name> \
+#         -e google_subscription_product_id=<string> \
+#         \
+#         -e domain=<your.domain.com> \
+#         -e email=<your@email.com>
+#
+#   Where
+#
+#     --
+#
+#     replica_host is the address of the server to SSH into to setup a postgres database to
+#     replicate the primary Session Pro Backend instance
+#
+#     config_ini_path is the path to Session Pro Backend's config file with the desired
+#     configuration. The following lines in the script are overwritten by the deployment script:
+#
+#       base.db_url
+#       apple.*  <- All lines in the [apple]  section are overwritten with the passed in parameters
+#       google.* <- All lines in the [google] section are overwritten with the passed in parameters
+#
+#     The following is a stub `config.yml` that can be used for a development instance:
+#
+#       ```
+#       [base]
+#       db_url                     =
+#       dev                        = true
+#       with_platform_apple        = true
+#       with_platform_google       = true
+#       unsafe_logging             = true
+#       platform_testing_env       = true
+#
+#       [apple]
+#       app_id                     =
+#       bundle_id                  =
+#       issuer_id                  =
+#       key_id                     =
+#       key_path                   =
+#       root_cert_ca_g2_path       =
+#       root_cert_ca_g3_path       =
+#       root_cert_path             =
+#       sandbox_env                =
+#
+#       [google]
+#       cloud_app_credentials_path =
+#       cloud_project_id           =
+#       cloud_subscription_name    =
+#       package_name               =
+#       subscription_product_id    =
+#       ```
+#
+#     --
+#
+#     apple_bundle_id is the string from the app's Bundle ID
+#     Apple App Store Connect > General > App Information > General Information > Bundle ID
+#
+#     apple_issuer_id is the string from the app's Issuer ID
+#     Apple App Store Connect > Users and Access > Keys > In-App Purchases
+#
+#     apple_key_id is the identifier embedded in the key to auth with the apple APIs generated
+#     from the app's
+#     Apple App Store Connect > Users and Access > Keys > In-App Purchases
+#
+#     apple_key_path is the path to the .p8 key file to auth with the apple APIs generated from
+#     the app's
+#     Apple App Store Connect > Users and Access > Keys > In-App Purchases
+#
+#     apple_sandbox is whether the apple key is a sandbox key or a production key
+#
+#     --
+#
+#     google_cloud_app_default_credentials_path is the path to the key to auth with Google APIs and
+#     receive billing notifications from, generated from Google Cloud's Service Account authorised
+#     to Pub/Sub from the topic the app's developer console is configured to publish to:
+#     Google Cloud > IAM & Admin > Service Account
+#
+#     google_cloud_project_id is the Google Cloud's project ID that is configured to receive
+#     Pub/Sub notifications from
+#     Google Cloud > Cloud Overview > Welcome
+#
+#     google_cloud_subscription_name is the Google Cloud's Pub/Sub subscription name from:
+#     Google Cloud > Pub/Sub > Subscriptions
+#
+#     google_package_name is the package name taken from the app's (like
+#     com.your_company.app_name)
+#     Google Play Console > Home
+#
+#     google_subscription_product_id is the subscription product ID from:
+#     Google Play Console > [Your App] > Monetize With Play > Products > Subscriptions > [Your Subscription Group] > Subscription Details > Product ID
+#
+#     --
+#
+#     domain is the website address that NGINX on the primary Session Pro Backend instance will
+#     accept requests from. The primary instance will use certbox to attain a HTTPS certificate
+#     for it
+#
+#     email is the email address to use for certbot to attain HTTPS certificate for said domain
+#
+#     --
+#
+#   # Reset database (DESTROYS ALL DATA - use with caution)
+#   ansible-playbook -i hosts.yml playbook_pro_backend_pgsql.yml -e reset_database=true ...
+#
+# ARCHITECTURE
+#
+#   - Primary instance is installed onto `target_host` or `pro_backend_dev` where the
+#     session-pro-backend is running, writing to the postgres DB cluster {{ pg_cluster_name }}
+#     (e.g. /etc/postgresql/16/{{ pg_cluster_name }}) with the user account {{ pg_db_user }}
+#     (password configured to {{ pg_password }}) to the DB {{ pg_db_name }}.
+#
+#   - session-pro-backend is cloned and runs from
+#     /home/{{ pro_backend_user }}/Code/session-pro-backend storing its configuration and data files
+#     into /home/{{ pro_backend_user }}/Data/session-pro-backend
+#
+#   - Currently using the debian packages for libsession. In future we should build the dependencies
+#     locally to have deterministic deployments and improve reliability.
+#
+#   - If a replica server is specified via `-e replica_host` then the session-pro-backend's postgres
+#     installation will be replicated to the `replica_host` using postgres's inbuilt replication
+#     features. The primary server will be updated to listen externally on its own IP and accept
+#     connection from the `replica_host`, authenticating with the user {{ replica_user }} and
+#     password
+#     {{ pg_password }}.
+#
+#   - Cron jobs are configured to backup into /home/{{ pro_backend_user }}/Backups/
+#       Archive/: WAL files for point-in-time recovery (1 year retention)
+#       Base/:    Weekly full backups via pg_basebackup (12 kept)
+#       Daily/:   Daily logical dumps via pg_dump (30 kept)
+#
+#     At the following frequency:
+#       Weekly backup: Sundays at 2:00 AM
+#       Daily dump:    Every day at 3:00 AM
+#       WAL cleanup:   Every day at 4:00 AM (removes WAL files older than 365 days)
+#
+#   - Replica postgres instance runs in standby mode that requires manual promotion. The replica
+#     server does not run an instance of the pro-backend so it is ill-suited to promoting to the
+#     primary instance (because if the postgres DB is down, it's most likely that the server is down
+#     which means the session-pro-backend is also down) and currently serves more as a backup to
+#     restore from.
+#
+#   - NGINX reverse proxies the session-pro-backend and exposes it to the specified {{ domain }}.
+#     Certbot is used to enable HTTPs using {{ email }} in that process.
+#
+#   - A quick and dirty way to verify the replica is working is to run the following command on the
+#     replica to dump the users table.
+#
+#       sudo -u postgres psql --port={{ pg_port }} -d {{ pg_db_name }} -c "SELECT * FROM users"
+#
+# MANUAL FAILOVER PROCEDURE:
+#
+#   1. Stop application writes to the primary
+#   2. SSH to the replica server
+#   3. Run: sudo -u postgres /home/pro-backend/backups/promote-to-primary.sh
+#   4. Update your application to connect to the promoted replica
+#   5. Rebuild old primary as new replica if needed
+#
+# RESTORE FROM BACKUP:
+#
+#   From base backup:
+#     1. Stop PostgreSQL: sudo systemctl stop postgresql@16-{{ pg_cluster_name }}
+#     2. Clear data dir: sudo rm -rf {{ pg_data_dir }}/*
+#     3. Restore: sudo -u postgres tar -xzf /home/pro-backend/backups/base/base_YYYYMMDD_HHMMSS.tar.gz -C {{ pg_data_dir }}/
+#     4. Start PostgreSQL: sudo systemctl start postgresql@16-{{ pg_cluster_name }}
+#
+#   From daily dump:
+#     pg_restore -d session_pro /home/pro-backend/Backups/daily/session_pro_YYYYMMDD.dump
+---
+- name: Setup a bare-server to run the Session Pro Backend w/ PostgreSQL, NGINX & UWSGI
+  hosts: pro_backend
+  become: yes
+  gather_facts: no
+
+  vars_prompt:
+    - name: pg_password
+      prompt: "Enter PostgreSQL password for user pro-backend"
+      private: yes
+      confirm: yes
+
+  vars:
+    pro_backend_user:             pro-backend
+    home_dir:                     /home/{{ pro_backend_user }}
+    build_dir:                    "{{ home_dir }}/Build"
+    code_dir:                     "{{ home_dir }}/Code"
+    data_dir:                     "{{ home_dir }}/Data"
+
+    pro_backend_code_dir:         "{{ code_dir }}/session-pro-backend"
+    pro_backend_data_dir:         "{{ data_dir }}/session-pro-backend"
+    pro_backend_keys_dir:         "{{ pro_backend_data_dir }}/Keys"
+    pro_backend_venv_dir:         "{{ pro_backend_data_dir }}/venv"
+    pro_backend_config_ini:       "{{ pro_backend_data_dir }}/config-pgsql.ini"
+
+    pg_db_name:                   session_pro
+    pg_db_user:                   pro-backend
+    pg_cluster_name:              pro_backend
+    pg_port:                      8381
+    pg_etc_dir:                   "/etc/postgresql/16/{{ pg_cluster_name }}"
+    pg_data_dir:                  "/var/lib/postgresql/16/{{ pg_cluster_name }}"
+    pg_conf:                      "{{ pg_etc_dir }}/postgresql.conf"
+
+    # TODO: Build the dependencies ourselves for more reliable deployment
+    oxen_encoding_code_dir:       "{{ code_dir }}/oxen-encoding"
+    oxen_encoding_data_dir:       "{{ data_dir }}/oxen-encoding"
+    oxen_encoding_build_dir:      "{{ build_dir }}/oxen-encoding/Release"
+
+    libquic_code_dir:             "{{ code_dir }}/libquic"
+    libquic_data_dir:             "{{ data_dir }}/libquic"
+    libquic_build_dir:            "{{ build_dir }}/libquic/Release"
+
+    libsodium_internal_code_dir:  "{{ code_dir }}/libsodium-internal"
+    libsodium_internal_data_dir:  "{{ data_dir }}/libsodium-internal"
+    libsodium_internal_build_dir: "{{ build_dir }}/libsodium-internal/Release"
+
+    libsession_util_code_dir:     "{{ code_dir }}/libsession-util"
+    libsession_util_data_dir:     "{{ data_dir }}/libsession-util"
+    libsession_util_build_dir:    "{{ build_dir }}/libsession-util/Release"
+
+    libsession_python_code_dir:   "{{ code_dir }}/libsession-python"
+    libsession_python_data_dir:   "{{ data_dir }}/libsession-python"
+
+    uwsgi_vassal_dir:             /etc/uwsgi-emperor/vassals
+    uwsgi_socket_name:            pro_backend.wsgi
+    uwsgi_socket_path:            "{{ pro_backend_data_dir }}/{{ uwsgi_socket_name }}"
+
+    nginx_sites_available:        /etc/nginx/sites-available
+    nginx_sites_enabled:          /etc/nginx/sites-enabled
+
+    # Backup and replication configuration
+    backup_dir:                   "{{ home_dir }}/Backups"
+    wal_archive_dir:              "{{ backup_dir }}/Archive"
+    base_backup_dir:              "{{ backup_dir }}/Base"
+    daily_dump_dir:               "{{ backup_dir }}/Daily"
+    wal_retention_days:           365
+    base_backup_count:            12
+    daily_dump_count:             30
+    replica_host:                 ""
+    replica_user:                 "pro-backend-replicator"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - build-essential
+          - certbot
+          - curl
+          - lsb-release
+          - git
+          - nginx
+          - postgresql
+          - postgresql-contrib
+          - python3-certbot-nginx
+          - python3-pip
+          - python3-psycopg2
+          - python3-venv
+          - uwsgi
+          - uwsgi-emperor
+          - uwsgi-plugin-python3
+        state: present
+
+    # NOTE: Building all the session python dependencies here actually doesn't work, you end up with this error
+    #
+    #   ImportError: /home/pro-backend/Data/session-pro-backend/venv/lib/python3.12/site-packages/session_util.cpython-312-x86_64-linux-gnu.so: undefined symbol: crypto_internal_fe25519_add
+    #
+    # Something about the produced libraries is missing this symbol. We just use the session
+    # packages on the apt repository for now.
+    - name: Download and install Oxen GPG key
+      get_url:
+        url: https://deb.oxen.io/pub.gpg
+        dest: /etc/apt/trusted.gpg.d/oxen.gpg
+        mode: u=rw,g=r,o=r
+        checksum: sha1:57e82c90fa4bf3e02403e9f7c430ac541d6158f1
+      register: gpg_key
+
+    - name: Determine codename
+      command: lsb_release -sc
+      register: lsb_codename
+      changed_when: false
+
+    - name: Add Oxen APT repository
+      copy:
+        content: |
+          deb https://deb.oxen.io {{ lsb_codename.stdout }} main
+        dest: /etc/apt/sources.list.d/oxen.list
+        mode: u=rw,g=r,o=r
+      register: apt_source
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install libsession-util via apt
+      apt:
+        name: libsession-util-dev
+        state: present
+        update_cache: no
+
+    - name: Create dedicated non-login app user with home directory
+      user:
+        name: "{{ pro_backend_user }}"
+        system: yes
+        shell: /usr/sbin/nologin
+        home: "{{ home_dir }}"
+        create_home: yes
+        state: present
+
+    - name: Ensure code/data/build directory exists inside user home
+      file:
+        path:  "{{ item.path }}"
+        state: directory
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode:  "{{ item.mode }}"
+      loop:
+        - { path: "{{ home_dir }}",             mode: u=rwx, g=rx,  o=x } # o=x for NGINX
+        - { path: "{{ data_dir }}",             mode: u=rwx, g=rwx, o=x } # o=x for NGINX
+        - { path: "{{ pro_backend_data_dir }}", mode: u=rwx, g=rwx, o=x } # o=x for NGINX
+        - { path: "{{ code_dir }}",             mode: u=rwx, g=rx,  o= }
+        - { path: "{{ build_dir }}",            mode: u=rwx, g=rx,  o= }
+
+    - name: Create PostgreSQL pro-backend cluster
+      command: pg_createcluster 16 {{ pg_cluster_name }}
+      args:
+        creates: "{{ pg_conf }}"
+      ignore_errors: yes
+
+    - name: Ensure PostgreSQL pro-backend cluster is running
+      systemd:
+        name: "postgresql@16-{{ pg_cluster_name }}"
+        state: started
+        enabled: yes
+
+    - name: Configure PostgreSQL pro-backend cluster
+      become: yes
+      become_user: postgres
+      lineinfile:
+        path:   "{{ pg_conf }}"
+        regexp: "^#?{{ item.key }}\\s*="
+        line:   "{{ item.key }} = {{ item.value }}"
+        backup: yes
+      loop:
+        - { key: "port",                  value: "{{ pg_port }}" }
+        - { key: "wal_level",             value: "replica" }
+        - { key: "max_wal_senders",       value: "5" }
+        - { key: "wal_keep_size",         value: "1GB" }
+        - { key: "max_replication_slots", value: "3" }
+        - { key: "archive_mode",          value: "on" }
+        - { key: "archive_command",       value: "'test ! -f {{ wal_archive_dir }}/%f && cp %p {{ wal_archive_dir }}/%f'" }
+        - { key: "hot_standby",           value: "on" }
+
+    - name: Restart PostgreSQL pro-backend cluster after configuration changes
+      systemd:
+        name: "postgresql@16-{{ pg_cluster_name }}"
+        state: restarted
+
+    - name: Reset PostgreSQL database (DESTROYS ALL DATA - use with -e reset_database=true)
+      become: yes
+      become_user: postgres
+      shell: |
+        psql -p {{ pg_port }} -c "DROP DATABASE IF EXISTS {{ pg_db_name }};"
+        psql -p {{ pg_port }} -c "CREATE DATABASE {{ pg_db_name }} OWNER {{ pg_db_user }};"
+      when: reset_database | default(false) | bool
+
+    - name: Create PostgreSQL database user
+      become: yes
+      become_user: postgres
+      postgresql_user:
+        name:      "{{ pg_db_user }}"
+        password:  "{{ pg_password }}"
+        port:      "{{ pg_port }}"
+        state:     present
+        encrypted: yes
+
+    - name: Create PostgreSQL database
+      become: yes
+      become_user: postgres
+      postgresql_db:
+        name:       "{{ pg_db_name }}"
+        owner:      "{{ pg_db_user }}"
+        port:       "{{ pg_port }}"
+        encoding:   UTF8
+        lc_collate: en_US.UTF-8
+        lc_ctype:   en_US.UTF-8
+        template:   template0
+        state:      present
+
+    - name: Create backup directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: u=rwx,g=rx,o=
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ wal_archive_dir }}"
+        - "{{ base_backup_dir }}"
+        - "{{ daily_dump_dir }}"
+
+    - name: Configure PostgreSQL to listen on specific addresses (when replica specified)
+      become: yes
+      become_user: postgres
+      lineinfile:
+        path:   "{{ pg_conf }}"
+        regexp: "^#?listen_addresses.*$"
+        line:   "listen_addresses = 'localhost,{{ ansible_host }}'"
+        backup: yes
+      when: replica_host | length > 0
+      notify: Restart PostgreSQL
+
+    - name: Add replication entries to pg_hba.conf (when replica specified)
+      become: yes
+      become_user: postgres
+      lineinfile:
+        path: "{{ pg_etc_dir }}/pg_hba.conf"
+        line: "host  replication  {{ replica_user }} {{ replica_host | regex_replace('^.*@', '') }}/32  scram-sha-256"
+        backup: yes
+      when: replica_host | length > 0
+      notify: Restart PostgreSQL
+
+    - name: Create replication user on primary (when replica specified)
+      become: yes
+      become_user: postgres
+      shell: |
+        psql -p {{ pg_port }} -c "CREATE USER \"{{ replica_user }}\" WITH REPLICATION PASSWORD '{{ pg_password }}';" 2>/dev/null || true
+      when: replica_host | length > 0
+
+    - name: Force update the replicator's password (when replica specified)
+      become: yes
+      become_user: postgres
+      shell: |
+        psql -p {{ pg_port }} -c "ALTER USER \"{{ replica_user }}\" WITH PASSWORD '{{ pg_password }}';"
+      when: replica_host | length > 0
+
+    - name: Create replication slot (when replica specified)
+      become: yes
+      become_user: postgres
+      postgresql_query:
+        query: "SELECT pg_create_physical_replication_slot('replica_slot');"
+        port:  "{{ pg_port }}"
+      when: replica_host | length > 0
+      ignore_errors: yes # This fails if it already exists which is fine
+
+    - name: Deploy base backup script
+      copy:
+        dest: "{{ backup_dir }}/base-backup.sh"
+        owner: postgres
+        group: postgres
+        mode: u=rwx,g=rx,o=
+        content: |
+          #!/bin/bash
+          set -e
+          BACKUP_DIR="{{ base_backup_dir }}"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          BACKUP_PATH="$BACKUP_DIR/base_$DATE"
+
+          echo "Starting base backup at $(date)"
+          pg_basebackup --port={{ pg_port }} -D "$BACKUP_PATH" -Fp -Xs -P -v
+
+          # Keep only last {{ base_backup_count }} backups
+          cd "$BACKUP_DIR"
+          ls -t | tail -n +{{ base_backup_count + 1 }} | xargs -r rm -rf
+
+          echo "Base backup completed: $BACKUP_PATH"
+
+    - name: Deploy daily dump script
+      copy:
+        dest: "{{ backup_dir }}/daily-dump.sh"
+        owner: postgres
+        group: postgres
+        mode: u=rwx,g=rx,o=
+        content: |
+          #!/bin/bash
+          set -e
+          DUMP_DIR="{{ daily_dump_dir }}"
+          DATE=$(date +%Y%m%d)
+          DUMP_FILE="$DUMP_DIR/session_pro_$DATE.dump"
+
+          echo "Starting daily dump at $(date)"
+          pg_dump --port={{ pg_port }} -Fc {{ pg_db_name }} > "$DUMP_FILE"
+
+          # Keep only last {{ daily_dump_count }} daily dumps
+          cd "$DUMP_DIR"
+          ls -t session_pro_*.dump | tail -n +{{ daily_dump_count + 1 }} | xargs -r rm -f
+
+          echo "Daily dump completed: $DUMP_FILE"
+
+    - name: Deploy WAL cleanup script
+      copy:
+        dest: "{{ backup_dir }}/cleanup-wal.sh"
+        owner: postgres
+        group: postgres
+        mode: u=rwx,g=rx,o=
+        content: |
+          #!/bin/bash
+          # Remove WAL files older than {{ wal_retention_days }} days
+          find {{ wal_archive_dir }} -type f -mtime +{{ wal_retention_days }} -delete
+          echo "WAL cleanup completed at $(date)"
+
+    - name: Deploy manual failover script
+      copy:
+        dest: "{{ backup_dir }}/promote-to-primary.sh"
+        owner: postgres
+        group: postgres
+        mode: u=rwx,g=rx,o=
+        content: |
+          #!/bin/bash
+          # MANUAL FAILOVER SCRIPT
+          # Run this on the replica to promote it to primary
+          # After promotion, update your application to point to this server
+
+          echo "Promoting replica to primary..."
+          pg_ctlcluster 16 {{ pg_cluster_name }} promote
+          echo "Promotion complete. This server is now the primary."
+          echo ""
+          echo "IMPORTANT: Update your application configuration to use this server!"
+
+    - name: Setup weekly base backup cron job
+      cron:
+        name: "PostgreSQL weekly base backup"
+        minute: "0"
+        hour: "2"
+        weekday: "0"
+        user: postgres
+        job: "{{ backup_dir }}/base-backup.sh >> {{ backup_dir }}/base-backup.log 2>&1"
+
+    - name: Setup daily dump cron job
+      cron:
+        name: "PostgreSQL daily dump"
+        minute: "0"
+        hour: "3"
+        user: postgres
+        job: "{{ backup_dir }}/daily-dump.sh >> {{ backup_dir }}/daily-dump.log 2>&1"
+
+    - name: Setup daily WAL cleanup cron job
+      cron:
+        name: "PostgreSQL WAL cleanup"
+        minute: "0"
+        hour: "4"
+        user: postgres
+        job: "{{ backup_dir }}/cleanup-wal.sh >> {{ backup_dir }}/cleanup-wal.log 2>&1"
+
+    # NOTE: PGSQL Replicator Server Setup
+    - name: REPLICA - Install PostgreSQL on replica
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+        state: present
+      delegate_to: "{{ replica_host }}"
+      when: replica_host | length > 0
+
+    - name: REPLICA - Check if already configured as replica
+      stat:
+        path: "{{ pg_data_dir }}/standby.signal"
+      register: standby_signal
+      delegate_to: "{{ replica_host }}"
+      when: replica_host | length > 0
+
+    - name: REPLICA - Skip replica setup if already configured
+      debug:
+        msg: "Replica already configured (standby.signal exists), skipping replica setup"
+      when:
+        - replica_host | length > 0
+        - standby_signal.stat.exists
+
+    - name: REPLICA - Create pro_backend PostgreSQL cluster
+      command: pg_createcluster 16 {{ pg_cluster_name }}
+      args:
+        creates: "{{ pg_etc_dir }}/postgresql.conf"
+      ignore_errors: yes
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    - name: REPLICA - Configure PostgreSQL port
+      lineinfile:
+        path: "{{ pg_etc_dir }}/postgresql.conf"
+        regexp: "^#?port\\s*="
+        line: "port = {{ postgresql_port }}"
+        backup: yes
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    - name: REPLICA - Restart PostgreSQL pro-backend cluster after port configuration
+      systemd:
+        name: "postgresql@16-{{ postgresql_cluster_name }}"
+        state: restarted
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    - name: REPLICA - Deploy .pgpass file for replicator authentication
+      copy:
+        content: "{{ ansible_host }}:{{ pg_port }}:replication:{{ replica_user }}:{{ pg_password }}\n"
+        dest: "/var/lib/postgresql/.pgpass"
+        owner: postgres
+        group: postgres
+        mode: 0600
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+
+    - name: REPLICA - Run pg_basebackup from primary
+      command: >
+        pg_basebackup --host={{ ansible_host }} --port={{ pg_port }} --username={{ replica_user }} --pgdata={{ pg_data_dir }} --format=p --wal-method=stream --progress --verbose --slot=replica_slot
+      environment:
+        PGPASSFILE: "/var/lib/postgresql/.pgpass"
+      become: yes
+      become_user: postgres
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    # This file's presence indicates the server is on standby but is actively syncing the database
+    # When deleted it gets promoted to the primary and starts accepting writes using the
+    # pg_ctlcluster ... command
+    - name: REPLICA - Create standby.signal
+      file:
+        path: "{{ pg_data_dir }}/standby.signal"
+        state: touch
+        owner: postgres
+        group: postgres
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    # Tells the replica where it should connect to to sync the database from
+    - name: REPLICA - Configure primary_conninfo (password from .pgpass)
+      lineinfile:
+        path: "{{ pg_data_dir }}/postgresql.auto.conf"
+        line: "primary_conninfo = 'host={{ ansible_host }} port={{ pg_port }} user={{ replica_user }}'"
+        create: yes
+        owner: postgres
+        group: postgres
+        mode: u=rw,g=r,o=
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+
+    - name: REPLICA - Configure PostgreSQL service environment for PGPASSFILE
+      lineinfile:
+        path: "/etc/systemd/system/postgresql@.service.d/override.conf"
+        line: "Environment=PGPASSFILE=/var/lib/postgresql/.pgpass"
+        create: yes
+        owner: root
+        group: root
+        mode: u=rw,g=r,o=r
+        insertafter: "^\\[Service\\]"
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+
+    - name: REPLICA - Create systemd override directory if needed
+      file:
+        path: "/etc/systemd/system/postgresql@.service.d"
+        state: directory
+        owner: root
+        group: root
+        mode: u=rwx,g=rx,o=rx
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+
+    - name: REPLICA - Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    - name: REPLICA - Start PostgreSQL pro-backend cluster
+      systemd:
+        name: "postgresql@16-{{ pg_cluster_name }}"
+        state: restarted
+        enabled: yes
+      delegate_to: "{{ replica_host }}"
+      when: replica_host | length > 0
+
+    - name: Clone or update the Session Pro Backend
+      git:
+        repo:    https://github.com/doy-lee/session-pro-backend
+        dest:    "{{ pro_backend_code_dir }}"
+        version: main
+        update:  yes
+        force:   no
+      become_user: "{{ pro_backend_user }}"
+      register:    git_result
+
+    - name: Setup Session Pro Backend virtualenv
+      pip:
+        requirements: "{{ pro_backend_code_dir }}/requirements.txt"
+        virtualenv:   "{{ pro_backend_data_dir }}/venv"
+        virtualenv_command: python3 -m venv
+      become_user: "{{ pro_backend_user }}"
+
+    - name: Install psycopg2-binary in virtualenv
+      pip:
+        name: psycopg2-binary
+        virtualenv: "{{ pro_backend_data_dir }}/venv"
+      become_user: "{{ pro_backend_user }}"
+
+    - name: Clone or update libsession-python
+      git:
+        repo:    https://github.com/doy-lee/libsession-python
+        dest:    "{{ libsession_python_code_dir }}"
+        version: dev
+        update:  yes
+        force:   no
+      become_user: "{{ pro_backend_user }}"
+      register:    git_result
+
+    - name: Build and install libsession-python from source
+      pip:
+        name: "{{ libsession_python_code_dir }}"
+        executable: "{{ pro_backend_venv_dir }}/bin/pip"
+        state: present
+      become_user: "{{ pro_backend_user }}"
+
+    - name: Create Session Pro Backend keys directory
+      file:
+        path: "{{ pro_backend_keys_dir }}"
+        state: directory
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode: u=rx,g=,o=
+
+    - name: Deploy Session Pro Backend Apple key
+      copy:
+        src:   "{{ apple_key_path }}"
+        dest:  "{{ pro_backend_keys_dir }}/{{ apple_key_path | basename }}"
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode:  u=r,g=,o=
+
+    - name: Deploy Session Pro Backend Google ADC
+      copy:
+        src:   "{{ google_cloud_app_default_credentials_path }}"
+        dest:  "{{ pro_backend_keys_dir }}/{{ google_cloud_app_default_credentials_path | basename }}"
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode:  u=r,g=,o=
+
+    - name: Download Apple root certificates
+      get_url:
+        url: "{{ item.url }}"
+        dest: "{{ pro_backend_keys_dir }}/{{ item.filename }}"
+        mode: u=r,g=,o=
+      loop:
+        - { url: "https://www.apple.com/appleca/AppleIncRootCertificate.cer",     filename: "AppleIncRootCertificate.cer" }
+        - { url: "https://www.apple.com/certificateauthority/AppleRootCA-G2.cer", filename: "AppleRootCA-G2.cer" }
+        - { url: "https://www.apple.com/certificateauthority/AppleRootCA-G3.cer", filename: "AppleRootCA-G3.cer" }
+
+    - name: Deploy Session Pro Backend config file from user's config_ini_path
+      copy:
+        src:   "{{ config_ini_path }}"
+        dest:  "{{ pro_backend_config_ini }}"
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode:  u=rw,g=,o=
+
+    - name: Configure PostgreSQL db_url in config file
+      lineinfile:
+        path:    "{{ pro_backend_config_ini }}"
+        regexp:  "^db_url\\s*="
+        line:    "db_url                       = postgresql:///{{ pg_db_name }}?user={{ pg_db_user }}&port={{ pg_port }}"
+        owner:   "{{ pro_backend_user }}"
+        group:   "{{ pro_backend_user }}"
+        mode:    u=rw,g=,o=
+
+    - name: Configure Apple settings in config file
+      lineinfile:
+        path:    "{{ pro_backend_config_ini }}"
+        regexp:  "^#?{{ item.key }}\\s*="
+        line:    "{{ item.key }} = {{ item.value }}"
+        owner:   "{{ pro_backend_user }}"
+        group:   "{{ pro_backend_user }}"
+        mode:    u=rw,g=,o=
+      loop:
+        - { key: "app_id",               value: "{{ apple_app_id }}" }
+        - { key: "bundle_id",            value: "{{ apple_bundle_id }}" }
+        - { key: "issuer_id",            value: "{{ apple_issuer_id }}" }
+        - { key: "key_id",               value: "{{ apple_key_id }}" }
+        - { key: "key_path",             value: "{{ pro_backend_keys_dir }}/{{ apple_key_path | basename }}" }
+        - { key: "root_cert_ca_g2_path", value: "{{ pro_backend_keys_dir }}/AppleRootCA-G2.cer" }
+        - { key: "root_cert_ca_g3_path", value: "{{ pro_backend_keys_dir }}/AppleRootCA-G3.cer" }
+        - { key: "root_cert_path",       value: "{{ pro_backend_keys_dir }}/AppleIncRootCertificate.cer" }
+        - { key: "sandbox_env",          value: "{{ apple_sandbox }}" }
+
+    - name: Configure Google settings in config file
+      lineinfile:
+        path:    "{{ pro_backend_config_ini }}"
+        regexp:  "^#?{{ item.key }}\\s*="
+        line:    "{{ item.key }} = {{ item.value }}"
+        owner:   "{{ pro_backend_user }}"
+        group:   "{{ pro_backend_user }}"
+        mode:    u=rw,g=,o=
+      loop:
+        - { key: "cloud_app_credentials_path", value: "{{ pro_backend_keys_dir }}/{{ google_cloud_app_default_credentials_path | basename }}" }
+        - { key: "cloud_project_id",           value: "{{ google_cloud_project_id }}" }
+        - { key: "cloud_subscription_name",    value: "{{ google_cloud_subscription_name }}" }
+        - { key: "package_name",               value: "{{ google_package_name }}" }
+        - { key: "subscription_product_id",    value: "{{ google_subscription_product_id }}" }
+
+    - name: Ensure uWSGI vassals directory exists
+      file:
+        path: "{{ uwsgi_vassal_dir }}"
+        state: directory
+        mode: u=rwx,g=rx,o=rx
+
+    - name: Deploy uWSGI vassal .ini (runs as {{ pro_backend_user }})
+      copy:
+        content: |
+          [uwsgi]
+          env                = SESH_PRO_BACKEND_INI_PATH={{ pro_backend_config_ini }}
+          venv               = {{ pro_backend_data_dir }}/venv
+          chdir              = {{ pro_backend_code_dir }}
+          chmod-socket       = 666
+          die-on-term        = true
+          enable-threads     = true
+          master             = true
+          need-app           = true
+          plugins            = python3,logfile
+          processes          = 4
+          procname-prefix    = Sesh Pro Backend PgSQL
+          socket             = {{ uwsgi_socket_path }}
+          strict             = true
+          vacuum             = true
+          mount              = /=main:flask_app
+          reload-mercy        = 5
+          worker-reload-mercy = 5
+          logger              = file:logfile={{ pro_backend_data_dir }}/backend.log,maxsize=100000000,backupname={{ pro_backend_data_dir }}/backend.log.old
+          harakiri            = 10
+        dest: "{{ uwsgi_vassal_dir }}/pro_backend_pgsql.ini"
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
+        mode: u=rw,g=r,o=r
+
+    - name: Deploy NGINX site config
+      copy:
+        content: |
+          server {
+              server_name {{ domain }};
+              location / {
+                  return 404; # Block all requests by default
+              }
+              location ~ ^/(add_pro_payment|get_pro_revocations|get_pro_details|generate_pro_proof|set_payment_refund_requested|oxen/v4/lsrpc|apple_notifications_v2)$ {
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header Host $host;
+                  include /etc/nginx/uwsgi_params;
+                  uwsgi_pass unix://{{ uwsgi_socket_path }};
+              }
+              access_log /var/log/nginx/{{ domain }}.access.log;
+              error_log  /var/log/nginx/{{ domain }}.error.log;
+          }
+        dest: "{{ nginx_sites_available }}/{{ domain }}"
+        mode: u=rw,g=r,o=
+      notify:
+        - Test NGINX config
+        - Reload NGINX
+
+    - name: Enable NGINX site
+      file:
+        src: "{{ nginx_sites_available }}/{{ domain }}"
+        dest: "{{ nginx_sites_enabled }}/{{ domain }}"
+        state: link
+      notify: Reload NGINX
+
+    - name: Obtain real certificate
+      shell: certbot --nginx -d {{ domain }} -m {{ email }} --agree-tos --non-interactive
+      ignore_errors: yes
+
+    - name: Configure uWSGI Emperor security settings
+      ini_file:
+        path: /etc/uwsgi-emperor/emperor.ini
+        section: uwsgi
+        option: "{{ item.option }}"
+        value:  "{{ item.value }}"
+        state: present
+        create: no
+        backup: no
+      loop:
+        - { option: cap,            value: "setgid,setuid" }
+        - { option: emperor-tyrant, value: "true" }
+
+    - name: Start and enable uWSGI Emperor
+      systemd:
+        name: uwsgi-emperor
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Ensure NGINX is running
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Restart PostgreSQL
+      systemd:
+        name: "postgresql@16-{{ pg_cluster_name }}"
+        state: restarted
+
+    - name: Test NGINX config
+      command: nginx -t
+      register: nginx_test
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Reload NGINX
+      systemd:
+        name: nginx
+        state: reloaded

@@ -399,9 +399,9 @@ def fetch_subscription_details_for_base_plan_id(base_plan_id: str, err: ErrorSin
     result = None
 
     subscriptions = fetch_monetizationv3_subscriptions_for_product_id(
-        package_name=package_name,
-        product_id=subscription_product_id,
-        err=err)
+        package_name = package_name,
+        product_id   = subscription_product_id,
+        err          = err)
 
     if err.has():
         err.msg_list.append(f'Failed to get subscription details for {package_name} and {subscription_product_id}')
