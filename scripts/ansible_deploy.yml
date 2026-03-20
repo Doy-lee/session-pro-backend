@@ -414,7 +414,7 @@
         template:   template0
         state:      present
 
-    - name: create backup directories
+    - name: Create backup directories
       file:
         path: "{{ item }}"
         state: directory
@@ -470,6 +470,11 @@
         port:  "{{ pg_port }}"
       when: replica_host | length > 0
       ignore_errors: yes # This fails if it already exists which is fine
+
+    - name: Restart PostgreSQL pro-backend cluster replication changes
+      systemd:
+        name: "postgresql@16-{{ pg_cluster_name }}"
+        state: restarted
 
     - name: Deploy base backup script
       copy:
@@ -608,7 +613,7 @@
       lineinfile:
         path: "{{ pg_etc_dir }}/postgresql.conf"
         regexp: "^#?port\\s*="
-        line: "port = {{ postgresql_port }}"
+        line: "port = {{ pg_port }}"
         backup: yes
       delegate_to: "{{ replica_host }}"
       when:
@@ -617,8 +622,34 @@
 
     - name: REPLICA - Restart PostgreSQL pro-backend cluster after port configuration
       systemd:
-        name: "postgresql@16-{{ postgresql_cluster_name }}"
+        name: "postgresql@16-{{ pg_cluster_name }}"
         state: restarted
+      delegate_to: "{{ replica_host }}"
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    # You need to create the cluster which creates the config files. That also creates the data dir
+    # but then base backup complains that data dir is populated so we go and delete the data dir
+    # before proceeding.
+    # You can't run base backup without creating the config files so .. whatever you have to do this
+    - name: REPLICA - For a stupid reason you have to delete replica data dir before basebackup
+      ansible.builtin.file:
+        path: "{{ pg_data_dir }}"
+        state: absent
+      delegate_to: "{{ replica_host }}"
+      become: yes
+      when:
+        - replica_host | length > 0
+        - not standby_signal.stat.exists
+
+    - name: REPLICA - Run pg_basebackup from primary
+      command: >
+        pg_basebackup --host={{ ansible_host }} --port={{ pg_port }} --username={{ replica_user }} --pgdata={{ pg_data_dir }} --format=p --wal-method=stream --progress --verbose --slot=replica_slot
+      environment:
+        PGPASSFILE: "/var/lib/postgresql/.pgpass"
+      become: yes
+      become_user: postgres
       delegate_to: "{{ replica_host }}"
       when:
         - replica_host | length > 0
@@ -634,18 +665,6 @@
       delegate_to: "{{ replica_host }}"
       when:
         - replica_host | length > 0
-
-    - name: REPLICA - Run pg_basebackup from primary
-      command: >
-        pg_basebackup --host={{ ansible_host }} --port={{ pg_port }} --username={{ replica_user }} --pgdata={{ pg_data_dir }} --format=p --wal-method=stream --progress --verbose --slot=replica_slot
-      environment:
-        PGPASSFILE: "/var/lib/postgresql/.pgpass"
-      become: yes
-      become_user: postgres
-      delegate_to: "{{ replica_host }}"
-      when:
-        - replica_host | length > 0
-        - not standby_signal.stat.exists
 
     # This file's presence indicates the server is on standby but is actively syncing the database
     # When deleted it gets promoted to the primary and starts accepting writes using the
