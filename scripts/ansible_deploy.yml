@@ -186,7 +186,7 @@
 #   From base backup:
 #     1. Stop PostgreSQL: sudo systemctl stop postgresql@16-{{ pg_cluster_name }}
 #     2. Clear data dir: sudo rm -rf {{ pg_data_dir }}/*
-#     3. Restore: sudo -u postgres tar -xzf /home/pro-backend/backups/base/base_YYYYMMDD_HHMMSS.tar.gz -C {{ pg_data_dir }}/
+#     3. Restore: sudo -u postgres tar -xzf /home/pro-backend/Backups/base/base_YYYYMMDD_HHMMSS.tar.gz -C {{ pg_data_dir }}/
 #     4. Start PostgreSQL: sudo systemctl start postgresql@16-{{ pg_cluster_name }}
 #
 #   From daily dump:

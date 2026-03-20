@@ -83,7 +83,7 @@ with_platform_google         = false
 # One example is rounding timestamps to Google/Apple's modified timespan to determine whether or not
 # a revocation overlaps with the expiry of a payment. If there's an overlap the backend can skip
 # issuing a revocation (which is an expensive operation).
-platform_testing_environment = false
+platform_testing_env         = false
 
 # By default the backend is configured to strip personal-identifying information (PII) from the
 # logs. Enabling this preserves all information in those logs. This should not be used in a
@@ -118,21 +118,23 @@ sandbox_env                  = true
 
 # This is required if running in production mode (e.g. `sandbox_env` is false) otherwise we are
 # unable to startup Apple's library
-production_app_id            = <int: app_id>
+app_id                       = <int: app_id>
 
 # NOTE: The [google] section and its fields are only required if `with_platform_google` is defined
 [google]
 package_name                 = <string: package_name> # e.g. com.company.my_application
-project_name                 = <string: project_name> # e.g. company-ABCDE
-
-# Name of the Google cloud subscription to listen to
-subscription_name            = session-pro-sub
 
 # Name of the product to handle Google Play notifications from
 subscription_product_id      = session_pro
 
-# Google application credentials .JSON file
-application_credentials_path = <path/to/credentials>.json
+# Google cloud project that is authorised to receive billing notifications from the google play app
+cloud_project_id             = <string: project_name> # e.g. company-ABCDE
+
+# Name of the Google cloud subscription to query notifications from
+cloud_subscription_name      = session-pro-sub
+
+# Google cloud application credentials .JSON file
+cloud_app_credentials_path   = <path/to/credentials>.json
 ```
 
 A subset of the options specifiable by the .INI file can be overridden using
@@ -201,14 +203,7 @@ python -m pytest test.py --verbose --capture=no
 # Our backend spawns one long-running thread for expiring rows in the DB, this
 # needs to be running to maintain the integrity of the DB.
 #
-# `py-call-osafterfork` should be enabled if your UWSGI installation supports it
-# which lets the backend attach to the signal handler and gracefully terminate
-# the thread that the backend spawns. If your UWSGI version does not support
-# this the best we can do is instead `--worker-reload-mercy=3` which causes
-# UWSGI to forcibly terminate the thread after 3 seconds, configure the timeout
-# as necessary. Without this, on exit the application hangs.
-#
-# Die on terminate (--die-on-term) similar to `py-call-osafterfork` restores
+# Die on terminate (--die-on-term) restores
 # UNIX convention in that a SIGTERM should kill the process. UWSGI hijacks this
 # and reloads the process. This is the defined behaviour until UWSGI v2.1.
 #
@@ -233,8 +228,7 @@ SESH_PRO_BACKEND_DB_URL=sqlite:///data/pro.db \
   --strict \
   --need-app \
   --vacuum \
-  --py-call-osafterfork \
-  --worker-reload-mercy=3 \
+  --worker-reload-mercy=5 \
   --procname-prefix \"SESH Pro Backend \"
 ```
 
