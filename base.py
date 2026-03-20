@@ -450,6 +450,26 @@ def obfuscate(val: str) -> str:
     n_ends = max(math.floor(len(val) * 0.3), 1)
     return f"{val[:n_ends]}…{val[-n_ends:]}"
 
+def maybe_obfuscate(val: typing.Any) -> str:
+    if UNSAFE_LOGGING:
+        return str(val) if val is not None else 'None'
+    if val is None:
+        return 'None'
+    return obfuscate(str(val))
+
+def maybe_obfuscate_bytes(val: typing.Any) -> str:
+    return maybe_obfuscate(bytes(val).hex())
+
+def payment_provider_tx_to_safe_string(tx: PaymentProviderTransaction) -> str:
+    return (
+        f"{tx.provider.name}, "
+        f"apple(orig/tx/web)=({maybe_obfuscate(tx.apple_original_tx_id)}/{maybe_obfuscate(tx.apple_tx_id)}/{maybe_obfuscate(tx.apple_web_line_order_tx_id)}), "
+        f"google=({maybe_obfuscate(tx.google_payment_token)}/{maybe_obfuscate(tx.google_order_id)}), "
+        f"rangeproof={maybe_obfuscate(tx.rangeproof_order_id)}"
+    )
+
+
+
 def reflect_enum(enum_value: enum.Enum) -> str:
     name = enum_value.name
     value = None

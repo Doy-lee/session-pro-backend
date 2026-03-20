@@ -914,10 +914,14 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
     # NOTE: Extract notification from payload
     get: server.GetJSONFromFlaskRequest = server.get_json_from_flask_request(flask.request)
     if len(get.err_msg):
-        log.error(f'Failed to parse notification as JSON: {flask.request.data}')
+        if base.UNSAFE_LOGGING:
+            log.error(f'Failed to parse notification as JSON: {flask.request.data}')
+        else:
+            log.error(f'Failed to parse notification as JSON')
         flask.abort(500)
 
-    log.debug(f'Received notification: {json.dumps(get.json, indent=1)}\n')
+    if base.UNSAFE_LOGGING:
+        log.debug(f'Received notification: {json.dumps(get.json, indent=1)}\n')
     assert isinstance(get.json, dict)
     assert FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY in flask.current_app.config
     assert isinstance(flask.current_app.config[FLASK_CONFIG_PLATFORM_APPLE_CORE_KEY], Core)
@@ -958,7 +962,7 @@ def notifications_apple_app_connect_sandbox() -> flask.Response:
                     backend.add_user_error(conn=conn, error=user_error, unix_ts_ms=int(time.time() * 1000))
 
         # NOTE: Log and abort request
-        log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{signed_payload}\nErrors:' + '\n  '.join(err.msg_list))
+        log.error(f'Failed to parse notification ({resp.signedDate}) signed payload was:\n{base.maybe_obfuscate(signed_payload)}\nErrors:' + '\n  '.join(err.msg_list))
         flask.abort(500)
 
     return flask.Response(status=200)
@@ -974,7 +978,8 @@ def trigger_test_notification(client: AppleAppStoreServerAPIClient, verifier: Ap
             log.debug('Check test notif: ', response_check_test_notif)
             if response_check_test_notif.signedPayload:
                 decoded_response: AppleResponseBodyV2DecodedPayload = verifier.verify_and_decode_notification(signed_payload=response_check_test_notif.signedPayload)
-                log.info('Decoded test response: ', decoded_response)
+                if base.UNSAFE_LOGGING:
+                    log.info('Decoded test response: ', decoded_response)
     except AppleAPIException as e:
         log.error(f'Failed to decode test notification: {e}')
 

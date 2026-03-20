@@ -317,9 +317,24 @@ def payment_provider_tx_log_label(tx: base.PaymentProviderTransaction):
     result = f'{tx.provider.name}, apple (orig/tx/web)=({tx.apple_original_tx_id}/{tx.apple_tx_id}/{tx.apple_web_line_order_tx_id}), google=({tx.google_payment_token}/{tx.google_order_id})'
     return result
 
+def payment_provider_tx_log_label_safe(tx: base.PaymentProviderTransaction):
+    result = f'{tx.provider.name}, apple (orig/tx/web)=({base.maybe_obfuscate(tx.apple_original_tx_id)}/{base.maybe_obfuscate(tx.apple_tx_id)}/{base.maybe_obfuscate(tx.apple_web_line_order_tx_id)}), google=({base.maybe_obfuscate(tx.google_payment_token)}/{base.maybe_obfuscate(tx.google_order_id)})'
+    return result
+
 def _add_pro_payment_user_tx_log_label(tx: UserPaymentTransaction):
     result = f'{tx.provider.name}, apple={tx.apple_tx_id}, google=({tx.google_payment_token}, {tx.google_order_id})'
     return result
+
+def _add_pro_payment_user_tx_log_label_safe(tx: UserPaymentTransaction):
+    result = f'{tx.provider.name}, apple={base.maybe_obfuscate(tx.apple_tx_id)}, google=({base.maybe_obfuscate(tx.google_payment_token)}, {base.maybe_obfuscate(tx.google_order_id)})'
+    return result
+
+def user_payment_tx_to_safe_string(tx: UserPaymentTransaction) -> str:
+    return (
+        f"{tx.provider.name}, "
+        f"google=({base.maybe_obfuscate(tx.google_payment_token)}/{base.maybe_obfuscate(tx.google_order_id)}), "
+        f"rangeproof={base.maybe_obfuscate(tx.rangeproof_order_id)}"
+    )
 
 def convert_unix_ts_ms_to_redeemed_unix_ts_ms(unix_ts_ms: int):
     result: int = 0
@@ -792,7 +807,7 @@ def verify_db(conn: sqlalchemy.engine.Connection, err: base.ErrorSink) -> bool:
         if it.payment_provider == base.PaymentProvider.GooglePlayStore:
             pass
         elif len(it.google_payment_token) != 0:
-            err.msg_list.append(f'Payment #{index} specified a google payment token: {it.google_payment_token} for a non-google platform')
+            err.msg_list.append(f'Payment #{index} specified a google payment token: {base.maybe_obfuscate(it.google_payment_token)} for a non-google platform')
 
     # NOTE: Verify the users
     users: list[UserRow] = get_users_list(conn)
@@ -933,11 +948,11 @@ def add_apple_revocation_tx(tx: db.SQLTransaction, apple_original_tx_id: str, re
         expired    = int(base.PaymentStatus.Expired.value),
         revoked    = int(base.PaymentStatus.Revoked.value))
 
-    log.info(f'Revoking Apple payment (orig. TX ID={apple_original_tx_id}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
+    log.info(f'Revoking Apple payment (orig. TX ID={base.maybe_obfuscate(apple_original_tx_id)}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
     rows         = rows_result.fetchall()
     result: bool = revoke_payments_by_id_internal_tx(tx, rows, revoke_unix_ts_ms)
     if result == False:
-        err.msg_list.append(f'Failed to revoke Apple orig. TX ID {apple_original_tx_id} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
+        err.msg_list.append(f'Failed to revoke Apple orig. TX ID {base.maybe_obfuscate(apple_original_tx_id)} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
@@ -968,11 +983,11 @@ def add_google_revocation_tx(tx: db.SQLTransaction, google_payment_token: str, r
         expired    = int(base.PaymentStatus.Expired.value),
         revoked    = int(base.PaymentStatus.Revoked.value))
 
-    log.info(f'Revoking Google payment (token={google_payment_token}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
+    log.info(f'Revoking Google payment (token={base.maybe_obfuscate(google_payment_token)}, revoke={base.readable_unix_ts_ms(revoke_unix_ts_ms)})')
     rows         = rows_result.fetchall()
     result: bool = revoke_payments_by_id_internal_tx(tx, rows, revoke_unix_ts_ms)
     if result == False:
-        err.msg_list.append(f'Failed to revoke Google payment {google_payment_token} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
+        err.msg_list.append(f'Failed to revoke Google payment {base.maybe_obfuscate(google_payment_token)} at {base.readable_unix_ts_ms(revoke_unix_ts_ms)}, no matching payments were found')
 
     return result
 
@@ -999,10 +1014,9 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     fields                   = ['master_pkey = :master_pkey', 'status = :status', 'redeemed_unix_ts_ms = :redeemed_unix_ts_ms']
     set_expr                 = ', '.join(fields) # Create '<field0> = ?, <field1> = ?, ...'
 
-    if log.getEffectiveLevel() <= logging.INFO:
-        payment_tx_label    = _add_pro_payment_user_tx_log_label(payment_tx)
-        rotating_pkey_label = bytes(rotating_pkey).hex() if rotating_pkey else '(none)'
-        log.info(f'Redeeming payment (master={bytes(master_pkey).hex()}, rotating={rotating_pkey_label}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, payment={payment_tx_label})')
+    payment_tx_label     = _add_pro_payment_user_tx_log_label_safe(payment_tx)
+    rotating_pkey_label = base.maybe_obfuscate_bytes(bytes(rotating_pkey)) if rotating_pkey else '(none)'
+    log.info(f'Redeeming payment (master={base.maybe_obfuscate_bytes(master_pkey)}, rotating={rotating_pkey_label}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, payment={payment_tx_label})')
 
     # NOTE: We technically always allow a redeem of an unredeemed payment as long as the user
     # knows the transaction ID (payment token/tx ID). If for example the user sits on the
@@ -1080,7 +1094,7 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
     if rowcount >= 1:
         assert rowcount == 1
         if rowcount > 1:
-            err.msg_list.append(f'Payment was redeemed for {master_pkey} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {rowcount}')
+            err.msg_list.append(f'Payment was redeemed for {base.maybe_obfuscate_bytes(master_pkey)} at {redeemed_unix_ts_ms/1000} but more than 1 row was updated, updated {rowcount}')
         # proofs will be given a new gen index hash. We used to revoke the old gen index hash
         # but there's no need for that and creates churn in the revoke list. The user will hold
         # onto their proof until it expires and simply request a new one.
@@ -1110,7 +1124,7 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
                 if not base.DEV_BACKEND_MODE:
                     assert result.proof.expiry_unix_ts_ms % base.SECONDS_IN_DAY == 0, f"Proof expiry must be on a day boundary, 30 days, 365 days ...e.t.c, was {result.proof.expiry_unix_ts_ms}"
         else:
-            err.msg_list.append(f'Failed to update DB after new payment was redeemed for {master_pkey}')
+            err.msg_list.append(f'Failed to update DB after new payment was redeemed for {base.maybe_obfuscate_bytes(master_pkey)}')
 
         assert allocated.found, "We just added the user's payment we expect to find the latest expiry date for the pkey"
 
@@ -1159,10 +1173,10 @@ def redeem_payment_tx(tx:                  db.SQLTransaction,
 
         first_row = row_result.fetchone()
         if first_row and first_row[0] > 0:
-            err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {payment_tx}')
+            err.msg_list.append(f'Payment was not redeemed, already redeemed TX: {user_payment_tx_to_safe_string(payment_tx)}')
             result.status = RedeemPaymentStatus.AlreadyRedeemed
         else:
-            err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {payment_tx}')
+            err.msg_list.append(f'Payment was not redeemed, no payments were found matching the request tx: {user_payment_tx_to_safe_string(payment_tx)}')
             result.status = RedeemPaymentStatus.UnknownPayment
 
     if not err.has():
@@ -1244,7 +1258,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
         if payment_provider == base.PaymentProvider.GooglePlayStore.value:
             order_split: list[str] = google_order_id.split('..')
             if len(order_split) <= 0:
-                log.warning(f"Failed to split order google order ID by '..' for {bytes(master_pkey).hex()}: {base.obfuscate(google_order_id)}")
+                log.warning(f"Failed to split order google order ID by '..' for {base.maybe_obfuscate_bytes(master_pkey)}: {base.maybe_obfuscate(google_order_id)}")
                 continue
 
             for used_it in used_google_order_ids:
@@ -1265,7 +1279,7 @@ def _lookup_user_expiry_unix_ts_ms_with_grace_from_payments_table_tx(tx: db.SQLT
             else:
                 used_rangeproof_order_ids.add(rangeproof_order_id)
         else:
-            log.warning(f"Unrecognised payment provider in {row} for {bytes(master_pkey).hex()}: {payment_provider}")
+            log.warning(f"Unrecognised payment provider in {row} for {base.maybe_obfuscate_bytes(master_pkey)}: {payment_provider}")
             continue
 
         if seen_before:
@@ -1403,7 +1417,7 @@ def update_payment_renewal_info_tx(tx:                       db.SQLTransaction,
             payment_id = payment_tx.apple_tx_id
         else:
             payment_id = payment_tx.rangeproof_order_id
-        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {payment_id}')
+        err.msg_list.append(f'Updating payment TX failed, no matching payment found for {payment_tx.provider.name} {base.maybe_obfuscate(payment_id)}')
     return result
 
 def update_payment_renewal_info(conn:                     sqlalchemy.engine.Connection,
@@ -1814,13 +1828,13 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
     try:
         _ = master_pkey.verify(smessage=hash_to_sign, signature=master_sig)
     except Exception as e:
-        err.msg_list.append(f'Failed to verify signature from master key {bytes(master_pkey).hex()}: {e}');
+        err.msg_list.append(f'Failed to verify signature from master key {base.maybe_obfuscate_bytes(master_pkey)}: {e}');
         return False
 
     try:
         _ = rotating_pkey.verify(smessage=hash_to_sign, signature=rotating_sig)
     except Exception as e:
-        err.msg_list.append(f'Failed to verify signature from rotating key {bytes(rotating_pkey).hex()}: {e}');
+        err.msg_list.append(f'Failed to verify signature from rotating key {base.maybe_obfuscate_bytes(rotating_pkey)}: {e}');
         return False
 
     # The hash to sign is only passed by internal code, the user never passes
@@ -1835,7 +1849,7 @@ def internal_verify_add_payment_and_get_proof_common_arguments(signing_key:   na
 
     # Sanity check the user key's and their signatures
     if master_pkey == rotating_pkey:
-        err.msg_list.append(f'Master and rotating key cannot be the same was: {bytes(master_pkey).hex()}')
+        err.msg_list.append(f'Master and rotating key cannot be the same was: {base.maybe_obfuscate_bytes(master_pkey)}')
 
     if bytes(master_pkey) == ZERO_BYTES32:
         err.msg_list.append(f'Master key cannot be the zero key')
@@ -1906,9 +1920,8 @@ def add_pro_payment_tx(tx:                  db.SQLTransaction,
                 tx.cancel = True
                 return result
 
-            if log.getEffectiveLevel() <= logging.INFO:
-                payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
-                log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={bytes(master_pkey).hex()}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
+            payment_tx_label = _add_pro_payment_user_tx_log_label_safe(payment_tx)
+            log.info(f'Google ack. payment check (dev={base.DEV_BACKEND_MODE}, version={version}, master={base.maybe_obfuscate_bytes(master_pkey)}, payment={payment_tx_label}, acked={sub_data.acknowledgement_state})')
 
             if sub_data.acknowledgement_state != platform_google_types.SubscriptionsV2AcknowledgementState.ACKNOWLEDGED:
                 platform_google_api.subscription_v1_acknowledge(purchase_token=payment_tx.google_payment_token, err=err)
@@ -1964,9 +1977,8 @@ def verify_and_add_pro_payment(conn:                sqlalchemy.engine.Connection
     #mask metadata about the time the user redeemed the payment.
     """
 
-    if log.getEffectiveLevel() <= logging.INFO:
-        payment_tx_label = _add_pro_payment_user_tx_log_label(payment_tx)
-        log.info(f'Add payment (dev={base.DEV_BACKEND_MODE}, version={version}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, master={bytes(master_pkey).hex()}, payment={payment_tx_label})')
+    payment_tx_label = _add_pro_payment_user_tx_log_label_safe(payment_tx)
+    log.info(f'Add payment (dev={base.DEV_BACKEND_MODE}, version={version}, redeemed={base.readable_unix_ts_ms(redeemed_unix_ts_ms)}, master={base.maybe_obfuscate_bytes(master_pkey)}, payment={payment_tx_label})')
 
     result        = RedeemPayment()
     result.status = RedeemPaymentStatus.Error
@@ -2159,7 +2171,7 @@ def generate_pro_proof(conn: sqlalchemy.engine.Connection,
                        rotating_sig:   bytes,
                        err:            base.ErrorSink) -> ProSubscriptionProof:
     result: ProSubscriptionProof = ProSubscriptionProof()
-    log.info(f'Get pro proof (version={version}, master={bytes(master_pkey).hex()}, ts={base.readable_unix_ts_ms(unix_ts_ms)})')
+    log.info(f'Get pro proof (version={version}, master={base.maybe_obfuscate_bytes(master_pkey)}, ts={base.readable_unix_ts_ms(unix_ts_ms)})')
 
     # Verify some of the request parameters
     hash_to_sign: bytes = make_generate_pro_proof_hash(version       = version,

@@ -232,7 +232,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, cloud_
                         parse:        ParsedNotification = parse_notification(message_data, err);
                         message_id:   int                = int(it.message.message_id)
                         if err.has():
-                            log.warning(f'Discarding message #{index} because we encountered an error parsing it (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
+                            log.warning(f'Discarding message #{index} because we encountered an error parsing it (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{base.maybe_obfuscate(str(it))}\nReason was:\n{err.build()}')
                         else:
                             is_new_message = True
                             for sort_it in sorted_msg_list:
@@ -265,7 +265,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, cloud_
 
                             db.retry_on_database_locked(add_notification_id_to_db, log, "Add Google notification ID to DB failed")
                             if err.has():
-                                log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{it}\nReason was:\n{err.build()}')
+                                log.warning(f'Discarding message #{index}, attempting to add notification to DB but it repeatedly failed (message was published at {base.readable_unix_ts_ms(it.message.publish_time.ToMilliseconds())}. Message was:\n{base.maybe_obfuscate(str(it))}\nReason was:\n{err.build()}')
                                 continue
 
                             if is_new_message:
@@ -344,7 +344,7 @@ def thread_entry_point(context: ThreadContext, app_credentials_path: str, cloud_
                                 # for the out-of-order messages that this message is dependent on to arrive,
                                 # get sorted into order and then executed successfully.
                                 msg.increase_retry_delay(now)
-                                log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{msg.raw}')
+                                log.error(f'Failed to handle message, retrying in {msg.curr_retry_delay_s}s (message was emitted at {base.readable_unix_ts_ms(msg.event_unix_ts_ms)}). Reason was\n{err.build()}\nMessage was\n{base.maybe_obfuscate(str(msg.raw))}')
 
                     # NOTE: Acknowledge the messages we handled successfully to stop Google from
                     # resending it to us
@@ -376,17 +376,17 @@ def _update_payment_renewal_info(tx_payment: base.PaymentProviderTransaction, au
 def set_payment_auto_renew(tx_payment: base.PaymentProviderTransaction, auto_renewing: bool, tx: db.SQLTransaction, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, auto_renewing, None, tx, err)
     if not success:
-        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
+        err.msg_list.append(f'Failed to update auto_renew flag for purchase_token: {base.maybe_obfuscate(tx_payment.google_payment_token)} and order_id: {base.maybe_obfuscate(tx_payment.google_order_id)}')
 
 def set_purchase_grace_period_duration(tx_payment: base.PaymentProviderTransaction, grace_period_duration_ms: int, tx: db.SQLTransaction, err: base.ErrorSink):
     success = _update_payment_renewal_info(tx_payment, None, grace_period_duration_ms, tx, err)
     if not success:
-        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {tx_payment.google_payment_token} and order_id: {tx_payment.google_order_id}')
+        err.msg_list.append(f'Failed to update grace period duration for purchase_token: {base.maybe_obfuscate(tx_payment.google_payment_token)} and order_id: {base.maybe_obfuscate(tx_payment.google_order_id)}')
 
 def validate_no_existing_purchase_token_error(purchase_token: str, conn: sqlalchemy.engine.Connection, err: base.ErrorSink):
     result = backend.has_user_error(conn=conn, payment_provider=base.PaymentProvider.GooglePlayStore, payment_id=purchase_token)
     if result:
-        err.msg_list.append(f"Received RTDN notification for already errored purchase token: {purchase_token}")
+        err.msg_list.append(f"Received RTDN notification for already errored purchase token: {base.maybe_obfuscate(purchase_token)}")
 
 def require_obfuscated_external_account_id(tx_event: SubscriptionPlanEventTransaction, err: base.ErrorSink) -> bytes:
     # NOTE: Parse the obfuscated_external_account_id into bytes
@@ -428,11 +428,10 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
                     obfuscated_external_account_id: bytes = require_obfuscated_external_account_id(tx_event, err)
                     if not err.has():
                         # NOTE: Acknowledge the payment
-                        if log.getEffectiveLevel() <= logging.INFO:
-                            expiry:        str = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
-                            unredeemed:    str = base.readable_unix_ts_ms(tx_event.event_ts_ms)
-                            payment_label: str = backend.payment_provider_tx_log_label(tx_payment)
-                            log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={tx_event.linked_purchase_token}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
+                        expiry:        str = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
+                        unredeemed:    str = base.readable_unix_ts_ms(tx_event.event_ts_ms)
+                        payment_label: str = backend.payment_provider_tx_log_label_safe(tx_payment)
+                        log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (linked_token={base.maybe_obfuscate(tx_event.linked_purchase_token)}, plan={tx_event.pro_plan.name}, payment={payment_label}, unredeemed={unredeemed}, expiry={expiry})')
 
                         # NOTE: If a linked token is in the payload, it means that the old token
                         # needs to be voided first before continuing as the link token is the new
@@ -468,11 +467,9 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
         case SubscriptionNotificationType.IN_GRACE_PERIOD:
             if tx_event.subscription_state == SubscriptionsV2State.IN_GRACE_PERIOD:
                 plan_details = platform_google_api.fetch_subscription_details_for_base_plan_id(base_plan_id=tx_event.base_plan_id, err=err)
-
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    grace_ms: int = plan_details.grace_period.milliseconds if plan_details else 0
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, grace period ms={grace_ms})')
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                grace_ms: int = plan_details.grace_period.milliseconds if plan_details else 0
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, grace period ms={grace_ms})')
 
                 if not err.has():
                     assert plan_details is not None
@@ -483,12 +480,10 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
 
         case SubscriptionNotificationType.RECOVERED | SubscriptionNotificationType.RENEWED:
             if tx_event.subscription_state == SubscriptionsV2State.ACTIVE:
-
-                if log.getEffectiveLevel() <= logging.INFO:
-                    expiry        = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
-                    unredeemed    = base.readable_unix_ts_ms(tx_event.event_ts_ms)
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, plan={tx_event.pro_plan.name}, unredeemed={unredeemed}, expiry={expiry})')
+                expiry        = base.readable_unix_ts_ms(tx_event.expiry_time.unix_milliseconds)
+                unredeemed    = base.readable_unix_ts_ms(tx_event.event_ts_ms)
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, plan={tx_event.pro_plan.name}, unredeemed={unredeemed}, expiry={expiry})')
 
                 obfuscated_external_account_id = require_obfuscated_external_account_id(tx_event, err)
                 if not err.has():
@@ -514,24 +509,21 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
             """Google mentions a case where if a user is on account hold and the canceled event happens they should have entitlement revoked, but entitlement is already expired so this does not need to be handled."""
             if tx_event.subscription_state == SubscriptionsV2State.CANCELED \
             or tx_event.subscription_state == SubscriptionsV2State.EXPIRED:
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
                 set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=False, tx=tx, err=err)
 
         case SubscriptionNotificationType.RESTARTED:
             # Only happens when going from CANCELLED to ACTIVE, this is called resubscribing, or re-enabling auto-renew
             if tx_event.subscription_state == SubscriptionsV2State.ACTIVE:
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=true)')
                 set_payment_auto_renew(tx_payment=tx_payment, auto_renewing=True, tx=tx, err=err)
 
         case SubscriptionNotificationType.REVOKED:
             if tx_event.subscription_state == SubscriptionsV2State.EXPIRED:
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, auto_renew=false)')
                 _ = backend.add_google_revocation_tx(tx                   = tx,
                                                      google_payment_token = tx_payment.google_payment_token,
                                                      revoke_unix_ts_ms    = tx_event.event_ts_ms,
@@ -546,10 +538,8 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
             """
             if tx_event.subscription_state == SubscriptionsV2State.EXPIRED \
             or tx_event.subscription_state == SubscriptionsV2State.ON_HOLD:
-
-                if log.getEffectiveLevel() <= logging.INFO:
-                    payment_label = backend.payment_provider_tx_log_label(tx_payment)
-                    log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, revoke={base.readable_unix_ts_ms(tx_event.event_ts_ms)})')
+                payment_label = backend.payment_provider_tx_log_label_safe(tx_payment)
+                log.info(f'{tx_event.notification.name}+{tx_event.subscription_state.name}; (payment={payment_label}, revoke={base.readable_unix_ts_ms(tx_event.event_ts_ms)})')
 
                 # TODO: If this function ever finds rounded(expiry_ts) > rounded(event_ts) the devs need to be notified somehow.
                 """If everything works as intended, this function should always find that `rounded(expiry_ts) == rounded(event_ts)` and 
@@ -589,7 +579,7 @@ def handle_subscription_notification(tx_payment: base.PaymentProviderTransaction
 
     if err.has():
         # Purchase token logging is included in the wrapper function
-        err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {tx_payment.google_order_id if len(tx_payment.google_order_id) > 0 else "N/A"}')
+        err.msg_list.append(f'Failed to handle {reflect_enum(tx_event.notification)} for order_id {base.maybe_obfuscate(tx_payment.google_order_id) if len(tx_payment.google_order_id) > 0 else "N/A"}')
         tx.cancel = True
 
 def handle_voided_notification(tx: VoidedPurchaseTxFields, err: base.ErrorSink):

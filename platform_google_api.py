@@ -368,7 +368,7 @@ def subscription_v1_acknowledge(purchase_token: str, err: ErrorSink):
 
     # Google returns an empty string response for a success
     if response != "":
-        err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {purchase_token}')
+        err.msg_list.append(f'Failed to acknowledge purchase for purchase_token: {base.maybe_obfuscate(purchase_token)}')
 
 def fetch_monetizationv3_subscriptions_for_product_id(package_name: str, product_id: str, err: ErrorSink) -> Monetizationv3SubscriptionData | None:
     """
