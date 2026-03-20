@@ -799,9 +799,11 @@
 
     - name: Download Apple root certificates
       get_url:
-        url: "{{ item.url }}"
-        dest: "{{ pro_backend_keys_dir }}/{{ item.filename }}"
-        mode: u=r,g=,o=
+        url:   "{{ item.url }}"
+        dest:  "{{ pro_backend_keys_dir }}/{{ item.filename }}"
+        mode:  u=r,g=,o=
+        owner: "{{ pro_backend_user }}"
+        group: "{{ pro_backend_user }}"
       loop:
         - { url: "https://www.apple.com/appleca/AppleIncRootCertificate.cer",     filename: "AppleIncRootCertificate.cer" }
         - { url: "https://www.apple.com/certificateauthority/AppleRootCA-G2.cer", filename: "AppleRootCA-G2.cer" }
@@ -819,7 +821,7 @@
       lineinfile:
         path:    "{{ pro_backend_config_ini }}"
         regexp:  "^db_url\\s*="
-        line:    "db_url                       = postgresql:///{{ pg_db_name }}?user={{ pg_db_user }}&port={{ pg_port }}"
+        line:    "db_url = postgresql:///{{ pg_db_name }}?user={{ pg_db_user }}&port={{ pg_port }}"
         owner:   "{{ pro_backend_user }}"
         group:   "{{ pro_backend_user }}"
         mode:    u=rw,g=,o=
@@ -868,26 +870,26 @@
       copy:
         content: |
           [uwsgi]
-          env                = SESH_PRO_BACKEND_INI_PATH={{ pro_backend_config_ini }}
-          venv               = {{ pro_backend_data_dir }}/venv
-          chdir              = {{ pro_backend_code_dir }}
-          chmod-socket       = 666
-          die-on-term        = true
-          enable-threads     = true
-          master             = true
-          need-app           = true
-          plugins            = python3,logfile
-          processes          = 4
-          procname-prefix    = Sesh Pro Backend PgSQL
-          socket             = {{ uwsgi_socket_path }}
-          strict             = true
-          vacuum             = true
-          mount              = /=main:flask_app
+          env                 = SESH_PRO_BACKEND_INI_PATH={{ pro_backend_config_ini }}
+          venv                = {{ pro_backend_data_dir }}/venv
+          chdir               = {{ pro_backend_code_dir }}
+          chmod-socket        = 666
+          die-on-term         = true
+          enable-threads      = true
+          master              = true
+          need-app            = true
+          plugins             = python3,logfile
+          processes           = 4
+          procname-prefix     = Sesh Pro Backend PgSQL
+          socket              = {{ uwsgi_socket_path }}
+          strict              = true
+          vacuum              = true
+          mount               = /=main:flask_app
           reload-mercy        = 5
           worker-reload-mercy = 5
           logger              = file:logfile={{ pro_backend_data_dir }}/backend.log,maxsize=100000000,backupname={{ pro_backend_data_dir }}/backend.log.old
           harakiri            = 10
-        dest: "{{ uwsgi_vassal_dir }}/pro_backend_pgsql.ini"
+        dest:  "{{ uwsgi_vassal_dir }}/pro_backend.ini"
         owner: "{{ pro_backend_user }}"
         group: "{{ pro_backend_user }}"
         mode: u=rw,g=r,o=r
