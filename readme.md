@@ -267,3 +267,20 @@ python cli.py dev-payment refund --url http://localhost:8000 --provider google -
 Run `python cli.py --help` for full command documentation. Use `--help-full` for detailed
 format specifications and examples.
 
+# Architecture
+
+![Overview of Session Pro](docs/Session_Pro_Overview_200_zoom_10_border.png)
+
+Provided in this repository is an [Ansible](scripts/ansible_deploy.yml) script
+that installs the Session Pro infrastructure onto the target server and is
+a useful, technical description of the various components that the backend
+relies on. In general, the backend is designed as a set of distinct layers that
+feed data to each other, which is loosely described by the following diagram (in
+reality the links between the layers are a bit more entangled but conceptually
+stands).
+
+![Code layers of Session Pro](docs/Session_Pro_Code_Layers_200_zoom_10_border.png)
+
+Ultimately the code centralises in on the backend which manages the database and
+lifetimes of payments. From here most payment data is processed and upper layers
+can request it to produce cryptographic Pro proofs.

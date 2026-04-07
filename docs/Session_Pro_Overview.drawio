@@ -1,0 +1,97 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36">
+  <diagram name="Page-1" id="kKTQB28BfEJUELVRqk8W">
+    <mxGraphModel dx="1576" dy="519" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="FPditiXuVjqeNlEBBs9N-3" edge="1" parent="1" source="FPditiXuVjqeNlEBBs9N-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.25;entryY=1;entryDx=0;entryDy=0;" target="v9FzLEJdINYMK1Xfymi0-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="200" width="200" x="-320" y="384" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-4" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="FPditiXuVjqeNlEBBs9N-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-9" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="90" width="200" x="-320" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-2" parent="1" style="verticalLabelPosition=bottom;sketch=0;aspect=fixed;html=1;verticalAlign=top;strokeColor=none;align=center;outlineConnect=0;shape=mxgraph.citrix.cell_phone;" value="" vertex="1">
+          <mxGeometry height="60" width="25" x="-160" y="404" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-7" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="FPditiXuVjqeNlEBBs9N-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-3" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;" value="Session Pro Backend" vertex="1">
+          <mxGeometry height="95" width="90" x="110" y="187.5" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-4" parent="1" style="verticalLabelPosition=bottom;html=1;verticalAlign=top;align=center;strokeColor=none;fillColor=#00BEF2;shape=mxgraph.azure.azure_marketplace;" value="Google" vertex="1">
+          <mxGeometry height="50" width="40" x="-290" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-5" parent="1" style="verticalLabelPosition=bottom;html=1;verticalAlign=top;align=center;strokeColor=none;fillColor=#00BEF2;shape=mxgraph.azure.azure_marketplace;" value="Apple" vertex="1">
+          <mxGeometry height="50" width="40" x="-200" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-14" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="1. Device subscribes to Pro plan (1m, 3m ..)" vertex="1">
+          <mxGeometry height="40" width="140" x="-413" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-15" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="2. Provider replies confidential payment token" vertex="1">
+          <mxGeometry height="40" width="160" x="-170" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-17" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="3. Provider sends confidential payment token" vertex="1">
+          <mxGeometry height="50" width="180" x="-90" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-23" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="&lt;div&gt;4. Device registers its public key with the payment token&lt;/div&gt;" vertex="1">
+          <mxGeometry height="41" width="180" x="-80" y="413" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-25" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="5. Sends a cryptographic proof entitling the public key to Pro" vertex="1">
+          <mxGeometry height="33" width="166" x="-78" y="466" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-26" parent="1" style="verticalLabelPosition=bottom;sketch=0;aspect=fixed;html=1;verticalAlign=top;strokeColor=none;align=center;outlineConnect=0;shape=mxgraph.citrix.cell_phone;" value="" vertex="1">
+          <mxGeometry height="60" width="25" x="-305" y="404" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-27" parent="1" style="verticalLabelPosition=bottom;sketch=0;aspect=fixed;html=1;verticalAlign=top;strokeColor=none;align=center;outlineConnect=0;shape=mxgraph.citrix.cell_phone;" value="" vertex="1">
+          <mxGeometry height="60" width="25" x="-232.5" y="514" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-28" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-26" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" target="v9FzLEJdINYMK1Xfymi0-2" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="200" y="574" as="sourcePoint" />
+            <mxPoint x="250" y="524" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-29" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-27" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" target="v9FzLEJdINYMK1Xfymi0-2" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="-60" y="747" as="sourcePoint" />
+            <mxPoint x="165" y="684" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-30" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-27" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" target="v9FzLEJdINYMK1Xfymi0-26" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="250" y="544" as="sourcePoint" />
+            <mxPoint x="-220" y="584" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-31" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="7. Devices attach proof to outgoing messages to use Pro features.&lt;div&gt;&lt;br&gt;&lt;div&gt;&lt;div&gt;Devices validate attached proofs on incoming messages using Pro features&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="95" width="200" x="-320" y="585" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-34" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="6. Periodically retrieve the revocation list (proofs that are banned, e.g.: refunds)" vertex="1">
+          <mxGeometry height="40" width="224" x="-81" y="513" as="geometry" />
+        </mxCell>
+        <mxCell id="v9FzLEJdINYMK1Xfymi0-36" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;" value="&lt;h1 style=&quot;margin-top: 0px;&quot;&gt;Session Pro Overview&lt;/h1&gt;" vertex="1">
+          <mxGeometry height="40" width="260" x="-320" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="NctawyZ6rPhJaNDkX5ih-1" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Payment Providers" vertex="1">
+          <mxGeometry height="30" width="110" x="-290" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-5" edge="1" parent="1" source="v9FzLEJdINYMK1Xfymi0-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="v9FzLEJdINYMK1Xfymi0-3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-6" edge="1" parent="1" source="FPditiXuVjqeNlEBBs9N-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0.145;entryY=1;entryDx=0;entryDy=-4.35;entryPerimeter=0;" target="v9FzLEJdINYMK1Xfymi0-3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="FPditiXuVjqeNlEBBs9N-8" edge="1" parent="1" source="FPditiXuVjqeNlEBBs9N-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.855;entryY=1;entryDx=0;entryDy=-4.35;entryPerimeter=0;" target="v9FzLEJdINYMK1Xfymi0-3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
