@@ -284,3 +284,120 @@ stands).
 Ultimately the code centralises in on the backend which manages the database and
 lifetimes of payments. From here most payment data is processed and upper layers
 can request it to produce cryptographic Pro proofs.
+
+# Deploy Guide
+
+Using `scripts/ansible_deploy.yml` we have an idempotent
+script that can set up a primary server to have a Session Pro Backend that is
+configured for Google and Apple app stores and persists the state onto
+a postgres database. The database is replicated using postgres replication to
+the secondary server, details of this are in the `ansible_deploy.yml`
+documentation.
+
+The secondary server is optional, opt out by not specifying the `replica_host.`
+to the ansible command.
+
+Start by cloning the session-pro-backend at
+https://github.com/session-foundation/session-pro-backend.git
+
+Setup a config.ini with the following values and stub lines (the stubs will
+be populated by the ansible script and transferred onto the primary server).
+
+```
+[base]
+db_url                     =
+dev                        = true
+with_platform_apple        = true
+with_platform_google       = true
+unsafe_logging             = true
+platform_testing_env       = true
+
+[apple]
+app_id                     =
+bundle_id                  =
+issuer_id                  =
+key_id                     =
+key_path                   =
+root_cert_ca_g2_path       =
+root_cert_ca_g3_path       =
+root_cert_path             =
+sandbox_env                =
+
+[google]
+cloud_app_credentials_path =
+cloud_project_id           =
+cloud_subscription_name    =
+package_name               =
+subscription_product_id    =
+```
+
+Then create a hosts.yml file in the working directory with the following
+contents. Note for ansible to access the machine ensure that SSH access is setup
+from the host to the target servers (primary and secondary).
+
+```yaml
+global:
+  hosts:
+    pro_backend:
+      ansible_host: <Primary Instance's IP address>
+      ansible_user: root
+```
+
+Then attain the Google and Apple secrets (see the `ansible_deploy.yml` file for
+where to retrieve/generate these secrets) to enable communications with the
+respective platforms:
+
+- Apple Key Path (P8 file)
+- Apple Key ID
+- Google Cloud App Default Credentials (ADC JSON file)
+
+Additionally you will need various pieces of metadata required for
+authenticating to these platforms. See the ansible script for more information
+on where to source these from. It's possible to disable these platforms by
+simply setting `with_platform_apple` and `with_platform_google` to false. Stub
+data can then be supplied to their respective fields.
+
+Then run the ansible command as follows (we assume config.ini and the
+secrets are in the current working directory):
+
+```bash
+ansible-playbook -i hosts.yml playbook_pro_backend_pgsql.yml \
+  -e replica_host=<root@secondary_server_address> \
+  -e config_ini_path=<path/to/config.ini> \
+  \
+  -e apple_app_id=<string> \
+  -e apple_bundle_id=<string> \
+  -e apple_issuer_id=<string> \
+  -e apple_key_id=<key_id> \
+  -e apple_key_path=<path/to/your_apple_api_key.p8> \
+  -e apple_sandbox=false \
+  \
+  -e google_cloud_app_default_credentials_path=<path/to/your_google_adc_key.json> \
+  -e google_cloud_project_id=<string> \
+  -e google_cloud_subscription_name=<string> \
+  -e google_package_name=<com.your_company.app_name> \
+  -e google_subscription_product_id=<string> \
+  \
+  -e domain=<your.domain.com> \
+  -e email=<your@email.com>
+```
+
+You will be prompted for a password interactively which is the password to
+secure the postgres DB instance under. The password is reused to secure the
+secondary's server replicated database.
+
+After the script has ran to completion, the server(s) are now successfully
+provisioned and should be accepting requests. On the replica instance you can
+run this command to dump the database to stdout to check if the users table was
+replicated:
+
+```
+sudo -u postgres psql --port={{ pg_port }} -d {{ pg_db_name }} -c "SELECT * FROM users"
+```
+
+On the priary instance test one of the unauthenticated endpoints to ensure that
+it's visible and accessible publicly:
+
+```
+curl -X POST <your_server_address>/get_pro_revocations -H "Content-Type: application/json" -d '{"version": 0, "ticket": 0}'
+```
